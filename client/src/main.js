@@ -55,6 +55,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0f14);
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 200);
 camera.position.set(0, 1.6, 2);
+camera.lookAt(0, 0.9, -1.2);          // frame the table on first load
 const listener = new THREE.AudioListener();
 camera.add(listener);
 
