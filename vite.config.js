@@ -18,6 +18,7 @@ export default defineConfig({
     proxy: {
       '/api': { target: 'http://localhost:3000', changeOrigin: true },
       '/audio': { target: 'http://localhost:3000', changeOrigin: true },
+      '/models': { target: 'http://localhost:3000', changeOrigin: true },
       '/socket.io': { target: 'http://localhost:3000', ws: true, changeOrigin: true },
     },
   },

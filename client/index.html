@@ -6,27 +6,43 @@
     <title>Glossy XR</title>
     <style>
       :root { color-scheme: dark; }
-      html, body { margin: 0; height: 100%; background: #000; color: #eee; font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
+      html, body { margin: 0; height: 100%; background: #000; color: #eee; font: 13px/1.4 system-ui, sans-serif; overflow: hidden; }
       canvas { display: block; }
-      #hud {
-        position: fixed; top: 12px; left: 12px; z-index: 10;
-        background: rgba(0,0,0,.6); padding: 10px 12px; border-radius: 8px; max-width: 320px;
-      }
-      #hud label { display: block; margin: 6px 0 2px; color: #aaa; font-size: 12px; }
-      #hud input, #hud select { width: 100%; box-sizing: border-box; padding: 6px; border-radius: 4px; border: 1px solid #444; background: #111; color: #eee; }
+      #hud { position: fixed; top: 12px; left: 12px; z-index: 10; width: 300px; max-height: calc(100vh - 24px); overflow: auto;
+             background: rgba(0,0,0,.65); padding: 10px 12px; border-radius: 8px; backdrop-filter: blur(6px); }
+      #hud h1 { font-size: 14px; margin: 0 0 6px; display: flex; justify-content: space-between; align-items: baseline; }
+      #hud h1 span { font-weight: normal; color: #9ab; font-size: 12px; }
+      #hud details { margin-top: 8px; border-top: 1px solid #333; padding-top: 6px; }
+      #hud summary { cursor: pointer; color: #bcd; font-weight: 600; }
+      #hud label { display: block; margin: 6px 0 2px; color: #aaa; font-size: 11px; }
+      #hud input, #hud select, #hud button { width: 100%; box-sizing: border-box; padding: 5px 6px; border-radius: 4px; border: 1px solid #444; background: #111; color: #eee; font: inherit; }
+      #hud button { background: #1f2a38; cursor: pointer; }
+      #hud button:hover { background: #2a3a4e; }
       #hud .row { display: flex; gap: 6px; align-items: center; }
-      #hud .row input[type=checkbox] { width: auto; }
+      #hud .row > * { flex: 1 1 0; min-width: 0; width: auto; }
+      #hud .row input[type=checkbox] { flex: 0; width: auto; }
+      #hud .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
       #status { margin-top: 8px; font-size: 12px; color: #9f9; min-height: 1.2em; }
       #rec { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #444; margin-right: 6px; vertical-align: middle; }
       #rec.on { background: #f33; box-shadow: 0 0 8px #f33; }
-      #help { font-size: 12px; color: #888; margin-top: 8px; }
+      #help { font-size: 11px; color: #888; margin-top: 8px; }
       #hud a { color: #8cf; }
-      kbd { background: #222; border: 1px solid #555; border-radius: 3px; padding: 0 4px; font-size: 11px; }
+      kbd { background: #222; border: 1px solid #555; border-radius: 3px; padding: 0 4px; font-size: 10px; }
+      #modelInfo { font-size: 11px; color: #9ab; margin-top: 4px; }
+      progress { width: 100%; height: 6px; }
     </style>
   </head>
   <body>
     <div id="hud">
-      <strong>Glossy XR</strong> <span id="count"></span>
+      <h1>Glossy XR <span id="count"></span></h1>
+
+      <label for="project">Project</label>
+      <div class="row">
+        <select id="project"></select>
+        <button id="newProject" style="flex:0 0 auto">+ New</button>
+      </div>
+      <div id="modelInfo">no model</div>
+
       <label for="author">Your name</label>
       <input id="author" placeholder="e.g. Ainsley" autocomplete="off" />
       <label for="layer">Layer</label>
@@ -38,10 +54,36 @@
       </select>
       <div class="row" style="margin-top:6px"><input type="checkbox" id="consent" /><label for="consent" style="margin:0">I consent to my recording being stored and shared</label></div>
       <div id="status"><span id="rec"></span><span id="statusText">connecting…</span></div>
+
+      <details id="modelPanel">
+        <summary>Model</summary>
+        <label for="modelFile">Upload model (glb, gltf, ply, pcd, obj, splat, ksplat, spz, sog). Select sidecar files (.bin, textures, .mtl) together with it.</label>
+        <input type="file" id="modelFile" multiple />
+        <progress id="uploadProgress" value="0" max="1" hidden></progress>
+        <label>Transform</label>
+        <div class="grid">
+          <input id="tScale" type="number" step="0.01" title="scale" placeholder="scale" />
+          <input id="tRotX" type="number" step="1" title="rotate X°" placeholder="rot X°" />
+          <input id="tRotY" type="number" step="1" title="rotate Y°" placeholder="rot Y°" />
+          <input id="tRotZ" type="number" step="1" title="rotate Z°" placeholder="rot Z°" />
+          <input id="tX" type="number" step="0.1" title="offset X" placeholder="x" />
+          <input id="tY" type="number" step="0.1" title="offset Y" placeholder="y" />
+          <input id="tZ" type="number" step="0.1" title="offset Z" placeholder="z" />
+          <input id="tPointSize" type="number" step="0.005" min="0.001" title="point size (m)" placeholder="pt size" />
+          <button id="zUp" title="Rotate a Z-up scan to Y-up">Z-up→Y</button>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <button id="autoFit" title="Scale to ~4 m, centre on origin, rest on the floor">Auto-fit</button>
+          <button id="resetFit" title="Scale 1, no rotation, no offset">Reset</button>
+          <button id="saveTransform">Save</button>
+        </div>
+      </details>
+
       <div id="help">
-        Headset: trigger = record / stop, squeeze = cycle layer, point at a marker to play.<br />
-        Desktop: click to look, <kbd>W A S D</kbd> move, <kbd>K</kbd> start, <kbd>L</kbd> stop.
-        <a href="/api/export" target="_blank">Export JSON</a>
+        Headset: trigger = record (release to save) or play the marker you point at; squeeze = cycle layer.<br />
+        Desktop: click to look, <kbd>W A S D</kbd> move, <kbd>Q</kbd>/<kbd>E</kbd> down/up, <kbd>K</kbd> start, <kbd>L</kbd> stop, <kbd>Space</kbd> play.
+        Annotations anchor to the surface you point at.
+        <a id="exportLink" href="/api/export" target="_blank">Export JSON</a>
       </div>
     </div>
     <script type="module" src="/src/main.js"></script>

@@ -9,36 +9,43 @@
 //   PositionalAudio, Socket.IO 4, ESM three via Vite.
 // Desktop fallback (pointer lock + WASD, K/L to record) kept from the original
 // so the tool can be used without a headset.
+//
+// Projects: each project owns a model (glTF, PLY, PCD, OBJ, Gaussian splat)
+// and its annotations. Annotations anchor to the surface the user points at
+// when a model is loaded, and carry the name of the mesh hit.
 
 import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { VoiceRecorder } from './recorder.js';
-import { connect, postAnnotation } from './api.js';
+import { connect, projects as projectsApi, annotations as annotationsApi } from './api.js';
+import { loadModel, SUPPORTED_EXTENSIONS } from './loaders.js';
 
 // ---- config ----------------------------------------------------------------
 
-const params = new URLSearchParams(location.search);
-const SCENE_URL = params.get('scene');           // optional GLB/glTF environment
-const SCENE_ID = SCENE_URL || 'default';
 const LAYERS = ['default', 'draft', 'review', 'final'];
 const MARKER_RADIUS = 0.06;
 const PLAY_DISTANCE = 1.2;                        // metres; walk near a marker and it plays
+const DEFAULT_TRANSFORM = { scale: 1, rotX: 0, rotY: 0, rotZ: 0, x: 0, y: 0, z: 0, pointSize: 0.01 };
 
 // ---- HUD -------------------------------------------------------------------
 
 const $ = (id) => document.getElementById(id);
-const hud = { author: $('author'), layer: $('layer'), consent: $('consent'), status: $('statusText'), rec: $('rec'), count: $('count') };
-try {
-  hud.author.value = localStorage.getItem('glossy.author') || '';
-  hud.layer.value = localStorage.getItem('glossy.layer') || 'default';
-  hud.consent.checked = localStorage.getItem('glossy.consent') === '1';
-} catch {}
-hud.author.addEventListener('change', () => { try { localStorage.setItem('glossy.author', hud.author.value); } catch {} });
-hud.layer.addEventListener('change', () => { try { localStorage.setItem('glossy.layer', hud.layer.value); } catch {} });
-hud.consent.addEventListener('change', () => { try { localStorage.setItem('glossy.consent', hud.consent.checked ? '1' : '0'); } catch {} });
+const hud = {
+  project: $('project'), newProject: $('newProject'), modelInfo: $('modelInfo'),
+  author: $('author'), layer: $('layer'), consent: $('consent'), status: $('statusText'), rec: $('rec'), count: $('count'),
+  modelFile: $('modelFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'),
+  t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
+  zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'),
+};
+const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+hud.author.value = ls.get('glossy.author', '');
+hud.layer.value = ls.get('glossy.layer', 'default');
+hud.consent.checked = ls.get('glossy.consent', '0') === '1';
+hud.author.addEventListener('change', () => ls.set('glossy.author', hud.author.value));
+hud.layer.addEventListener('change', () => ls.set('glossy.layer', hud.layer.value));
+hud.consent.addEventListener('change', () => ls.set('glossy.consent', hud.consent.checked ? '1' : '0'));
 const setStatus = (t) => { hud.status.textContent = t; };
 
 // ---- renderer / scene ------------------------------------------------------
@@ -53,7 +60,7 @@ document.body.appendChild(VRButton.createButton(renderer));
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0f14);
-const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 200);
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 500);
 camera.position.set(0, 1.6, 2);
 camera.lookAt(0, 0.9, -1.2);          // frame the table on first load
 const listener = new THREE.AudioListener();
@@ -69,16 +76,15 @@ const sun = new THREE.DirectionalLight(0xffffff, 1.2);
 sun.position.set(3, 6, 2);
 scene.add(sun);
 
-// default environment: a 6 m room with a grid floor, in place of the 2016 green box
+// default environment: a 6 m room with a grid floor, shown when a project has no model
 const room = new THREE.Group();
 {
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), new THREE.MeshStandardMaterial({ color: 0x1b2330, roughness: 0.9 }));
-  floor.rotation.x = -Math.PI / 2;
+  floor.rotation.x = -Math.PI / 2; floor.name = 'floor';
   room.add(floor, new THREE.GridHelper(6, 12, 0x3b4b5f, 0x2a3644));
   const walls = new THREE.Mesh(new THREE.BoxGeometry(6, 3, 6), new THREE.MeshStandardMaterial({ color: 0x141a22, side: THREE.BackSide, roughness: 1 }));
-  walls.position.y = 1.5;
+  walls.position.y = 1.5; walls.name = 'walls';
   room.add(walls);
-  // a few "objects" to annotate so there's something to point at
   const mat = new THREE.MeshStandardMaterial({ color: 0x8a6d3b, roughness: 0.7 });
   const table = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.08, 0.7), mat); table.position.set(0, 0.75, -1.2); table.name = 'table';
   const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 0.3, 24), new THREE.MeshStandardMaterial({ color: 0xb87333, metalness: 0.6, roughness: 0.35 })); pot.position.set(0, 0.94, -1.2); pot.name = 'pot';
@@ -87,9 +93,15 @@ const room = new THREE.Group();
 }
 scene.add(room);
 
-if (SCENE_URL) {
-  new GLTFLoader().load(SCENE_URL, (g) => { room.visible = false; scene.add(g.scene); setStatus('scene loaded'); }, undefined, (e) => setStatus('scene failed: ' + e.message));
-}
+// the project's model lives under modelRoot so the saved transform applies as a whole
+const modelRoot = new THREE.Group();
+scene.add(modelRoot);
+const floorGrid = new THREE.GridHelper(20, 40, 0x2a3644, 0x1c2530);
+floorGrid.visible = false;
+scene.add(floorGrid);
+let model = null;                 // { object, kind, box, count, dispose }
+let project = null;               // current project record
+let transform = { ...DEFAULT_TRANSFORM };
 
 // ---- annotations in the scene ---------------------------------------------
 
@@ -114,7 +126,7 @@ function addMarker(record) {
   mesh.add(sound);
   audioLoader.load(record.audioUrl, (buffer) => sound.setBuffer(buffer));
   markers.set(record.id, { mesh, sound, record });
-  hud.count.textContent = `· ${markers.size} annotation${markers.size === 1 ? '' : 's'}`;
+  updateCount();
   applyLayerFilter();
 }
 function removeMarker({ id }) {
@@ -123,10 +135,11 @@ function removeMarker({ id }) {
   m.sound.isPlaying && m.sound.stop();
   markerGroup.remove(m.mesh);
   markers.delete(id);
-  hud.count.textContent = `· ${markers.size}`;
+  updateCount();
 }
+function clearMarkers() { for (const id of [...markers.keys()]) removeMarker({ id }); }
+function updateCount() { hud.count.textContent = `${markers.size} annotation${markers.size === 1 ? '' : 's'}`; }
 function applyLayerFilter() {
-  // show the active layer bright, others dim; hiding entirely would hide the point of "layers"
   for (const { mesh, record } of markers.values()) {
     const active = record.layer === hud.layer.value;
     mesh.material.opacity = active ? 1 : 0.25;
@@ -142,7 +155,111 @@ function play(id) {
   if (listener.context.state === 'suspended') listener.context.resume();
   for (const other of markers.values()) other.sound.isPlaying && other.sound.stop();
   m.sound.play();
+  setStatus(`▶ ${m.record.author} · ${m.record.layer}${m.record.anchor.objectId ? ' · ' + m.record.anchor.objectId : ''}`);
 }
+
+// ---- projects and models ---------------------------------------------------
+
+async function refreshProjectList() {
+  const list = await projectsApi.list();
+  hud.project.innerHTML = '';
+  for (const p of list) {
+    const o = document.createElement('option');
+    o.value = p.id; o.textContent = `${p.name} (${p.annotationCount})${p.modelName ? ' · ' + p.modelName : ''}`;
+    hud.project.appendChild(o);
+  }
+  if (project) hud.project.value = project.id;
+  return list;
+}
+
+async function openProject(id) {
+  project = await projectsApi.get(id);
+  hud.project.value = id;
+  hud.exportLink.href = `/api/projects/${id}/export`;
+  history.replaceState(null, '', `?project=${id}`);
+  transform = { ...DEFAULT_TRANSFORM, ...project.transform };
+  transformToHud();
+  clearMarkers();
+  net.join(id);
+  await showModel(project);
+}
+
+async function showModel(p) {
+  if (model) { modelRoot.remove(model.object); model.dispose(); model = null; }
+  room.visible = !p.modelUrl;
+  floorGrid.visible = !!p.modelUrl;
+  hud.modelInfo.textContent = p.modelName ? `loading ${p.modelName}…` : 'no model (default room)';
+  if (!p.modelUrl) return;
+  try {
+    model = await loadModel({
+      url: p.modelUrl, type: p.modelType, renderer, scene, pointSize: transform.pointSize,
+      onProgress: (e) => e.lengthComputable && (hud.modelInfo.textContent = `loading ${p.modelName}… ${Math.round(100 * e.loaded / e.total)}%`),
+    });
+    modelRoot.add(model.object);
+    applyTransform();
+    const s = model.box.getSize(new THREE.Vector3());
+    hud.modelInfo.textContent = `${p.modelName} · ${model.kind} · ${model.count.toLocaleString()} ${model.kind === 'splat' ? 'splats' : 'verts'} · ${s.x.toFixed(1)}×${s.y.toFixed(1)}×${s.z.toFixed(1)} m (raw)`;
+  } catch (e) {
+    console.error(e);
+    hud.modelInfo.textContent = `failed to load ${p.modelName}: ${e.message}`;
+  }
+}
+
+function applyTransform() {
+  modelRoot.scale.setScalar(transform.scale);
+  modelRoot.rotation.set(THREE.MathUtils.degToRad(transform.rotX), THREE.MathUtils.degToRad(transform.rotY), THREE.MathUtils.degToRad(transform.rotZ));
+  modelRoot.position.set(transform.x, transform.y, transform.z);
+  if (model?.kind === 'points') model.object.material.size = transform.pointSize;
+}
+function transformToHud() { for (const k in hud.t) hud.t[k].value = transform[k]; }
+function hudToTransform() { for (const k in hud.t) transform[k] = Number(hud.t[k].value) || (k === 'scale' ? 1 : k === 'pointSize' ? 0.01 : 0); applyTransform(); }
+for (const k in hud.t) hud.t[k].addEventListener('input', hudToTransform);
+hud.zUp.addEventListener('click', () => { transform.rotX = -90; transformToHud(); applyTransform(); });
+hud.resetFit.addEventListener('click', () => { transform = { ...DEFAULT_TRANSFORM }; transformToHud(); applyTransform(); });
+hud.autoFit.addEventListener('click', () => {
+  if (!model) return;
+  // scale so the largest raw dimension is ~4 m (only if it's wildly off), centre XZ, rest on the floor
+  const raw = new THREE.Box3().setFromObject(model.object);     // untransformed, object is child of modelRoot
+  const size = raw.getSize(new THREE.Vector3()), max = Math.max(size.x, size.y, size.z) || 1;
+  const rx = THREE.MathUtils.degToRad(transform.rotX);
+  transform.scale = max > 12 || max < 0.5 ? 4 / max : 1;
+  const c = raw.getCenter(new THREE.Vector3());
+  // after rotX, the model's local Y/Z swap; handle the common Z-up case explicitly
+  const zUp = Math.abs(transform.rotX + 90) < 1;
+  transform.x = -c.x * transform.scale;
+  transform.z = zUp ? c.y * transform.scale : -c.z * transform.scale;
+  transform.y = zUp ? -raw.min.z * transform.scale : -raw.min.y * transform.scale;
+  void rx;
+  transformToHud(); applyTransform();
+});
+hud.saveTransform.addEventListener('click', async () => {
+  if (!project) return;
+  project = await projectsApi.update(project.id, { transform });
+  setStatus('transform saved');
+});
+
+hud.project.addEventListener('change', () => openProject(hud.project.value));
+hud.newProject.addEventListener('click', async () => {
+  const name = prompt('Project name');
+  if (!name) return;
+  const p = await projectsApi.create(name);
+  await refreshProjectList();
+  await openProject(p.id);
+});
+hud.modelFile.addEventListener('change', async () => {
+  if (!project || !hud.modelFile.files.length) return;
+  const files = [...hud.modelFile.files];
+  const main = files.find((f) => SUPPORTED_EXTENSIONS.includes('.' + f.name.split('.').pop().toLowerCase()));
+  if (!main) return setStatus('pick a ' + SUPPORTED_EXTENSIONS.join(' ') + ' file');
+  hud.uploadProgress.hidden = false; hud.uploadProgress.value = 0;
+  try {
+    project = await projectsApi.uploadModel(project.id, main, files.filter((f) => f !== main), (p) => { hud.uploadProgress.value = p; });
+    setStatus('uploaded ' + main.name);
+    await refreshProjectList();
+    await showModel(project);
+  } catch (e) { setStatus('upload failed: ' + e.message); }
+  hud.uploadProgress.hidden = true; hud.modelFile.value = '';
+});
 
 // ---- recording -------------------------------------------------------------
 
@@ -150,17 +267,14 @@ const recorder = new VoiceRecorder();
 const cursor = new THREE.Mesh(new THREE.SphereGeometry(MARKER_RADIUS * 1.2, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff3333, wireframe: true }));
 cursor.visible = false;
 scene.add(cursor);
-let anchorSource = null;             // Object3D whose world position becomes the anchor while recording
+let anchorSource = null;             // Object3D whose aim decides the anchor while recording
 
 async function beginRecording(source) {
   if (recorder.isRecording) return;
+  if (!project) return setStatus('no project');
   if (!hud.author.value.trim()) return setStatus('enter your name first');
   if (!hud.consent.checked) return setStatus('tick consent first');
-  try {
-    await recorder.start();
-  } catch (e) {
-    return setStatus('mic blocked: ' + e.message);
-  }
+  try { await recorder.start(); } catch (e) { return setStatus('mic blocked: ' + e.message); }
   anchorSource = source;
   cursor.visible = true;
   hud.rec.classList.add('on');
@@ -169,42 +283,74 @@ async function beginRecording(source) {
 
 async function endRecording() {
   if (!recorder.isRecording) return;
-  const anchor = new THREE.Vector3();
-  anchorSource.getWorldPosition(anchor);
+  const { point: anchor, objectId } = aimPoint(anchorSource);
   const clip = await recorder.stop();
   cursor.visible = false;
   hud.rec.classList.remove('on');
   if (!clip) return setStatus('too short, discarded');
   setStatus('saving…');
   try {
-    const rec = await postAnnotation({
-      ...clip, anchor, author: hud.author.value.trim(), layer: hud.layer.value, scene: SCENE_ID, consent: true,
+    const rec = await annotationsApi.create({
+      project: project.id, ...clip, anchor, objectId, author: hud.author.value.trim(), layer: hud.layer.value, consent: true,
     });
-    setStatus(`saved ${Math.round(clip.durationMs / 100) / 10}s at (${anchor.x.toFixed(2)}, ${anchor.y.toFixed(2)}, ${anchor.z.toFixed(2)})`);
+    setStatus(`saved ${Math.round(clip.durationMs / 100) / 10}s at (${anchor.x.toFixed(2)}, ${anchor.y.toFixed(2)}, ${anchor.z.toFixed(2)})${objectId ? ' on ' + objectId : ''}`);
     addMarker(rec);                  // local echo; server broadcast is deduped by id
   } catch (e) {
     setStatus('save failed: ' + e.message);
   }
 }
 
+// ---- aiming ----------------------------------------------------------------
+// Where does a controller (or the desktop camera) point? Prefer a hit on the
+// model or the default room; fall back to a point a fixed distance ahead.
+
+const raycaster = new THREE.Raycaster();
+raycaster.params.Points.threshold = 0.03;
+raycaster.far = 30;
+const tmpMat = new THREE.Matrix4();
+const FALLBACK_AHEAD = { controller: 0.08, camera: 0.6 };
+
+function aimRay(source) {
+  tmpMat.identity().extractRotation(source.matrixWorld);
+  raycaster.ray.origin.setFromMatrixPosition(source.matrixWorld);
+  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tmpMat);
+}
+function aimMarker(source) {
+  aimRay(source);
+  const hit = raycaster.intersectObjects(markerGroup.children, false)[0];
+  return hit?.object.userData.id || null;
+}
+function aimPoint(source) {
+  aimRay(source);
+  const targets = model && model.kind !== 'splat' ? [model.object] : [];
+  if (room.visible) targets.push(room);
+  let hit = null;
+  if (targets.length && !(model?.kind === 'points' && model.count > 3_000_000)) {   // brute-force raycast on huge clouds stalls the frame
+    hit = raycaster.intersectObjects(targets, true).find((h) => !h.object.isGridHelper) || null;
+  }
+  if (hit) {
+    let o = hit.object, name = o.name;
+    while (!name && o.parent && o.parent !== scene) { o = o.parent; name = o.name; }
+    return { point: hit.point.clone(), objectId: name || undefined };
+  }
+  const ahead = source === camera ? FALLBACK_AHEAD.camera : FALLBACK_AHEAD.controller;
+  return { point: raycaster.ray.at(ahead, new THREE.Vector3()), objectId: undefined };
+}
+
 // ---- XR controllers --------------------------------------------------------
 
 const controllerModelFactory = new XRControllerModelFactory();
-const raycaster = new THREE.Raycaster();
-const tmpMat = new THREE.Matrix4();
-const controllers = [];
 for (let i = 0; i < 2; i++) {
   const ctrl = renderer.xr.getController(i);
   ctrl.add(new THREE.Line(
     new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]),
     new THREE.LineBasicMaterial({ color: 0x88ccff, transparent: true, opacity: 0.5 }),
   ));
-  const tip = new THREE.Object3D(); tip.position.z = -0.05; ctrl.add(tip);   // anchor just ahead of the controller
   ctrl.addEventListener('selectstart', () => {
-    const hit = pointAt(ctrl);
-    if (hit) play(hit); else beginRecording(tip);
+    const hit = aimMarker(ctrl);
+    if (hit) play(hit); else beginRecording(ctrl);
   });
-  ctrl.addEventListener('selectend', () => { if (recorder.isRecording && anchorSource === tip) endRecording(); });
+  ctrl.addEventListener('selectend', () => { if (recorder.isRecording && anchorSource === ctrl) endRecording(); });
   ctrl.addEventListener('squeezestart', () => {
     const next = LAYERS[(LAYERS.indexOf(hud.layer.value) + 1) % LAYERS.length];
     hud.layer.value = next; hud.layer.dispatchEvent(new Event('change'));
@@ -214,14 +360,6 @@ for (let i = 0; i < 2; i++) {
   const grip = renderer.xr.getControllerGrip(i);
   grip.add(controllerModelFactory.createControllerModel(grip));
   rig.add(grip);
-  controllers.push(ctrl);
-}
-function pointAt(ctrl) {
-  tmpMat.identity().extractRotation(ctrl.matrixWorld);
-  raycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);
-  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tmpMat);
-  const hit = raycaster.intersectObjects(markerGroup.children, false)[0];
-  return hit?.object.userData.id || null;
 }
 
 // ---- desktop fallback ------------------------------------------------------
@@ -229,23 +367,40 @@ function pointAt(ctrl) {
 const lock = new PointerLockControls(camera, renderer.domElement);
 renderer.domElement.addEventListener('click', () => { if (!renderer.xr.isPresenting) lock.lock(); });
 const keys = new Set();
-const ahead = new THREE.Object3D(); ahead.position.z = -0.6; camera.add(ahead);   // desktop anchor: 60 cm in front of the eye
 window.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   keys.add(e.code);
-  if (e.code === 'KeyK') beginRecording(ahead);
+  if (e.code === 'KeyK') beginRecording(camera);
   if (e.code === 'KeyL') endRecording();
-  if (e.code === 'Space') { const hit = pointAt(camera); if (hit) play(hit); }
+  if (e.code === 'Space') { const hit = aimMarker(camera); if (hit) play(hit); }
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
 
 // ---- network ---------------------------------------------------------------
 
-connect({
-  onAll: (all) => { all.filter((a) => a.scene === SCENE_ID).forEach(addMarker); setStatus(`loaded ${markers.size}`); },
-  onNew: (a) => a.scene === SCENE_ID && addMarker(a),
+const net = connect({
+  onAll: (all) => { clearMarkers(); all.forEach(addMarker); setStatus(`loaded ${markers.size}`); },
+  onNew: (a) => a.project === project?.id && addMarker(a),
   onDeleted: removeMarker,
-  onStatus: setStatus,
+  onProjectUpdated: async (p) => {
+    refreshProjectList();
+    if (p.id !== project?.id) return;
+    const modelChanged = p.modelUrl !== project.modelUrl;
+    project = p;
+    if (modelChanged) await showModel(p);
+  },
+  onProjectsChanged: refreshProjectList,
+  onStatus: (s) => { setStatus(s); if (s === 'connected' && project) net.join(project.id); },
 });
+
+// ---- boot ------------------------------------------------------------------
+
+(async () => {
+  const list = await refreshProjectList();
+  const wanted = new URLSearchParams(location.search).get('project');
+  const first = list.find((p) => p.id === wanted) || list[0];
+  if (first) await openProject(first.id);
+})();
 
 // ---- loop ------------------------------------------------------------------
 
@@ -255,14 +410,16 @@ renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
 
   if (!renderer.xr.isPresenting && lock.isLocked) {
-    const speed = 2.0 * dt;
+    const speed = (keys.has('ShiftLeft') ? 5 : 2) * dt;
     if (keys.has('KeyW')) lock.moveForward(speed);
     if (keys.has('KeyS')) lock.moveForward(-speed);
     if (keys.has('KeyA')) lock.moveRight(-speed);
     if (keys.has('KeyD')) lock.moveRight(speed);
+    if (keys.has('KeyE')) camera.position.y += speed;
+    if (keys.has('KeyQ')) camera.position.y -= speed;
   }
 
-  if (recorder.isRecording && anchorSource) anchorSource.getWorldPosition(cursor.position);
+  if (recorder.isRecording && anchorSource) cursor.position.copy(aimPoint(anchorSource).point);
 
   // proximity playback for the active layer: walk up to a marker and it plays
   camera.getWorldPosition(near);
