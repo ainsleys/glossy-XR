@@ -35,7 +35,7 @@ const $ = (id) => document.getElementById(id);
 const hud = {
   project: $('project'), newProject: $('newProject'), modelInfo: $('modelInfo'),
   author: $('author'), layer: $('layer'), consent: $('consent'), status: $('statusText'), rec: $('rec'), count: $('count'),
-  modelFile: $('modelFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'),
+  modelFile: $('modelFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), annList: $('annList'),
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'),
 };
@@ -128,6 +128,7 @@ function addMarker(record) {
   markers.set(record.id, { mesh, sound, record });
   updateCount();
   applyLayerFilter();
+  renderList();
 }
 function removeMarker({ id }) {
   const m = markers.get(id);
@@ -135,7 +136,9 @@ function removeMarker({ id }) {
   m.sound.isPlaying && m.sound.stop();
   markerGroup.remove(m.mesh);
   markers.delete(id);
+  if (playingId === id) playingId = null;
   updateCount();
+  renderList();
 }
 function clearMarkers() { for (const id of [...markers.keys()]) removeMarker({ id }); }
 function updateCount() { hud.count.textContent = `${markers.size} annotation${markers.size === 1 ? '' : 's'}`; }
@@ -144,19 +147,91 @@ function applyLayerFilter() {
     const active = record.layer === hud.layer.value;
     mesh.material.opacity = active ? 1 : 0.25;
     mesh.material.transparent = !active;
-    mesh.scale.setScalar(active ? 1 : 0.7);
+    mesh.userData.baseScale = active ? 1 : 0.7;
   }
 }
-hud.layer.addEventListener('change', applyLayerFilter);
+hud.layer.addEventListener('change', () => { applyLayerFilter(); renderList(); });
 
+// Markers keep a readable size on screen: bigger when far, smaller when close.
+const tmpV = new THREE.Vector3();
+function scaleMarkers() {
+  camera.getWorldPosition(tmpV);
+  for (const { mesh } of markers.values()) {
+    const d = mesh.position.distanceTo(tmpV);
+    const r = THREE.MathUtils.clamp(0.012 * d, 0.02, 0.15);              // world radius, ~0.7° of view
+    mesh.scale.setScalar((mesh.userData.baseScale ?? 1) * (mesh.userData.playing ? 1.3 : mesh.userData.hover ? 1.15 : 1) * r / MARKER_RADIUS);
+  }
+}
+
+let playingId = null;
+function stopAll() {
+  for (const other of markers.values()) {
+    if (other.sound.isPlaying) other.sound.stop();
+    other.mesh.userData.playing = false;
+    other.mesh.material.emissiveIntensity = 0.35;
+  }
+  playingId = null;
+  renderList();
+}
 function play(id) {
   const m = markers.get(id);
   if (!m || !m.sound.buffer) return;
   if (listener.context.state === 'suspended') listener.context.resume();
-  for (const other of markers.values()) other.sound.isPlaying && other.sound.stop();
+  if (playingId === id) { stopAll(); setStatus('■ stopped'); return; }   // click the playing marker again to stop
+  stopAll();
+  m.sound.onEnded = () => { m.sound.isPlaying = false; if (playingId === id) { playingId = null; m.mesh.userData.playing = false; m.mesh.material.emissiveIntensity = 0.35; renderList(); } };
   m.sound.play();
-  setStatus(`▶ ${m.record.author} · ${m.record.layer}${m.record.anchor.objectId ? ' · ' + m.record.anchor.objectId : ''}`);
+  playingId = id;
+  m.mesh.userData.playing = true;
+  m.mesh.material.emissiveIntensity = 1.0;
+  renderList();
+  setStatus(`▶ ${m.record.author} · ${m.record.layer}${m.record.anchor.objectId ? ' · ' + m.record.anchor.objectId : ''} · ${fmtDur(m.record.durationMs)}`);
 }
+const fmtDur = (ms) => (ms ? (ms / 1000).toFixed(1) + 's' : '');
+
+async function deleteAnnotation(id) {
+  if (!project || !markers.has(id)) return;
+  try {
+    await annotationsApi.remove(project.id, id);   // server broadcasts annotation:deleted, which removes the marker
+    removeMarker({ id });
+    setStatus('deleted');
+  } catch (e) { setStatus('delete failed: ' + e.message); }
+}
+
+// Hover: the marker under the crosshair (desktop) or either controller ray (XR)
+let hoverId = null;
+function updateHover() {
+  let id = null;
+  if (renderer.xr.isPresenting) { for (const c of xrControllers) { id = aimMarker(c); if (id) break; } }
+  else if (lock.isLocked) id = aimMarker(camera);
+  if (id === hoverId) return;
+  const prev = markers.get(hoverId);
+  if (prev) { prev.mesh.userData.hover = false; prev.mesh.material.emissiveIntensity = prev.mesh.userData.playing ? 1.0 : 0.35; }
+  hoverId = id;
+  const cur = markers.get(id);
+  if (cur) { cur.mesh.userData.hover = true; if (!cur.mesh.userData.playing) cur.mesh.material.emissiveIntensity = 0.8; }
+  crosshair.classList.toggle('hover', !!id);
+  if (cur && !recorder.isRecording) setStatus(`${cur.record.author} · ${cur.record.layer} · ${fmtDur(cur.record.durationMs)} — click to ${cur.record.id === playingId ? 'stop' : 'play'}`);
+  else if (!id && !recorder.isRecording && !playingId) setStatus('');
+}
+
+// HUD list of annotations in the current project
+function renderList() {
+  const ul = hud.annList;
+  ul.innerHTML = '';
+  const items = [...markers.values()].sort((a, b) => a.record.createdAt < b.record.createdAt ? 1 : -1);
+  for (const { record } of items) {
+    const li = document.createElement('li');
+    li.className = (record.id === playingId ? 'playing ' : '') + (record.layer === hud.layer.value ? '' : 'dim');
+    li.innerHTML = `<button class="play" title="play">${record.id === playingId ? '■' : '▶'}</button><span class="who">${esc(record.author)}</span><span class="meta">${esc(record.layer)} · ${fmtDur(record.durationMs)}${record.anchor.objectId ? ' · ' + esc(record.anchor.objectId) : ''}</span><button class="del" title="delete">✕</button>`;
+    li.querySelector('.play').addEventListener('click', () => play(record.id));
+    li.querySelector('.del').addEventListener('click', () => deleteAnnotation(record.id));
+    li.addEventListener('mouseenter', () => { const m = markers.get(record.id); if (m) m.mesh.material.emissiveIntensity = 0.9; });
+    li.addEventListener('mouseleave', () => { const m = markers.get(record.id); if (m && !m.mesh.userData.playing) m.mesh.material.emissiveIntensity = 0.35; });
+    ul.appendChild(li);
+  }
+}
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // ---- projects and models ---------------------------------------------------
 
@@ -362,8 +437,10 @@ function aimPoint(source) {
 // ---- XR controllers --------------------------------------------------------
 
 const controllerModelFactory = new XRControllerModelFactory();
+const xrControllers = [];
 for (let i = 0; i < 2; i++) {
   const ctrl = renderer.xr.getController(i);
+  xrControllers.push(ctrl);
   ctrl.add(new THREE.Line(
     new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]),
     new THREE.LineBasicMaterial({ color: 0x88ccff, transparent: true, opacity: 0.5 }),
@@ -405,12 +482,19 @@ document.addEventListener('pointerlockchange', () => {
   if (!lock.isLocked && recorder.isRecording && anchorSource === camera) endRecording();   // Esc mid-recording still saves
 });
 const keys = new Set();
+let pendingDelete = null;
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   keys.add(e.code);
   if (e.code === 'KeyK') beginRecording(camera);
   if (e.code === 'KeyL') endRecording();
   if (e.code === 'Space') { const hit = aimMarker(camera); if (hit) play(hit); }
+  if (e.code === 'Delete' || e.code === 'Backspace') {
+    const hit = aimMarker(camera);
+    if (!hit) return;
+    if (pendingDelete === hit) { pendingDelete = null; deleteAnnotation(hit); }
+    else { pendingDelete = hit; setStatus('press Delete again to delete this annotation'); setTimeout(() => { if (pendingDelete === hit) pendingDelete = null; }, 2500); }
+  }
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
 
@@ -461,6 +545,8 @@ renderer.setAnimationLoop(() => {
   }
 
   if (recorder.isRecording && anchorSource) cursor.position.copy(aimPoint(anchorSource).point);
+  updateHover();
+  scaleMarkers();
 
   // proximity playback for the active layer: walk up to a marker and it plays
   camera.getWorldPosition(near);
