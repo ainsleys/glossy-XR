@@ -295,7 +295,7 @@ async function beginRecording(source) {
   try { await recorder.start(); } catch (e) { return setStatus('mic blocked: ' + e.message); }
   anchorSource = source;
   cursor.visible = true;
-  hud.rec.classList.add('on');
+  hud.rec.classList.add('on'); crosshair.classList.add('rec');
   setStatus('recording… (' + hud.layer.value + ')');
 }
 
@@ -304,7 +304,7 @@ async function endRecording() {
   const { point: anchor, objectId } = aimPoint(anchorSource);
   const clip = await recorder.stop();
   cursor.visible = false;
-  hud.rec.classList.remove('on');
+  hud.rec.classList.remove('on'); crosshair.classList.remove('rec');
   if (!clip) return setStatus('too short, discarded');
   setStatus('saving…');
   try {
@@ -387,7 +387,23 @@ for (let i = 0; i < 2; i++) {
 // ---- desktop fallback ------------------------------------------------------
 
 const lock = new PointerLockControls(camera, renderer.domElement);
-renderer.domElement.addEventListener('click', () => { if (!renderer.xr.isPresenting) lock.lock(); });
+const crosshair = document.getElementById('crosshair');
+// First click captures the mouse. After that the mouse button works like the
+// controller trigger: hold to record at the crosshair, release to save, and a
+// click on a marker plays it instead of recording.
+renderer.domElement.addEventListener('mousedown', (e) => {
+  if (renderer.xr.isPresenting || e.button !== 0) return;
+  if (!lock.isLocked) { lock.lock(); return; }
+  const hit = aimMarker(camera);
+  if (hit) play(hit); else beginRecording(camera);
+});
+renderer.domElement.addEventListener('mouseup', (e) => {
+  if (e.button === 0 && recorder.isRecording && anchorSource === camera) endRecording();
+});
+document.addEventListener('pointerlockchange', () => {
+  crosshair.hidden = !lock.isLocked;
+  if (!lock.isLocked && recorder.isRecording && anchorSource === camera) endRecording();   // Esc mid-recording still saves
+});
 const keys = new Set();
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;

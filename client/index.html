@@ -30,6 +30,11 @@
       kbd { background: #222; border: 1px solid #555; border-radius: 3px; padding: 0 4px; font-size: 10px; }
       #modelInfo { font-size: 11px; color: #9ab; margin-top: 4px; }
       progress { width: 100%; height: 6px; }
+      #crosshair { position: fixed; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; pointer-events: none; z-index: 5; }
+      #crosshair::before, #crosshair::after { content: ''; position: absolute; background: rgba(255,255,255,.8); }
+      #crosshair::before { left: 8px; top: 0; width: 2px; height: 18px; }
+      #crosshair::after { top: 8px; left: 0; width: 18px; height: 2px; }
+      #crosshair.rec::before, #crosshair.rec::after { background: #f33; }
     </style>
   </head>
   <body>
@@ -81,11 +86,12 @@
 
       <div id="help">
         Headset: trigger = record (release to save) or play the marker you point at; squeeze = cycle layer.<br />
-        Desktop: click to look, <kbd>W A S D</kbd> move, <kbd>Q</kbd>/<kbd>E</kbd> down/up, <kbd>K</kbd> start, <kbd>L</kbd> stop, <kbd>Space</kbd> play.
+        Desktop: click once to capture the mouse, then <b>hold the mouse button to record</b> at the crosshair and release to save; click a marker to play it. <kbd>W A S D</kbd> move, <kbd>Q</kbd>/<kbd>E</kbd> down/up, <kbd>Esc</kbd> releases the mouse. (<kbd>K</kbd>/<kbd>L</kbd>/<kbd>Space</kbd> still work.)
         Annotations anchor to the surface you point at.
         <a id="exportLink" href="/api/export" target="_blank">Export JSON</a>
       </div>
     </div>
+    <div id="crosshair" hidden></div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
