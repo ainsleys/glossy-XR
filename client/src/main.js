@@ -340,11 +340,15 @@ function aimMarker(source) {
 }
 function aimPoint(source) {
   aimRay(source);
-  const targets = model ? [model.object] : [];          // Spark SplatMesh implements raycast() when raycastable
+  const targets = model && model.kind !== 'splat' ? [model.object] : [];
   if (room.visible) targets.push(room);
   let hit = null;
   if (targets.length && !(model?.kind === 'points' && model.count > 3_000_000)) {   // brute-force raycast on huge clouds stalls the frame
-    hit = raycaster.intersectObjects(targets, true).find((h) => !h.object.isGridHelper) || null;
+    hit = raycaster.intersectObjects(targets, true).find((h) => h.object.type !== 'GridHelper') || null;
+  }
+  if (!hit && model?.hitTest) {                          // Gaussian splats: our own cone test against sampled centres
+    const p = model.hitTest(raycaster.ray);
+    if (p) hit = { point: p, object: model.object };
   }
   if (hit) {
     let o = hit.object, name = o.name;
@@ -412,7 +416,7 @@ const net = connect({
 });
 
 // dev-only handle for poking at the scene from the console
-if (import.meta.env.DEV) window.__glossy = { scene, renderer, camera, modelRoot, markers, get model() { return model; }, get project() { return project; }, get transform() { return transform; }, autoFit, frameModel, applyTransform };
+if (import.meta.env.DEV) window.__glossy = { scene, renderer, camera, modelRoot, markers, get model() { return model; }, get project() { return project; }, get transform() { return transform; }, autoFit, frameModel, applyTransform, aimPoint, aimMarker, lock };
 
 // ---- boot ------------------------------------------------------------------
 

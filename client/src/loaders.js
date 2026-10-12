@@ -175,15 +175,41 @@ async function loadSplat(url, renderer, scene, camera) {
   // getBoundingBox returns a placeholder. Walk the splat centres instead and
   // trim the 1% tails per axis so training floaters don't inflate the box.
   try {
+    const step = Math.max(1, Math.floor(count / 300_000));           // sample big scenes
+    const centres = new Float32Array(Math.ceil(count / step) * 3);
+    let n = 0;
+    mesh.forEachSplat((i, c, _s, _q, opacity) => {
+      if (i % step !== 0 || opacity < 0.1) return;                    // skip near-invisible floaters
+      centres[n * 3] = c.x; centres[n * 3 + 1] = c.y; centres[n * 3 + 2] = c.z; n++;
+    });
     const xs = [], ys = [], zs = [];
-    const step = Math.max(1, Math.floor(count / 200_000));           // sample big scenes
-    mesh.forEachSplat((i, c) => { if (i % step === 0) { xs.push(c.x); ys.push(c.y); zs.push(c.z); } });
+    for (let i = 0; i < n; i++) { xs.push(centres[i * 3]); ys.push(centres[i * 3 + 1]); zs.push(centres[i * 3 + 2]); }
     const q = (a, p) => { a.sort((u, v) => u - v); return a[Math.min(a.length - 1, Math.floor(p * a.length))]; };
     const box = new THREE.Box3(
       new THREE.Vector3(q(xs, 0.01), q(ys, 0.01), q(zs, 0.01)),
       new THREE.Vector3(q(xs, 0.99), q(ys, 0.99), q(zs, 0.99)),
     );
     if (!box.isEmpty()) result.box = box.applyMatrix4(mesh.matrix);
+    // Spark's raycast needs an index it only builds under some conditions, so
+    // provide our own: nearest sampled centre within a small angular cone of the
+    // ray, in the mesh's local space. ~1 ms for 300k centres.
+    const inv = new THREE.Matrix4(), localRay = new THREE.Ray(), tmp = new THREE.Vector3();
+    result.hitTest = (worldRay, coneTan = 0.026 /* ~1.5° */) => {
+      inv.copy(mesh.matrixWorld).invert();
+      localRay.copy(worldRay).applyMatrix4(inv);
+      const d = localRay.direction.normalize(), o = localRay.origin;
+      let bestT = Infinity, bi = -1;
+      for (let i = 0; i < n; i++) {
+        const vx = centres[i * 3] - o.x, vy = centres[i * 3 + 1] - o.y, vz = centres[i * 3 + 2] - o.z;
+        const t = vx * d.x + vy * d.y + vz * d.z;
+        if (t <= 0 || t >= bestT) continue;
+        const perp2 = vx * vx + vy * vy + vz * vz - t * t;
+        const r = coneTan * t;
+        if (perp2 < r * r) { bestT = t; bi = i; }
+      }
+      if (bi < 0) return null;
+      return tmp.set(centres[bi * 3], centres[bi * 3 + 1], centres[bi * 3 + 2]).applyMatrix4(mesh.matrixWorld).clone();
+    };
   } catch (e) { console.warn('splat bounds', e); }
   if (result.box.isEmpty()) result.box.set(new THREE.Vector3(-2, -2, -2), new THREE.Vector3(2, 2, 2));
   // Spark sorts and uploads splats over the next few animation frames. Kick
