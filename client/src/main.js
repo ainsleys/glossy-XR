@@ -192,11 +192,17 @@ async function showModel(p) {
   if (!p.modelUrl) return;
   try {
     model = await loadModel({
-      url: p.modelUrl, type: p.modelType, renderer, scene, pointSize: transform.pointSize,
+      url: p.modelUrl, type: p.modelType, renderer, scene, camera, pointSize: transform.pointSize,
       onProgress: (e) => e.lengthComputable && (hud.modelInfo.textContent = `loading ${p.modelName}… ${Math.round(100 * e.loaded / e.total)}%`),
     });
     modelRoot.add(model.object);
     applyTransform();
+    if (!p.transform || Object.keys(p.transform).length === 0) {
+      // first time this model is shown: bring it to a sensible size and place, and remember it
+      autoFit();
+      project = await projectsApi.update(p.id, { transform });
+    }
+    frameModel();
     const s = model.box.getSize(new THREE.Vector3());
     hud.modelInfo.textContent = `${p.modelName} · ${model.kind} · ${model.count.toLocaleString()} ${model.kind === 'splat' ? 'splats' : 'verts'} · ${s.x.toFixed(1)}×${s.y.toFixed(1)}×${s.z.toFixed(1)} m (raw)`;
   } catch (e) {
@@ -211,27 +217,39 @@ function applyTransform() {
   modelRoot.position.set(transform.x, transform.y, transform.z);
   if (model?.kind === 'points') model.object.material.size = transform.pointSize;
 }
-function transformToHud() { for (const k in hud.t) hud.t[k].value = transform[k]; }
+function transformToHud() { for (const k in hud.t) hud.t[k].value = Number(transform[k].toPrecision(5)); }
 function hudToTransform() { for (const k in hud.t) transform[k] = Number(hud.t[k].value) || (k === 'scale' ? 1 : k === 'pointSize' ? 0.01 : 0); applyTransform(); }
 for (const k in hud.t) hud.t[k].addEventListener('input', hudToTransform);
 hud.zUp.addEventListener('click', () => { transform.rotX = -90; transformToHud(); applyTransform(); });
 hud.resetFit.addEventListener('click', () => { transform = { ...DEFAULT_TRANSFORM }; transformToHud(); applyTransform(); });
-hud.autoFit.addEventListener('click', () => {
+function autoFit() {
   if (!model) return;
   // scale so the largest raw dimension is ~4 m (only if it's wildly off), centre XZ, rest on the floor
-  const raw = new THREE.Box3().setFromObject(model.object);     // untransformed, object is child of modelRoot
+  const raw = model.box;                                         // raw model bounds, before modelRoot's transform
   const size = raw.getSize(new THREE.Vector3()), max = Math.max(size.x, size.y, size.z) || 1;
-  const rx = THREE.MathUtils.degToRad(transform.rotX);
-  transform.scale = max > 12 || max < 0.5 ? 4 / max : 1;
+  // leave plausible real-world sizes alone; shrink giants (mm units) to ~4 m, grow miniatures (unitless) to ~1 m
+  transform.scale = max > 12 ? 4 / max : max < 0.3 ? 1 / max : 1;
   const c = raw.getCenter(new THREE.Vector3());
   // after rotX, the model's local Y/Z swap; handle the common Z-up case explicitly
   const zUp = Math.abs(transform.rotX + 90) < 1;
   transform.x = -c.x * transform.scale;
   transform.z = zUp ? c.y * transform.scale : -c.z * transform.scale;
   transform.y = zUp ? -raw.min.z * transform.scale : -raw.min.y * transform.scale;
-  void rx;
   transformToHud(); applyTransform();
-});
+}
+hud.autoFit.addEventListener('click', () => { autoFit(); frameModel(); });
+
+// desktop only: step the camera back far enough to see the whole transformed model
+function frameModel() {
+  if (!model || renderer.xr.isPresenting) return;
+  modelRoot.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(modelRoot);
+  if (box.isEmpty() || !Number.isFinite(box.min.x)) return;
+  const size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
+  const dist = Math.max(2, Math.max(size.x, size.y, size.z) * 1.1);
+  camera.position.set(c.x, Math.max(1.6, c.y), c.z + dist);
+  camera.lookAt(c.x, c.y, c.z);
+}
 hud.saveTransform.addEventListener('click', async () => {
   if (!project) return;
   project = await projectsApi.update(project.id, { transform });
@@ -322,7 +340,7 @@ function aimMarker(source) {
 }
 function aimPoint(source) {
   aimRay(source);
-  const targets = model && model.kind !== 'splat' ? [model.object] : [];
+  const targets = model ? [model.object] : [];          // Spark SplatMesh implements raycast() when raycastable
   if (room.visible) targets.push(room);
   let hit = null;
   if (targets.length && !(model?.kind === 'points' && model.count > 3_000_000)) {   // brute-force raycast on huge clouds stalls the frame
@@ -392,6 +410,9 @@ const net = connect({
   onProjectsChanged: refreshProjectList,
   onStatus: (s) => { setStatus(s); if (s === 'connected' && project) net.join(project.id); },
 });
+
+// dev-only handle for poking at the scene from the console
+if (import.meta.env.DEV) window.__glossy = { scene, renderer, camera, modelRoot, markers, get model() { return model; }, get project() { return project; }, get transform() { return transform; }, autoFit, frameModel, applyTransform };
 
 // ---- boot ------------------------------------------------------------------
 

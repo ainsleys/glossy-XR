@@ -22,13 +22,13 @@ import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 let sparkModule = null;        // lazy: Spark is ~1 MB and only needed for splats
 let sparkRenderer = null;
 
-export async function loadModel({ url, type, renderer, scene, pointSize = 0.01, onProgress }) {
+export async function loadModel({ url, type, renderer, scene, camera, pointSize = 0.01, onProgress }) {
   switch (type) {
     case 'gltf': return loadGltf(url, renderer, onProgress);
-    case 'ply': return (await isGaussianPly(url)) ? loadSplat(url, renderer, scene) : loadPly(url, pointSize, onProgress);
+    case 'ply': return (await isGaussianPly(url)) ? loadSplat(url, renderer, scene, camera) : loadPly(url, pointSize, onProgress);
     case 'pcd': return loadPcd(url, pointSize, onProgress);
     case 'obj': return loadObj(url, onProgress);
-    case 'splat': return loadSplat(url, renderer, scene);
+    case 'splat': return loadSplat(url, renderer, scene, camera);
     default: throw new Error('unsupported model type: ' + type);
   }
 }
@@ -87,19 +87,44 @@ async function loadPly(url, pointSize, onProgress) {
     mesh.name = 'ply';
     return finish(mesh, 'mesh', geometry.attributes.position.count);
   }
-  const points = new THREE.Points(geometry, pointsMaterial(hasColor, pointSize));
+  const cloud = stripNonFinite(geometry);
+  const points = new THREE.Points(cloud, pointsMaterial(hasColor, pointSize));
   points.name = 'pointcloud';
-  return finish(points, 'points', geometry.attributes.position.count);
+  return finish(points, 'points', cloud.attributes.position.count);
 }
 
 // ---- PCD -------------------------------------------------------------------
 
 async function loadPcd(url, pointSize, onProgress) {
   const points = await new PCDLoader().loadAsync(url, onProgress);
+  points.geometry = stripNonFinite(points.geometry);
   const hasColor = !!points.geometry.attributes.color;
   points.material = pointsMaterial(hasColor, pointSize);
   points.name = 'pointcloud';
   return finish(points, 'points', points.geometry.attributes.position.count);
+}
+
+// Organized clouds from depth cameras (PCD WIDTH x HEIGHT) carry NaN rows for
+// missing pixels. One NaN poisons the bounding box and the whole cloud is
+// culled, so drop non-finite points and keep the other attributes in step.
+function stripNonFinite(geometry) {
+  const pos = geometry.attributes.position;
+  if (!pos || geometry.index) return geometry;
+  const keep = [];
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) keep.push(i);
+  }
+  if (keep.length === pos.count) return geometry;
+  const out = new THREE.BufferGeometry();
+  for (const [name, attr] of Object.entries(geometry.attributes)) {
+    const size = attr.itemSize;
+    const arr = new attr.array.constructor(keep.length * size);
+    for (let k = 0; k < keep.length; k++) for (let c = 0; c < size; c++) arr[k * size + c] = attr.array[keep[k] * size + c];
+    out.setAttribute(name, new THREE.BufferAttribute(arr, size, attr.normalized));
+  }
+  geometry.dispose();
+  return out;
 }
 
 function pointsMaterial(vertexColors, size) {
@@ -124,19 +149,47 @@ async function loadObj(url, onProgress) {
 
 // ---- Gaussian splats (Spark) ----------------------------------------------
 
-async function loadSplat(url, renderer, scene) {
+async function loadSplat(url, renderer, scene, camera) {
   sparkModule ??= await import('@sparkjsdev/spark');
   const { SparkRenderer, SplatMesh } = sparkModule;
-  if (!sparkRenderer) { sparkRenderer = new SparkRenderer({ renderer }); scene.add(sparkRenderer); }
-  const mesh = new SplatMesh({ url });
+  if (!sparkRenderer) {
+    sparkRenderer = new SparkRenderer({ renderer });
+    sparkRenderer.frustumCulled = false;      // it renders every splat in the scene from wherever it sits; never let the camera cull it
+    scene.add(sparkRenderer);
+  }
+  // `initialized` resolves when the mesh object is ready, not when the file has
+  // been decoded; onLoad is the signal that the splats are actually there.
+  const mesh = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('splat load timed out')), 180_000);
+    const m = new SplatMesh({ url, raycastable: true, onLoad: (loaded) => { clearTimeout(timer); resolve(loaded); } });
+    m.initialized.catch((e) => { clearTimeout(timer); reject(e); });
+  });
   mesh.name = 'splat';
-  await mesh.initialized;
   // 3DGS training data is Y-down relative to three's Y-up; flip once here so
   // the project transform starts from "upright".
   mesh.quaternion.set(1, 0, 0, 0);
-  const count = mesh.numSplats ?? mesh.packedSplats?.numSplats ?? 0;
+  mesh.updateMatrix();
+  const count = mesh.packedSplats?.numSplats ?? 0;
   const result = finish(mesh, 'splat', count);
+  // SplatMesh has no geometry, so Box3.setFromObject is empty, and Spark's
+  // getBoundingBox returns a placeholder. Walk the splat centres instead and
+  // trim the 1% tails per axis so training floaters don't inflate the box.
+  try {
+    const xs = [], ys = [], zs = [];
+    const step = Math.max(1, Math.floor(count / 200_000));           // sample big scenes
+    mesh.forEachSplat((i, c) => { if (i % step === 0) { xs.push(c.x); ys.push(c.y); zs.push(c.z); } });
+    const q = (a, p) => { a.sort((u, v) => u - v); return a[Math.min(a.length - 1, Math.floor(p * a.length))]; };
+    const box = new THREE.Box3(
+      new THREE.Vector3(q(xs, 0.01), q(ys, 0.01), q(zs, 0.01)),
+      new THREE.Vector3(q(xs, 0.99), q(ys, 0.99), q(zs, 0.99)),
+    );
+    if (!box.isEmpty()) result.box = box.applyMatrix4(mesh.matrix);
+  } catch (e) { console.warn('splat bounds', e); }
   if (result.box.isEmpty()) result.box.set(new THREE.Vector3(-2, -2, -2), new THREE.Vector3(2, 2, 2));
+  // Spark sorts and uploads splats over the next few animation frames. Kick
+  // one update now so the scene is complete even if the tab is not getting
+  // frames yet (background window, screenshot tooling).
+  if (camera) try { scene.add(mesh); sparkRenderer.update({ scene, camera }); scene.remove(mesh); } catch {}
   return result;
 }
 

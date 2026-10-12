@@ -153,6 +153,7 @@ app.post('/api/projects/:id/model', projectOr404, modelUpload.fields([{ name: 'm
 });
 
 function sanitizeTransform(t) {
+  if (!t || typeof t !== 'object' || Object.keys(t).length === 0) return {};   // {} means "not set yet": client auto-fits on first load
   const n = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
   return {
     scale: n(t.scale, 1) || 1,
