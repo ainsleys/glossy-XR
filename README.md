@@ -1,84 +1,92 @@
 # Glossy XR
 
-Spatially anchored, multi-user voice annotation for WebXR.
+**Spatially anchored, multi-user voice annotation inside a 3D scene, in the browser.**
 
-This is a port of **Glossy** (BuzzFeed Open Lab, October 2016, [ainsleys/glossy](https://github.com/ainsleys/glossy), forked to [buzzfeed-openlab/glossy](https://github.com/buzzfeed-openlab/glossy)) to the browser APIs that exist in 2026. The interaction model is unchanged: pull the trigger, speak, release, and the clip is dropped at the controller's position; everyone else in the scene hears it there. The plumbing is entirely new, because every piece of the 2016 stack has been removed from browsers or from three.js.
+Put on a headset, pull the trigger, say something, let go. The recording is pinned to the spot in the scene where your hand was, tagged with who said it, when, and which layer it belongs to (a draft, a review pass, a period of time, whatever the project needs). Everyone else who opens the scene hears it there. Walk up to a marker and it plays. Export the whole set as JSON.
 
-| 2016 | 2026 |
-|---|---|
-| WebVR (`navigator.getVRDisplays`), webvr-polyfill, webvr-boilerplate | WebXR Device API via `renderer.xr`, `VRButton`, `XRControllerModelFactory` |
-| three.js r79, `VRControls` / `VREffect`, hand-polled Vive gamepads | three.js r186 ESM, `selectstart` / `selectend` / `squeezestart` controller events |
-| recorder.js + opus-recorder worker, WAV blobs | `MediaRecorder` (webm/opus) |
-| socket.io 1.x, audio base64-encoded into Mongo documents | Socket.IO 4, audio files on disk, JSON metadata store |
-| jQuery, script tags, `node_modules` committed | Vite, no framework |
-| "lagging one behind" bug (server emitted the last row, not the saved one) | server emits the record it just wrote |
+Glossy XR is the 2026 rebuild of [Glossy](https://github.com/ainsleys/glossy), a prototype Ainsley Sutherland built at the BuzzFeed Open Lab in October 2016 to let editors and producers leave notes inside a VR piece instead of describing positions in an email. The idea carried through [Voxhop](https://knightfoundation.org/articles/11-ideas-win-journalism-360-challenge-on-immersive-storytelling/) (Knight Foundation / Google News Lab Journalism 360 award, 2017) and MediateVR. This repository is the working codebase for the next iteration.
 
-The private `ainsleys/mediate` repository (Jan 2017) is a byte-identical copy of `glossy`; nothing from Mediate's later work is in here.
+## What changed since 2016
+
+The original ran on the WebVR API, which browsers removed in 2020. Nothing in the 2016 stack runs today. The interaction model is kept exactly; everything underneath is replaced.
+
+| | 2016 | 2026 |
+|---|---|---|
+| Headset API | WebVR + polyfill + webvr-boilerplate | WebXR Device API |
+| Rendering | three.js r79, VRControls / VREffect | three.js r186, `renderer.xr`, controller events |
+| Audio capture | recorder.js + opus worker, WAV | `MediaRecorder`, webm/opus |
+| Transport | Socket.IO 1 | Socket.IO 4 |
+| Storage | audio base64-encoded into MongoDB documents | audio files on disk + JSON metadata store |
+| Build | script tags, jQuery, `node_modules` committed | Vite, ES modules, no framework |
+| Record shape | `{id, x, y, z, audioObject}` | author, timestamp, anchor, layer, consent, transcript slot |
+
+The server also no longer emits the previous record instead of the one just saved, a bug noted in the 2016 commit log.
 
 ## Annotation record
 
-Each contribution carries the four fields the HERIFORGE 2nd Open Call (Türkiye Hub Challenge 2, "Living Layers") requires: **attribution, timestamp, spatial anchor, temporal reference**, in an exportable JSON document.
+Each annotation records who contributed it, when, where in the scene, and which layer it belongs to, so a set of annotations can be filtered, reviewed, and exported without the viewer.
 
 ```json
 {
-  "id": "011e1a87-36fc-4a7a-8f93-0a068772824e",
+  "id": "011e1a87-…",
   "scene": "default",
   "author": "Ainsley",
   "createdAt": "2026-10-12T12:25:36.267Z",
-  "anchor": { "x": 0.1, "y": 0.9, "z": -1.2, "objectId": "copper-pot" },
-  "timeLayer": "1950s",
-  "audioUrl": "/audio/011e1a87-36fc-4a7a-8f93-0a068772824e.webm",
+  "anchor": { "x": 0.1, "y": 0.9, "z": -1.2, "objectId": "pot" },
+  "layer": "review",
+  "audioUrl": "/audio/011e1a87-….webm",
   "durationMs": 1000,
   "transcript": null,
   "consent": true
 }
 ```
 
-`GET /api/export` returns the whole store with a schema tag. `transcript` is reserved for a later speech-to-text pass, which the 2016 post listed as the next step.
-
-## Run
+## Run it
 
 ```sh
 npm install
-npm run dev          # API on :3000, client on http://localhost:5173
+npm run dev        # API on :3000, client on http://localhost:5173
 ```
 
-Desktop: click the canvas to capture the mouse, `W A S D` to move, `K` to start recording, `L` to stop. The clip is anchored 60 cm in front of the camera. `Space` plays the marker you are looking at. Walking within 1.2 m of a marker on the active time layer plays it.
+**Desktop:** click the canvas, `W A S D` to move, `K` start recording, `L` stop. The clip is anchored 60 cm in front of you. `Space` plays the marker you are looking at; walking within about a metre of a marker on the active layer also plays it.
 
-Headset (Quest 3 or any WebXR browser): the headset reaches the dev machine by IP, which is not a secure context, so serve over HTTPS and accept the self-signed certificate once:
+**Headset (Quest 3 or any WebXR browser):** the headset reaches your machine by IP, which browsers do not treat as secure, so either serve HTTPS and accept the self-signed certificate once:
 
 ```sh
-HTTPS=1 npm run dev
-# open https://<your-mac-ip>:5173/ in the headset browser, press "Enter VR"
+HTTPS=1 npm run dev     # then open https://<your-ip>:5173 and press Enter VR
 ```
 
-Trigger: record while held (release to save) or, if pointing at a marker, play it. Squeeze: cycle the time layer. Alternative for Quest: `adb reverse tcp:5173 tcp:5173` and open `http://localhost:5173`, which needs no certificate.
+or, for Quest over USB, `adb reverse tcp:5173 tcp:5173` and open `http://localhost:5173`. Trigger records while held, or plays a marker you are pointing at. Squeeze cycles the layer.
 
-Optional environment: `?scene=/models/house.glb` loads a glTF in place of the default room (serve it from `client/public/`).
+**Your own environment:** `?scene=/models/house.glb` loads a glTF in place of the default room. Put models in `client/public/`.
 
-Production: `npm run build && npm start` serves the built client and the API from one process on `:3000`. Set `GLOSSY_DATA` to move the store.
+**Production:** `npm run build && npm start` serves client and API from one process on `:3000`. `GLOSSY_DATA=/path` relocates the store.
 
 ## API
 
-| Method | Path | Purpose |
+| Method | Path | |
 |---|---|---|
 | GET | `/api/annotations?scene=` | list |
-| POST | `/api/annotations` | multipart: `audio`, `x`, `y`, `z`, `author`, `timeLayer`, `consent=true`, optional `objectId`, `scene`, `durationMs` |
+| POST | `/api/annotations` | multipart: `audio`, `x`, `y`, `z`, `author`, `layer`, `consent=true`; optional `objectId`, `scene`, `durationMs` |
 | DELETE | `/api/annotations/:id` | remove record and file |
-| GET | `/api/export` | full JSON export |
+| GET | `/api/export` | full JSON export with schema tag |
 | GET | `/audio/<id>.webm` | clip |
-| WS | `annotation:all`, `annotation:new`, `annotation:deleted` | Socket.IO events |
-
-Validation: anchor must be numeric, author required, consent must be `true`. Rejected uploads are deleted from disk.
+| Socket.IO | `annotation:all`, `annotation:new`, `annotation:deleted` | live sync |
 
 ## Status
 
-Verified on 2026-10-12: server round-trip (post, list, serve audio, export, delete) with curl; desktop client renders, connects, and loads stored markers in Chrome. **Not yet verified:** recording through a real microphone permission prompt, and the WebXR path on a headset. Both use standard APIs and should work, but test before demoing.
+Verified 12 Oct 2026: server round-trip (post, list, serve, export, delete) and the desktop client rendering, connecting, and loading stored markers in Chrome. Not yet verified: recording through a live microphone prompt, and the WebXR path on a headset.
 
-## Next
+## Roadmap
 
-- Web companion form (phone or tablet) bound to an existing anchor, for text, photo and consent capture without a headset.
+- Companion web form bound to an existing anchor: text, photos, consent from a phone or tablet, no headset needed.
 - Speech-to-text into `transcript`.
-- Export mapping to a Dublin Core / CIDOC CRM-shaped record.
-- Replace the JSON file with SQLite once there is more than one scene.
-- Code-split three.js (the bundle is ~690 kB minified).
+- Export mapped to standard metadata schemas.
+- SQLite in place of the JSON file.
+- Code-split three.js (bundle is ~690 kB minified).
+
+## Lineage
+
+`ainsleys/glossy` holds the 2016 history plus one 2026 snapshot commit of this code. Development continues here.
+
+MIT.

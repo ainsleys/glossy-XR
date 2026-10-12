@@ -5,8 +5,8 @@
 // client when it connects. Differences:
 //   - audio lives on disk as webm/opus files, not base64 blobs in Mongo
 //   - metadata is a JSON file (swap for SQLite/Postgres later; the shape is stable)
-//   - every annotation carries the four fields the HERIFORGE "Living Layers"
-//     spec requires: attribution, timestamp, spatial anchor, temporal reference
+//   - every annotation carries author, timestamp, spatial anchor and layer, so
+//     a set can be filtered, reviewed and exported without the viewer
 //   - the "lagging one behind" bug is gone: the server emits the record it just
 //     saved, not the last record in the table
 //   - GET /api/export returns the whole store as a single JSON document
@@ -44,18 +44,15 @@ function persist() {
 }
 
 /**
- * Annotation record. Field names are chosen to map cleanly onto the
- * HERIFORGE 2OC Türkiye Challenge 2 requirement that each contribution carry
- * attribution, timestamp, spatial anchor and temporal reference, and be
- * exportable as JSON/RDF.
+ * Annotation record.
  *
  * {
  *   id:          uuid
  *   scene:       string      which environment this belongs to ("default", a GLB url, ...)
  *   author:      string      attribution (display name; free text for now)
  *   createdAt:   ISO-8601    timestamp
- *   anchor:      { x, y, z, objectId?: string }    spatial anchor in scene metres
- *   timeLayer:   string      temporal reference (e.g. "1920s", "harvest", "today")
+ *   anchor:      { x, y, z, objectId?: string }    position in scene metres
+ *   layer:       string      grouping label (e.g. "draft", "review", "1920s")
  *   audioUrl:    /audio/<id>.webm
  *   durationMs:  number
  *   transcript?: string      optional, filled by a later ASR pass
@@ -69,12 +66,12 @@ function validate(body) {
   if ([x, y, z].some(Number.isNaN)) errors.push('anchor x/y/z must be numbers');
   const author = String(body.author || '').trim().slice(0, 120);
   if (!author) errors.push('author (attribution) is required');
-  const timeLayer = String(body.timeLayer || '').trim().slice(0, 120) || 'present';
+  const layer = String(body.layer || '').trim().slice(0, 120) || 'default';
   const scene = String(body.scene || 'default').slice(0, 200);
   const objectId = body.objectId ? String(body.objectId).slice(0, 200) : undefined;
   const consent = body.consent === 'true' || body.consent === true;
   if (!consent) errors.push('consent must be true');
-  return { errors, x, y, z, author, timeLayer, scene, objectId, consent };
+  return { errors, x, y, z, author, layer, scene, objectId, consent };
 }
 
 // ---- http ------------------------------------------------------------------
@@ -116,7 +113,7 @@ app.get('/api/export', (_req, res) => {
   res.json({
     exportedAt: new Date().toISOString(),
     schema: 'glossy-xr/annotation/0.2',
-    fields: ['id', 'scene', 'author', 'createdAt', 'anchor', 'timeLayer', 'audioUrl', 'durationMs', 'transcript', 'consent'],
+    fields: ['id', 'scene', 'author', 'createdAt', 'anchor', 'layer', 'audioUrl', 'durationMs', 'transcript', 'consent'],
     annotations,
   });
 });
@@ -135,7 +132,7 @@ app.post('/api/annotations', upload.single('audio'), async (req, res) => {
     author: v.author,
     createdAt: new Date().toISOString(),
     anchor: { x: v.x, y: v.y, z: v.z, ...(v.objectId ? { objectId: v.objectId } : {}) },
-    timeLayer: v.timeLayer,
+    layer: v.layer,
     audioUrl: `/audio/${req.file.filename}`,
     durationMs: Number(req.body.durationMs) || null,
     transcript: null,

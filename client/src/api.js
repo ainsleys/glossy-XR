@@ -10,7 +10,7 @@ export function connect({ onAll, onNew, onDeleted, onStatus }) {
   return socket;
 }
 
-export async function postAnnotation({ blob, durationMs, anchor, author, timeLayer, scene, consent, objectId }) {
+export async function postAnnotation({ blob, durationMs, anchor, author, layer, scene, consent, objectId }) {
   const fd = new FormData();
   fd.append('audio', blob, 'clip');
   fd.append('x', anchor.x);
@@ -18,7 +18,7 @@ export async function postAnnotation({ blob, durationMs, anchor, author, timeLay
   fd.append('z', anchor.z);
   if (objectId) fd.append('objectId', objectId);
   fd.append('author', author);
-  fd.append('timeLayer', timeLayer);
+  fd.append('layer', layer);
   fd.append('scene', scene);
   fd.append('consent', String(consent));
   fd.append('durationMs', durationMs);

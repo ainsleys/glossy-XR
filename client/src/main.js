@@ -8,8 +8,7 @@
 //   WebXR (renderer.xr) + XRControllerModelFactory, MediaRecorder,
 //   PositionalAudio, Socket.IO 4, ESM three via Vite.
 // Desktop fallback (pointer lock + WASD, K/L to record) kept from the original
-// so the tool can be used without a headset, which the HERIFORGE spec lists as a
-// preferential accessibility measure.
+// so the tool can be used without a headset.
 
 import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
@@ -24,7 +23,7 @@ import { connect, postAnnotation } from './api.js';
 const params = new URLSearchParams(location.search);
 const SCENE_URL = params.get('scene');           // optional GLB/glTF environment
 const SCENE_ID = SCENE_URL || 'default';
-const LAYERS = ['present', '1950s', '1920s', 'harvest', 'winter'];
+const LAYERS = ['default', 'draft', 'review', 'final'];
 const MARKER_RADIUS = 0.06;
 const PLAY_DISTANCE = 1.2;                        // metres; walk near a marker and it plays
 
@@ -34,7 +33,7 @@ const $ = (id) => document.getElementById(id);
 const hud = { author: $('author'), layer: $('layer'), consent: $('consent'), status: $('statusText'), rec: $('rec'), count: $('count') };
 try {
   hud.author.value = localStorage.getItem('glossy.author') || '';
-  hud.layer.value = localStorage.getItem('glossy.layer') || 'present';
+  hud.layer.value = localStorage.getItem('glossy.layer') || 'default';
   hud.consent.checked = localStorage.getItem('glossy.consent') === '1';
 } catch {}
 hud.author.addEventListener('change', () => { try { localStorage.setItem('glossy.author', hud.author.value); } catch {} });
@@ -81,7 +80,7 @@ const room = new THREE.Group();
   // a few "objects" to annotate so there's something to point at
   const mat = new THREE.MeshStandardMaterial({ color: 0x8a6d3b, roughness: 0.7 });
   const table = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.08, 0.7), mat); table.position.set(0, 0.75, -1.2); table.name = 'table';
-  const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 0.3, 24), new THREE.MeshStandardMaterial({ color: 0xb87333, metalness: 0.6, roughness: 0.35 })); pot.position.set(0, 0.94, -1.2); pot.name = 'copper-pot';
+  const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 0.3, 24), new THREE.MeshStandardMaterial({ color: 0xb87333, metalness: 0.6, roughness: 0.35 })); pot.position.set(0, 0.94, -1.2); pot.name = 'pot';
   const chest = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.5, 0.5), mat); chest.position.set(-2, 0.25, 0.5); chest.name = 'chest';
   room.add(table, pot, chest);
 }
@@ -97,13 +96,13 @@ const markers = new Map();           // id -> { mesh, sound, record }
 const markerGroup = new THREE.Group();
 scene.add(markerGroup);
 const audioLoader = new THREE.AudioLoader();
-const layerColor = (layer) => new THREE.Color().setHSL((LAYERS.indexOf(layer) % 8) / 8, 0.75, 0.55);
+const layerColor = (layer) => new THREE.Color().setHSL(((LAYERS.indexOf(layer) + 8) % 8) / 8, 0.75, 0.55);
 
 function addMarker(record) {
   if (markers.has(record.id)) return;
   const mesh = new THREE.Mesh(
     new THREE.SphereGeometry(MARKER_RADIUS, 20, 14),
-    new THREE.MeshStandardMaterial({ color: layerColor(record.timeLayer), emissive: layerColor(record.timeLayer), emissiveIntensity: 0.35 }),
+    new THREE.MeshStandardMaterial({ color: layerColor(record.layer), emissive: layerColor(record.layer), emissiveIntensity: 0.35 }),
   );
   mesh.position.set(record.anchor.x, record.anchor.y, record.anchor.z);
   mesh.userData.id = record.id;
@@ -128,7 +127,7 @@ function removeMarker({ id }) {
 function applyLayerFilter() {
   // show the active layer bright, others dim; hiding entirely would hide the point of "layers"
   for (const { mesh, record } of markers.values()) {
-    const active = record.timeLayer === hud.layer.value;
+    const active = record.layer === hud.layer.value;
     mesh.material.opacity = active ? 1 : 0.25;
     mesh.material.transparent = !active;
     mesh.scale.setScalar(active ? 1 : 0.7);
@@ -178,7 +177,7 @@ async function endRecording() {
   setStatus('saving…');
   try {
     const rec = await postAnnotation({
-      ...clip, anchor, author: hud.author.value.trim(), timeLayer: hud.layer.value, scene: SCENE_ID, consent: true,
+      ...clip, anchor, author: hud.author.value.trim(), layer: hud.layer.value, scene: SCENE_ID, consent: true,
     });
     setStatus(`saved ${Math.round(clip.durationMs / 100) / 10}s at (${anchor.x.toFixed(2)}, ${anchor.y.toFixed(2)}, ${anchor.z.toFixed(2)})`);
     addMarker(rec);                  // local echo; server broadcast is deduped by id
@@ -208,7 +207,7 @@ for (let i = 0; i < 2; i++) {
   ctrl.addEventListener('squeezestart', () => {
     const next = LAYERS[(LAYERS.indexOf(hud.layer.value) + 1) % LAYERS.length];
     hud.layer.value = next; hud.layer.dispatchEvent(new Event('change'));
-    setStatus('time layer: ' + next);
+    setStatus('layer: ' + next);
   });
   rig.add(ctrl);
   const grip = renderer.xr.getControllerGrip(i);
@@ -264,10 +263,10 @@ renderer.setAnimationLoop(() => {
 
   if (recorder.isRecording && anchorSource) anchorSource.getWorldPosition(cursor.position);
 
-  // proximity playback for the active layer: walk up to a marker and it speaks
+  // proximity playback for the active layer: walk up to a marker and it plays
   camera.getWorldPosition(near);
   for (const { mesh, sound, record } of markers.values()) {
-    if (record.timeLayer !== hud.layer.value || !sound.buffer) continue;
+    if (record.layer !== hud.layer.value || !sound.buffer) continue;
     const d = mesh.position.distanceTo(near);
     if (d < PLAY_DISTANCE && !sound.isPlaying && !mesh.userData.played) { mesh.userData.played = true; play(record.id); }
     if (d > PLAY_DISTANCE * 1.5) mesh.userData.played = false;

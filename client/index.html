@@ -27,20 +27,19 @@
   <body>
     <div id="hud">
       <strong>Glossy XR</strong> <span id="count"></span>
-      <label for="author">Your name (attribution)</label>
+      <label for="author">Your name</label>
       <input id="author" placeholder="e.g. Ainsley" autocomplete="off" />
-      <label for="layer">Time layer (temporal reference)</label>
+      <label for="layer">Layer</label>
       <select id="layer">
-        <option value="present">present</option>
-        <option value="1950s">1950s</option>
-        <option value="1920s">1920s</option>
-        <option value="harvest">harvest season</option>
-        <option value="winter">winter</option>
+        <option value="default">default</option>
+        <option value="draft">draft</option>
+        <option value="review">review</option>
+        <option value="final">final</option>
       </select>
       <div class="row" style="margin-top:6px"><input type="checkbox" id="consent" /><label for="consent" style="margin:0">I consent to my recording being stored and shared</label></div>
       <div id="status"><span id="rec"></span><span id="statusText">connecting…</span></div>
       <div id="help">
-        Headset: trigger = record / stop, squeeze = cycle time layer, point at a marker to play.<br />
+        Headset: trigger = record / stop, squeeze = cycle layer, point at a marker to play.<br />
         Desktop: click to look, <kbd>W A S D</kbd> move, <kbd>K</kbd> start, <kbd>L</kbd> stop.
         <a href="/api/export" target="_blank">Export JSON</a>
       </div>
