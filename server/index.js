@@ -45,6 +45,8 @@ export const MODEL_TYPES = {
   '.pcd': 'pcd',
   '.obj': 'obj',
   '.splat': 'splat', '.ksplat': 'splat', '.spz': 'splat', '.sog': 'splat',
+  '.png': 'image', '.jpg': 'image', '.jpeg': 'image', '.webp': 'image', '.avif': 'image',   // flat plane, or 360 sphere via options.mode
+  '.mp4': 'video', '.webm': 'video', '.mov': 'video',
 };
 const safeName = (n) => path.basename(n).replace(/[^\w.\-]+/g, '_').slice(0, 120);
 
@@ -141,15 +143,39 @@ app.delete('/api/projects/:id', projectOr404, async (req, res) => {
   res.status(204).end();
 });
 
-// model upload: field "model" (the main file) plus optional sidecar files in "files"
-app.post('/api/projects/:id/model', projectOr404, modelUpload.fields([{ name: 'model', maxCount: 1 }, { name: 'files', maxCount: 50 }]), (req, res) => {
+// assets: a project holds any number (meshes, clouds, splats, images, video), each with its own transform
+// upload: field "model" (the main file) plus optional sidecar files in "files"
+app.post('/api/projects/:id/assets', projectOr404, modelUpload.fields([{ name: 'model', maxCount: 1 }, { name: 'files', maxCount: 50 }]), (req, res) => {
   const main = req.files?.model?.[0];
-  if (!main) return res.status(400).json({ error: 'model file is required (glb, gltf, ply, pcd, obj, splat, ksplat, spz, sog)' });
+  if (!main) return res.status(400).json({ error: 'file is required (' + Object.keys(MODEL_TYPES).join(' ') + ')' });
   const type = MODEL_TYPES[path.extname(main.originalname).toLowerCase()];
-  if (!type) return res.status(400).json({ error: 'unsupported model type' });
-  const p = db.projects.setModel(req.params.id, { url: `/models/${req.params.id}/${main.filename}`, type, name: main.originalname });
-  io.emit('project:updated', p);
-  res.status(201).json(p);
+  if (!type) return res.status(400).json({ error: 'unsupported asset type' });
+  const options = {};
+  if (type === 'image' && req.body?.mode) options.mode = req.body.mode === 'sphere' ? 'sphere' : 'plane';
+  const asset = db.assets.create(req.params.id, { url: `/models/${req.params.id}/${main.filename}`, type, name: main.originalname, options });
+  io.emit('project:updated', db.projects.get(req.params.id));
+  res.status(201).json(asset);
+});
+app.get('/api/projects/:id/assets', projectOr404, (req, res) => res.json(db.assets.list(req.params.id)));
+app.patch('/api/projects/:id/assets/:aid', projectOr404, (req, res) => {
+  const patch = {};
+  if (req.body?.name !== undefined) patch.name = String(req.body.name).trim().slice(0, 120);
+  if (req.body?.transform !== undefined) patch.transform = sanitizeTransform(req.body.transform);
+  if (req.body?.options !== undefined && typeof req.body.options === 'object') patch.options = req.body.options;
+  if (req.body?.visible !== undefined) patch.visible = !!req.body.visible;
+  if (req.body?.sort !== undefined) patch.sort = Number(req.body.sort) || 0;
+  const a = db.assets.update(req.params.id, req.params.aid, patch);
+  if (!a) return res.status(404).json({ error: 'asset not found' });
+  io.emit('project:updated', db.projects.get(req.params.id));
+  res.json(a);
+});
+app.delete('/api/projects/:id/assets/:aid', projectOr404, async (req, res) => {
+  const gone = db.assets.remove(req.params.id, req.params.aid);
+  if (!gone) return res.status(404).end();
+  const others = db.assets.list(req.params.id).some((a) => a.url === gone.url);
+  if (!others) await fsp.unlink(path.join(MODEL_DIR, req.params.id, path.basename(gone.url))).catch(() => {});
+  io.emit('project:updated', db.projects.get(req.params.id));
+  res.status(204).end();
 });
 
 function sanitizeTransform(t) {

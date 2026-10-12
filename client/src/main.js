@@ -7,19 +7,20 @@
 // This keeps the interaction model and swaps the plumbing:
 //   WebXR (renderer.xr) + XRControllerModelFactory, MediaRecorder,
 //   PositionalAudio, Socket.IO 4, ESM three via Vite.
-// Desktop fallback (pointer lock + WASD, K/L to record) kept from the original
-// so the tool can be used without a headset.
+// Desktop fallback (pointer lock + WASD, mouse button to record) kept from the
+// original so the tool can be used without a headset.
 //
-// Projects: each project owns a model (glTF, PLY, PCD, OBJ, Gaussian splat)
-// and its annotations. Annotations anchor to the surface the user points at
-// when a model is loaded, and carry the name of the mesh hit.
+// Projects: each project owns a set of assets (glTF, PLY, PCD, OBJ, Gaussian
+// splat, flat image, 360 panorama, video), each with its own transform, plus
+// the annotations. Annotations anchor to the surface the user points at and
+// carry the name of the mesh hit.
 
 import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { VoiceRecorder } from './recorder.js';
-import { connect, projects as projectsApi, annotations as annotationsApi } from './api.js';
+import { connect, projects as projectsApi, assets as assetsApi, annotations as annotationsApi } from './api.js';
 import { loadModel, SUPPORTED_EXTENSIONS } from './loaders.js';
 
 // ---- config ----------------------------------------------------------------
@@ -35,9 +36,9 @@ const $ = (id) => document.getElementById(id);
 const hud = {
   project: $('project'), newProject: $('newProject'), modelInfo: $('modelInfo'),
   author: $('author'), layer: $('layer'), consent: $('consent'), status: $('statusText'), rec: $('rec'), count: $('count'),
-  modelFile: $('modelFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), annList: $('annList'),
+  assetList: $('assetList'), assetFile: $('assetFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), annList: $('annList'),
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
-  zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'),
+  zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
 };
 const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 hud.author.value = ls.get('glossy.author', '');
@@ -47,6 +48,8 @@ hud.author.addEventListener('change', () => ls.set('glossy.author', hud.author.v
 hud.layer.addEventListener('change', () => ls.set('glossy.layer', hud.layer.value));
 hud.consent.addEventListener('change', () => ls.set('glossy.consent', hud.consent.checked ? '1' : '0'));
 const setStatus = (t) => { hud.status.textContent = t; };
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fmtDur = (ms) => (ms ? (ms / 1000).toFixed(1) + 's' : '');
 
 // ---- renderer / scene ------------------------------------------------------
 
@@ -76,7 +79,7 @@ const sun = new THREE.DirectionalLight(0xffffff, 1.2);
 sun.position.set(3, 6, 2);
 scene.add(sun);
 
-// default environment: a 6 m room with a grid floor, shown when a project has no model
+// default environment: a 6 m room with a grid floor, shown when a project has no assets
 const room = new THREE.Group();
 {
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), new THREE.MeshStandardMaterial({ color: 0x1b2330, roughness: 0.9 }));
@@ -93,15 +96,202 @@ const room = new THREE.Group();
 }
 scene.add(room);
 
-// the project's model lives under modelRoot so the saved transform applies as a whole
-const modelRoot = new THREE.Group();
-scene.add(modelRoot);
 const floorGrid = new THREE.GridHelper(20, 40, 0x2a3644, 0x1c2530);
 floorGrid.visible = false;
 scene.add(floorGrid);
-let model = null;                 // { object, kind, box, count, dispose }
+
+// ---- assets ----------------------------------------------------------------
+// Each asset lives under its own Group so its saved transform applies as a whole.
+
+const assetsRoot = new THREE.Group();
+scene.add(assetsRoot);
+const loaded = new Map();         // assetId -> { asset, group, model, transform, error, progress }
 let project = null;               // current project record
-let transform = { ...DEFAULT_TRANSFORM };
+let selectedId = null;            // asset whose transform the panel edits
+const selected = () => loaded.get(selectedId) || null;
+
+async function showAssets(p) {
+  for (const e of loaded.values()) { assetsRoot.remove(e.group); e.model?.dispose(); }
+  loaded.clear();
+  const list = p.assets || [];
+  room.visible = list.length === 0;
+  floorGrid.visible = list.length > 0;
+  selectedId = list.some((a) => a.id === selectedId) ? selectedId : (list[0]?.id ?? null);
+  renderAssets();
+  await Promise.all(list.map((a, i) => loadAsset(a, i)));
+  frameAll();
+  renderAssets();
+}
+
+async function loadAsset(asset, index = loaded.size) {
+  const group = new THREE.Group();
+  group.name = asset.name;
+  assetsRoot.add(group);
+  const entry = { asset, group, model: null, transform: { ...DEFAULT_TRANSFORM, ...asset.transform }, error: null, progress: 0 };
+  loaded.set(asset.id, entry);
+  group.visible = asset.visible !== false;
+  try {
+    entry.model = await loadModel({
+      url: asset.url, type: asset.type, options: asset.options || {}, renderer, scene, camera, pointSize: entry.transform.pointSize,
+      onProgress: (e) => { if (e.lengthComputable) { entry.progress = e.loaded / e.total; renderAssets(); } },
+    });
+    group.add(entry.model.object);
+    applyTransform(entry);
+    if (!asset.transform || Object.keys(asset.transform).length === 0) {
+      autoFit(entry, index);                                // first time this asset is shown
+      entry.asset = await assetsApi.update(project.id, asset.id, { transform: entry.transform });
+    }
+  } catch (e) {
+    console.error(e);
+    entry.error = e.message;
+  }
+  renderAssets();
+}
+
+function applyTransform(entry) {
+  const t = entry.transform, g = entry.group;
+  g.scale.setScalar(t.scale);
+  g.rotation.set(THREE.MathUtils.degToRad(t.rotX), THREE.MathUtils.degToRad(t.rotY), THREE.MathUtils.degToRad(t.rotZ));
+  g.position.set(t.x, t.y, t.z);
+  if (entry.model?.kind === 'points') entry.model.object.material.size = t.pointSize;
+}
+
+function autoFit(entry, index = 0) {
+  const m = entry.model; if (!m) return;
+  const t = entry.transform;
+  // leave plausible real-world sizes alone; shrink giants (mm units) to ~4 m, grow miniatures (unitless) to ~1 m
+  const raw = m.box, size = raw.getSize(new THREE.Vector3()), max = Math.max(size.x, size.y, size.z) || 1;
+  t.scale = max > 12 ? 4 / max : max < 0.3 ? 1 / max : 1;
+  const c = raw.getCenter(new THREE.Vector3());
+  const zUp = Math.abs(t.rotX + 90) < 1;                  // after rotX=-90 the model's Y/Z swap
+  if (m.imageMode === 'sphere') { t.x = t.y = t.z = 0; t.scale = 1; }   // panoramas wrap the viewer; keep them centred
+  else {
+    t.x = -c.x * t.scale + index * 2.5;                   // later assets step along +X so they don't overlap
+    t.z = zUp ? c.y * t.scale : -c.z * t.scale;
+    t.y = zUp ? -raw.min.z * t.scale : -raw.min.y * t.scale;
+  }
+  applyTransform(entry);
+  if (entry === selected()) transformToHud();
+}
+
+// desktop only: step the camera back far enough to see every visible asset
+function frameAll() {
+  if (renderer.xr.isPresenting) return;
+  assetsRoot.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  for (const e of loaded.values()) {
+    if (!e.model || !e.group.visible || e.model.imageMode === 'sphere') continue;
+    const b = e.model.box.clone().applyMatrix4(e.group.matrixWorld);
+    if (Number.isFinite(b.min.x)) box.union(b);
+  }
+  if (box.isEmpty()) return;
+  const size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
+  const dist = Math.max(2, Math.max(size.x, size.y, size.z) * 1.1);
+  camera.position.set(c.x, Math.max(1.6, c.y), c.z + dist);
+  camera.lookAt(c.x, c.y, c.z);
+}
+
+// transform panel edits the selected asset
+function transformToHud() {
+  const e = selected();
+  hud.selectedName.textContent = e ? `${e.asset.name} · ${e.asset.type}` : 'no asset selected';
+  for (const k in hud.t) hud.t[k].value = e ? Number(e.transform[k].toPrecision(5)) : '';
+}
+function hudToTransform() {
+  const e = selected(); if (!e) return;
+  for (const k in hud.t) e.transform[k] = Number(hud.t[k].value) || (k === 'scale' ? 1 : k === 'pointSize' ? 0.01 : 0);
+  applyTransform(e);
+}
+for (const k in hud.t) hud.t[k].addEventListener('input', hudToTransform);
+hud.zUp.addEventListener('click', () => { const e = selected(); if (!e) return; e.transform.rotX = -90; transformToHud(); applyTransform(e); });
+hud.resetFit.addEventListener('click', () => { const e = selected(); if (!e) return; e.transform = { ...DEFAULT_TRANSFORM }; transformToHud(); applyTransform(e); });
+hud.autoFit.addEventListener('click', () => { const e = selected(); if (!e) return; autoFit(e, [...loaded.keys()].indexOf(e.asset.id)); frameAll(); });
+hud.saveTransform.addEventListener('click', async () => {
+  const e = selected(); if (!e || !project) return;
+  e.asset = await assetsApi.update(project.id, e.asset.id, { transform: e.transform });
+  setStatus('transform saved');
+});
+
+function renderAssets() {
+  const ul = hud.assetList;
+  ul.innerHTML = '';
+  const entries = project?.assets?.map((a) => loaded.get(a.id) || { asset: a }) || [];
+  for (const e of entries) {
+    const a = e.asset;
+    const li = document.createElement('li');
+    li.className = (a.id === selectedId ? 'selected ' : '') + (e.group && !e.group.visible ? 'hidden ' : '');
+    const info = e.error ? `failed: ${esc(e.error)}` : e.model ? describe(e.model) : e.progress ? `${Math.round(e.progress * 100)}%` : 'loading…';
+    li.innerHTML = `<input type="checkbox" class="vis" ${e.group?.visible === false ? '' : 'checked'} title="visible" /><span class="name" title="${esc(a.name)}">${esc(a.name)}</span><span class="meta">${esc(a.type)}${e.model?.imageMode ? ' · ' + e.model.imageMode : ''} · ${info}</span><button class="del" title="remove asset">✕</button>`;
+    li.querySelector('.name').addEventListener('click', () => { selectedId = a.id; renderAssets(); });
+    li.querySelector('.vis').addEventListener('change', async (ev) => {
+      if (e.group) e.group.visible = ev.target.checked;
+      e.asset = await assetsApi.update(project.id, a.id, { visible: ev.target.checked });
+      renderAssets();
+    });
+    li.querySelector('.del').addEventListener('click', async () => {
+      await assetsApi.remove(project.id, a.id);            // server broadcasts project:updated → reload
+      setStatus('removed ' + a.name);
+    });
+    ul.appendChild(li);
+  }
+  const n = loaded.size, k = [...loaded.values()].filter((e) => e.model).length;
+  hud.modelInfo.textContent = n ? `${k}/${n} asset${n === 1 ? '' : 's'} loaded` : 'no assets (default room)';
+  transformToHud();
+}
+function describe(m) {
+  const s = m.box.getSize(new THREE.Vector3());
+  return `${m.count.toLocaleString()} ${m.kind === 'splat' ? 'splats' : 'verts'} · ${s.x.toFixed(1)}×${s.y.toFixed(1)}×${s.z.toFixed(1)} m`;
+}
+
+hud.assetFile.addEventListener('change', async () => {
+  if (!project || !hud.assetFile.files.length) return;
+  const files = [...hud.assetFile.files];
+  const main = files.find((f) => SUPPORTED_EXTENSIONS.includes('.' + f.name.split('.').pop().toLowerCase()));
+  if (!main) return setStatus('pick a ' + SUPPORTED_EXTENSIONS.join(' ') + ' file');
+  hud.uploadProgress.hidden = false; hud.uploadProgress.value = 0;
+  try {
+    const extra = {};
+    if (/\.(png|jpe?g|webp|avif|mp4|webm|mov)$/i.test(main.name) && $('as360').checked) extra.mode = 'sphere';
+    const asset = await assetsApi.upload(project.id, main, files.filter((f) => f !== main), (p) => { hud.uploadProgress.value = p; }, extra);
+    setStatus('uploaded ' + main.name);
+    selectedId = asset.id;                                  // project:updated will reload the asset list
+  } catch (e) { setStatus('upload failed: ' + e.message); }
+  hud.uploadProgress.hidden = true; hud.assetFile.value = '';
+});
+
+// ---- projects --------------------------------------------------------------
+
+async function refreshProjectList() {
+  const list = await projectsApi.list();
+  hud.project.innerHTML = '';
+  for (const p of list) {
+    const o = document.createElement('option');
+    o.value = p.id; o.textContent = `${p.name} (${p.annotationCount})${p.assets?.length ? ' · ' + p.assets.length + ' asset' + (p.assets.length === 1 ? '' : 's') : ''}`;
+    hud.project.appendChild(o);
+  }
+  if (project) hud.project.value = project.id;
+  return list;
+}
+
+async function openProject(id) {
+  project = await projectsApi.get(id);
+  hud.project.value = id;
+  hud.exportLink.href = `/api/projects/${id}/export`;
+  history.replaceState(null, '', `?project=${id}`);
+  selectedId = null;
+  clearMarkers();
+  net.join(id);
+  await showAssets(project);
+}
+
+hud.project.addEventListener('change', () => openProject(hud.project.value));
+hud.newProject.addEventListener('click', async () => {
+  const name = prompt('Project name');
+  if (!name) return;
+  const p = await projectsApi.create(name);
+  await refreshProjectList();
+  await openProject(p.id);
+});
 
 // ---- annotations in the scene ---------------------------------------------
 
@@ -187,7 +377,6 @@ function play(id) {
   renderList();
   setStatus(`▶ ${m.record.author} · ${m.record.layer}${m.record.anchor.objectId ? ' · ' + m.record.anchor.objectId : ''} · ${fmtDur(m.record.durationMs)}`);
 }
-const fmtDur = (ms) => (ms ? (ms / 1000).toFixed(1) + 's' : '');
 
 async function deleteAnnotation(id) {
   if (!project || !markers.has(id)) return;
@@ -231,128 +420,6 @@ function renderList() {
     ul.appendChild(li);
   }
 }
-const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-
-// ---- projects and models ---------------------------------------------------
-
-async function refreshProjectList() {
-  const list = await projectsApi.list();
-  hud.project.innerHTML = '';
-  for (const p of list) {
-    const o = document.createElement('option');
-    o.value = p.id; o.textContent = `${p.name} (${p.annotationCount})${p.modelName ? ' · ' + p.modelName : ''}`;
-    hud.project.appendChild(o);
-  }
-  if (project) hud.project.value = project.id;
-  return list;
-}
-
-async function openProject(id) {
-  project = await projectsApi.get(id);
-  hud.project.value = id;
-  hud.exportLink.href = `/api/projects/${id}/export`;
-  history.replaceState(null, '', `?project=${id}`);
-  transform = { ...DEFAULT_TRANSFORM, ...project.transform };
-  transformToHud();
-  clearMarkers();
-  net.join(id);
-  await showModel(project);
-}
-
-async function showModel(p) {
-  if (model) { modelRoot.remove(model.object); model.dispose(); model = null; }
-  room.visible = !p.modelUrl;
-  floorGrid.visible = !!p.modelUrl;
-  hud.modelInfo.textContent = p.modelName ? `loading ${p.modelName}…` : 'no model (default room)';
-  if (!p.modelUrl) return;
-  try {
-    model = await loadModel({
-      url: p.modelUrl, type: p.modelType, renderer, scene, camera, pointSize: transform.pointSize,
-      onProgress: (e) => e.lengthComputable && (hud.modelInfo.textContent = `loading ${p.modelName}… ${Math.round(100 * e.loaded / e.total)}%`),
-    });
-    modelRoot.add(model.object);
-    applyTransform();
-    if (!p.transform || Object.keys(p.transform).length === 0) {
-      // first time this model is shown: bring it to a sensible size and place, and remember it
-      autoFit();
-      project = await projectsApi.update(p.id, { transform });
-    }
-    frameModel();
-    const s = model.box.getSize(new THREE.Vector3());
-    hud.modelInfo.textContent = `${p.modelName} · ${model.kind} · ${model.count.toLocaleString()} ${model.kind === 'splat' ? 'splats' : 'verts'} · ${s.x.toFixed(1)}×${s.y.toFixed(1)}×${s.z.toFixed(1)} m (raw)`;
-  } catch (e) {
-    console.error(e);
-    hud.modelInfo.textContent = `failed to load ${p.modelName}: ${e.message}`;
-  }
-}
-
-function applyTransform() {
-  modelRoot.scale.setScalar(transform.scale);
-  modelRoot.rotation.set(THREE.MathUtils.degToRad(transform.rotX), THREE.MathUtils.degToRad(transform.rotY), THREE.MathUtils.degToRad(transform.rotZ));
-  modelRoot.position.set(transform.x, transform.y, transform.z);
-  if (model?.kind === 'points') model.object.material.size = transform.pointSize;
-}
-function transformToHud() { for (const k in hud.t) hud.t[k].value = Number(transform[k].toPrecision(5)); }
-function hudToTransform() { for (const k in hud.t) transform[k] = Number(hud.t[k].value) || (k === 'scale' ? 1 : k === 'pointSize' ? 0.01 : 0); applyTransform(); }
-for (const k in hud.t) hud.t[k].addEventListener('input', hudToTransform);
-hud.zUp.addEventListener('click', () => { transform.rotX = -90; transformToHud(); applyTransform(); });
-hud.resetFit.addEventListener('click', () => { transform = { ...DEFAULT_TRANSFORM }; transformToHud(); applyTransform(); });
-function autoFit() {
-  if (!model) return;
-  // scale so the largest raw dimension is ~4 m (only if it's wildly off), centre XZ, rest on the floor
-  const raw = model.box;                                         // raw model bounds, before modelRoot's transform
-  const size = raw.getSize(new THREE.Vector3()), max = Math.max(size.x, size.y, size.z) || 1;
-  // leave plausible real-world sizes alone; shrink giants (mm units) to ~4 m, grow miniatures (unitless) to ~1 m
-  transform.scale = max > 12 ? 4 / max : max < 0.3 ? 1 / max : 1;
-  const c = raw.getCenter(new THREE.Vector3());
-  // after rotX, the model's local Y/Z swap; handle the common Z-up case explicitly
-  const zUp = Math.abs(transform.rotX + 90) < 1;
-  transform.x = -c.x * transform.scale;
-  transform.z = zUp ? c.y * transform.scale : -c.z * transform.scale;
-  transform.y = zUp ? -raw.min.z * transform.scale : -raw.min.y * transform.scale;
-  transformToHud(); applyTransform();
-}
-hud.autoFit.addEventListener('click', () => { autoFit(); frameModel(); });
-
-// desktop only: step the camera back far enough to see the whole transformed model
-function frameModel() {
-  if (!model || renderer.xr.isPresenting) return;
-  modelRoot.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(modelRoot);
-  if (box.isEmpty() || !Number.isFinite(box.min.x)) return;
-  const size = box.getSize(new THREE.Vector3()), c = box.getCenter(new THREE.Vector3());
-  const dist = Math.max(2, Math.max(size.x, size.y, size.z) * 1.1);
-  camera.position.set(c.x, Math.max(1.6, c.y), c.z + dist);
-  camera.lookAt(c.x, c.y, c.z);
-}
-hud.saveTransform.addEventListener('click', async () => {
-  if (!project) return;
-  project = await projectsApi.update(project.id, { transform });
-  setStatus('transform saved');
-});
-
-hud.project.addEventListener('change', () => openProject(hud.project.value));
-hud.newProject.addEventListener('click', async () => {
-  const name = prompt('Project name');
-  if (!name) return;
-  const p = await projectsApi.create(name);
-  await refreshProjectList();
-  await openProject(p.id);
-});
-hud.modelFile.addEventListener('change', async () => {
-  if (!project || !hud.modelFile.files.length) return;
-  const files = [...hud.modelFile.files];
-  const main = files.find((f) => SUPPORTED_EXTENSIONS.includes('.' + f.name.split('.').pop().toLowerCase()));
-  if (!main) return setStatus('pick a ' + SUPPORTED_EXTENSIONS.join(' ') + ' file');
-  hud.uploadProgress.hidden = false; hud.uploadProgress.value = 0;
-  try {
-    project = await projectsApi.uploadModel(project.id, main, files.filter((f) => f !== main), (p) => { hud.uploadProgress.value = p; });
-    setStatus('uploaded ' + main.name);
-    await refreshProjectList();
-    await showModel(project);
-  } catch (e) { setStatus('upload failed: ' + e.message); }
-  hud.uploadProgress.hidden = true; hud.modelFile.value = '';
-});
 
 // ---- recording -------------------------------------------------------------
 
@@ -386,7 +453,7 @@ async function endRecording() {
     const rec = await annotationsApi.create({
       project: project.id, ...clip, anchor, objectId, author: hud.author.value.trim(), layer: hud.layer.value, consent: true,
     });
-    setStatus(`saved ${Math.round(clip.durationMs / 100) / 10}s at (${anchor.x.toFixed(2)}, ${anchor.y.toFixed(2)}, ${anchor.z.toFixed(2)})${objectId ? ' on ' + objectId : ''}`);
+    setStatus(`saved ${fmtDur(clip.durationMs)} at (${anchor.x.toFixed(2)}, ${anchor.y.toFixed(2)}, ${anchor.z.toFixed(2)})${objectId ? ' on ' + objectId : ''}`);
     addMarker(rec);                  // local echo; server broadcast is deduped by id
   } catch (e) {
     setStatus('save failed: ' + e.message);
@@ -394,8 +461,8 @@ async function endRecording() {
 }
 
 // ---- aiming ----------------------------------------------------------------
-// Where does a controller (or the desktop camera) point? Prefer a hit on the
-// model or the default room; fall back to a point a fixed distance ahead.
+// Where does a controller (or the desktop camera) point? Prefer a hit on an
+// asset or the default room; fall back to a point a fixed distance ahead.
 
 const raycaster = new THREE.Raycaster();
 raycaster.params.Points.threshold = 0.03;
@@ -415,19 +482,31 @@ function aimMarker(source) {
 }
 function aimPoint(source) {
   aimRay(source);
-  const targets = model && model.kind !== 'splat' ? [model.object] : [];
-  if (room.visible) targets.push(room);
-  let hit = null;
-  if (targets.length && !(model?.kind === 'points' && model.count > 3_000_000)) {   // brute-force raycast on huge clouds stalls the frame
-    hit = raycaster.intersectObjects(targets, true).find((h) => h.object.type !== 'GridHelper') || null;
+  const targets = [];
+  for (const e of loaded.values()) {
+    if (!e.model || !e.group.visible || e.model.kind === 'splat') continue;
+    if (e.model.kind === 'points' && e.model.count > 3_000_000) continue;   // brute-force raycast on huge clouds stalls the frame
+    targets.push(e.model.object);
   }
-  if (!hit && model?.hitTest) {                          // Gaussian splats: our own cone test against sampled centres
-    const p = model.hitTest(raycaster.ray);
-    if (p) hit = { point: p, object: model.object };
+  if (room.visible) targets.push(room);
+  let hit = targets.length ? raycaster.intersectObjects(targets, true).find((h) => h.object.type !== 'GridHelper') || null : null;
+  // Gaussian splats: our own cone test against sampled centres; keep whichever hit is nearest
+  for (const e of loaded.values()) {
+    if (!e.model?.hitTest || !e.group.visible) continue;
+    const p = e.model.hitTest(raycaster.ray);
+    if (!p) continue;
+    const d = p.distanceTo(raycaster.ray.origin);
+    if (!hit || d < hit.distance) hit = { point: p, object: e.model.object, distance: d };
   }
   if (hit) {
+    // name the thing that was hit: the mesh's own name, unless it is a generic
+    // exporter name (mesh_0, Object_12, node3…), in which case the asset's name
     let o = hit.object, name = o.name;
     while (!name && o.parent && o.parent !== scene) { o = o.parent; name = o.name; }
+    if (!name || /^(mesh|object|node|group|geometry|default|scene)[_\-]?\d*$/i.test(name)) {
+      let g = hit.object; while (g && g.parent !== assetsRoot) g = g.parent;
+      if (g?.name) name = g.name.replace(/\.[^.]+$/, '');                 // asset file name without extension
+    }
     return { point: hit.point.clone(), objectId: name || undefined };
   }
   const ahead = source === camera ? FALLBACK_AHEAD.camera : FALLBACK_AHEAD.controller;
@@ -507,16 +586,18 @@ const net = connect({
   onProjectUpdated: async (p) => {
     refreshProjectList();
     if (p.id !== project?.id) return;
-    const modelChanged = p.modelUrl !== project.modelUrl;
+    const key = (x) => JSON.stringify((x.assets || []).map((a) => [a.id, a.url, a.visible, a.options]));
+    const changed = key(p) !== key(project);
     project = p;
-    if (modelChanged) await showModel(p);
+    if (changed) await showAssets(p);
+    else { for (const a of p.assets || []) { const e = loaded.get(a.id); if (e) e.asset = a; } renderAssets(); }
   },
   onProjectsChanged: refreshProjectList,
   onStatus: (s) => { setStatus(s); if (s === 'connected' && project) net.join(project.id); },
 });
 
 // dev-only handle for poking at the scene from the console
-if (import.meta.env.DEV) window.__glossy = { scene, renderer, camera, modelRoot, markers, get model() { return model; }, get project() { return project; }, get transform() { return transform; }, autoFit, frameModel, applyTransform, aimPoint, aimMarker, lock };
+if (import.meta.env.DEV) window.__glossy = { scene, renderer, camera, assetsRoot, loaded, markers, get project() { return project; }, get selected() { return selected(); }, autoFit, frameAll, applyTransform, aimPoint, aimMarker, lock };
 
 // ---- boot ------------------------------------------------------------------
 

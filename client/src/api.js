@@ -11,13 +11,20 @@ export const projects = {
   create: (name) => fetch('/api/projects', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) }).then(json),
   update: (id, patch) => fetch(`/api/projects/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then(json),
   remove: (id) => fetch(`/api/projects/${id}`, { method: 'DELETE' }).then(json),
-  /** @param {File} model main file; @param {File[]} files sidecars (.bin, textures, .mtl) */
-  uploadModel: (id, model, files = [], onProgress) => new Promise((resolve, reject) => {
+};
+
+export const assets = {
+  list: (project) => fetch(`/api/projects/${project}/assets`).then(json),
+  update: (project, id, patch) => fetch(`/api/projects/${project}/assets/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then(json),
+  remove: (project, id) => fetch(`/api/projects/${project}/assets/${id}`, { method: 'DELETE' }).then(json),
+  /** @param {File} model main file; @param {File[]} files sidecars (.bin, textures, .mtl); extra: { mode } for images */
+  upload: (project, model, files = [], onProgress, extra = {}) => new Promise((resolve, reject) => {
     const fd = new FormData();
     fd.append('model', model, model.name);
     for (const f of files) fd.append('files', f, f.name);
+    for (const [k, v] of Object.entries(extra)) fd.append(k, v);
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', `/api/projects/${id}/model`);
+    xhr.open('POST', `/api/projects/${project}/assets`);
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
     xhr.onload = () => (xhr.status < 300 ? resolve(JSON.parse(xhr.responseText)) : reject(new Error(JSON.parse(xhr.responseText || '{}').error || xhr.statusText)));
     xhr.onerror = () => reject(new Error('upload failed'));

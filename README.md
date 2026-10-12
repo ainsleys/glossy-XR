@@ -16,17 +16,17 @@ The original ran on the WebVR API, which browsers removed in 2020. Nothing in th
 | Rendering | three.js r79, VRControls / VREffect | three.js r186, `renderer.xr`, controller events |
 | Audio capture | recorder.js + opus worker, WAV | `MediaRecorder`, webm/opus |
 | Transport | Socket.IO 1 | Socket.IO 4, one room per project |
-| Storage | audio base64-encoded into MongoDB documents | SQLite (`node:sqlite`) for metadata, files on disk for audio and models |
-| Environment | a textured box | any glTF/GLB, PLY, PCD, OBJ, or Gaussian splat, per project |
+| Storage | audio base64-encoded into MongoDB documents | SQLite (`node:sqlite`) for metadata, files on disk for audio and assets |
+| Environment | a textured box | any mix of glTF/GLB, PLY, PCD, OBJ, Gaussian splats, photos, panoramas, and video per project |
 | Anchoring | fixed offset from the controller | the surface the user points at, with the mesh name |
 | Build | script tags, jQuery, `node_modules` committed | Vite, ES modules, no framework |
 | Record shape | `{id, x, y, z, audioObject}` | author, timestamp, anchor, layer, consent, transcript slot |
 
 The server also no longer emits the previous record instead of the one just saved, a bug noted in the 2016 commit log.
 
-## Projects and models
+## Projects and assets
 
-A project owns one model and its annotations. Create one in the HUD, upload a model, and the viewer auto-fits it (millimetre scans shrink to a few metres, unitless toys grow to a metre, everything rests on the floor) and saves that transform with the project. Adjust scale, rotation, offset, and point size in the Model panel; `Z-up→Y` fixes scans exported Z-up.
+A project owns a set of assets and its annotations. Meshes, point clouds, Gaussian splats, flat photos, 360 panoramas, and video can share one scene, each with its own transform and visibility. Add an asset in the HUD and the viewer auto-fits it on first load (millimetre scans shrink to a few metres, unitless toys grow to a metre, everything rests on the floor, later assets step sideways so they don't overlap) and saves that transform. Click an asset's name to edit its scale, rotation, offset, and point size; `Z-up→Y` fixes scans exported Z-up.
 
 | Format | Loader | Notes |
 |---|---|---|
@@ -34,7 +34,9 @@ A project owns one model and its annotations. Create one in the HUD, upload a mo
 | `.ply` | PLYLoader | Mesh if it has faces, point cloud otherwise. A PLY with 3DGS properties (`f_dc_0`, `scale_0`) is treated as a splat |
 | `.pcd` | PCDLoader | ascii, binary, and binary_compressed; NaN rows from organized depth-camera clouds are dropped |
 | `.obj` | OBJLoader + MTLLoader | Upload `.mtl` and textures alongside |
-| `.splat` `.ksplat` `.spz` `.sog` | [Spark](https://sparkjs.dev) | WebGL and WebXR capable; anchors raycast against splats |
+| `.splat` `.ksplat` `.spz` `.sog` | [Spark](https://sparkjs.dev) | WebGL and WebXR capable; anchors use a cone test over splat centres |
+| `.png` `.jpg` `.webp` `.avif` | TextureLoader | A plane 1 m wide with the photo as an unlit texture, standing on the floor. A 2:1 image (or the "360" checkbox) becomes an inside-out sphere you stand inside |
+| `.mp4` `.webm` `.mov` | VideoTexture | Same as images, muted and looping |
 
 Tested on 12 Oct 2026 with public-domain or permissively licensed files: Khronos SheenChair (GLB, PNG textures, sheen and variants extensions), Smithsonian Cosmic Buddha (GLB in millimetres, Draco GLB, and OBJ+MTL with 4096px maps), Stanford bunny (ASCII PLY range scan as point cloud, and zippered mesh), PCL table scene (organized binary_compressed PCD with rgba) and colored cloud (binary PCD), Keenan Crane's Spot (OBJ), and Spark's butterfly sample (SPZ). One file did not work: the `hornedlizard.spz` sample from the nianticlabs/spz repository decodes to noise in Spark 2.3.1 even though its header (version 2, 12 fractional bits) matches the butterfly's; treat that as a Spark decoder issue to report upstream.
 
@@ -64,7 +66,7 @@ npm install
 npm run dev        # API on :3000, client on http://localhost:5173
 ```
 
-Node 22.13 or newer (for `node:sqlite`). Data lives in `data/` (`glossy.db`, `audio/`, `models/`); set `GLOSSY_DATA` to move it. A pre-SQLite `annotations.json` found there is imported once into a project called `default`.
+Node 22.13 or newer (for `node:sqlite`). Data lives in `data/` (`glossy.db`, `audio/`, `models/`); set `GLOSSY_DATA` to move it. A pre-SQLite `annotations.json` found there is imported once into a project called `default`, and single-model projects from earlier builds migrate into the assets table on first start.
 
 **Desktop:** click the canvas, `W A S D` to move, `Q`/`E` down and up, `Shift` to run, `K` start recording, `L` stop, `Space` play the marker you are looking at. Walking within about a metre of a marker on the active layer also plays it.
 
@@ -83,8 +85,9 @@ or, for Quest over USB, `adb reverse tcp:5173 tcp:5173` and open `http://localho
 | Method | Path | |
 |---|---|---|
 | GET / POST | `/api/projects` | list; create `{name}` |
-| GET / PATCH / DELETE | `/api/projects/:id` | read; update `{name, transform}`; delete with files |
-| POST | `/api/projects/:id/model` | multipart `model` plus optional `files` sidecars |
+| GET / PATCH / DELETE | `/api/projects/:id` | read (includes `assets[]`); rename; delete with files |
+| GET / POST | `/api/projects/:id/assets` | list; add (multipart `model` plus optional `files` sidecars; `mode=sphere` for a panorama) |
+| PATCH / DELETE | `/api/projects/:id/assets/:aid` | update `{name, transform, options, visible, sort}`; remove |
 | GET / POST | `/api/projects/:id/annotations` | list; create (multipart `audio`, `x`, `y`, `z`, `author`, `layer`, `consent=true`, optional `objectId`, `durationMs`) |
 | DELETE | `/api/projects/:id/annotations/:aid` | remove record and file |
 | GET | `/api/projects/:id/export`, `/api/export` | JSON export |

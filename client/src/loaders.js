@@ -22,8 +22,10 @@ import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 let sparkModule = null;        // lazy: Spark is ~1 MB and only needed for splats
 let sparkRenderer = null;
 
-export async function loadModel({ url, type, renderer, scene, camera, pointSize = 0.01, onProgress }) {
+export async function loadModel({ url, type, renderer, scene, camera, pointSize = 0.01, options = {}, onProgress }) {
   switch (type) {
+    case 'image': return loadImage(url, options);
+    case 'video': return loadVideo(url, options);
     case 'gltf': return loadGltf(url, renderer, onProgress);
     case 'ply': return (await isGaussianPly(url)) ? loadSplat(url, renderer, scene, camera) : loadPly(url, pointSize, onProgress);
     case 'pcd': return loadPcd(url, pointSize, onProgress);
@@ -147,6 +149,51 @@ async function loadObj(url, onProgress) {
   return finish(obj, 'mesh', countVerts(obj));
 }
 
+// ---- flat images and 360 panoramas ----------------------------------------
+// A photo is a plane with the image as an unlit texture (so it reads like a
+// print, not a lit surface), 1 m wide by default and sized to its aspect. A
+// 360 equirectangular image (options.mode === 'sphere') becomes an inside-out
+// sphere the viewer stands inside.
+
+async function loadImage(url, options) {
+  const tex = await new THREE.TextureLoader().loadAsync(url);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  const w = tex.image?.width || 1, h = tex.image?.height || 1;
+  const mode = options.mode || (Math.abs(w / h - 2) < 0.05 ? 'sphere' : 'plane');   // 2:1 is almost always equirectangular
+  let mesh;
+  if (mode === 'sphere') {
+    mesh = new THREE.Mesh(new THREE.SphereGeometry(6, 64, 32), new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide }));
+    mesh.scale.x = -1;                                   // un-mirror the inside of the sphere
+    mesh.name = 'panorama';
+  } else {
+    mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, h / w), new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, toneMapped: false }));
+    mesh.position.y = h / w / 2;                         // stand it on the floor
+    mesh.name = 'image';
+  }
+  const r = finish(mesh, 'mesh', 4);
+  r.imageMode = mode;
+  return r;
+}
+
+async function loadVideo(url, options) {
+  const video = document.createElement('video');
+  video.src = url; video.crossOrigin = 'anonymous'; video.loop = true; video.muted = true; video.playsInline = true;
+  await new Promise((res, rej) => { video.onloadedmetadata = res; video.onerror = () => rej(new Error('video failed')); });
+  video.play().catch(() => {});                           // muted autoplay is allowed; unmute is a later UI affordance
+  const tex = new THREE.VideoTexture(video);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const w = video.videoWidth || 16, h = video.videoHeight || 9;
+  const mode = options.mode || (Math.abs(w / h - 2) < 0.05 ? 'sphere' : 'plane');
+  let mesh;
+  if (mode === 'sphere') { mesh = new THREE.Mesh(new THREE.SphereGeometry(6, 64, 32), new THREE.MeshBasicMaterial({ map: tex, side: THREE.BackSide })); mesh.scale.x = -1; mesh.name = 'panorama-video'; }
+  else { mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, h / w), new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide, toneMapped: false })); mesh.position.y = h / w / 2; mesh.name = 'video'; }
+  const r = finish(mesh, 'mesh', 4);
+  r.imageMode = mode; r.video = video;
+  const d = r.dispose; r.dispose = () => { video.pause(); video.src = ''; d(); };
+  return r;
+}
+
 // ---- Gaussian splats (Spark) ----------------------------------------------
 
 async function loadSplat(url, renderer, scene, camera) {
@@ -219,4 +266,4 @@ async function loadSplat(url, renderer, scene, camera) {
   return result;
 }
 
-export const SUPPORTED_EXTENSIONS = ['.glb', '.gltf', '.ply', '.pcd', '.obj', '.splat', '.ksplat', '.spz', '.sog'];
+export const SUPPORTED_EXTENSIONS = ['.glb', '.gltf', '.ply', '.pcd', '.obj', '.splat', '.ksplat', '.spz', '.sog', '.png', '.jpg', '.jpeg', '.webp', '.avif', '.mp4', '.webm', '.mov'];

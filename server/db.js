@@ -37,7 +37,26 @@ export function openDb(dataDir) {
       consent     INTEGER NOT NULL DEFAULT 1
     );
     CREATE INDEX IF NOT EXISTS annotations_project ON annotations(project_id, created_at);
+    CREATE TABLE IF NOT EXISTS assets (
+      id          TEXT PRIMARY KEY,
+      project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      url         TEXT NOT NULL,
+      type        TEXT NOT NULL,
+      name        TEXT NOT NULL,
+      transform   TEXT NOT NULL DEFAULT '{}',
+      options     TEXT NOT NULL DEFAULT '{}',
+      visible     INTEGER NOT NULL DEFAULT 1,
+      sort        INTEGER NOT NULL DEFAULT 0,
+      created_at  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS assets_project ON assets(project_id, sort, created_at);
   `);
+  // migrate single-model projects into the assets table
+  for (const r of db.prepare(`SELECT id, model_url, model_type, model_name, transform, created_at FROM projects WHERE model_url IS NOT NULL`).all()) {
+    db.prepare(`INSERT INTO assets (id, project_id, url, type, name, transform, options, visible, sort, created_at) VALUES (?, ?, ?, ?, ?, ?, '{}', 1, 0, ?)`)
+      .run(randomUUID().slice(0, 8), r.id, r.model_url, r.model_type, r.model_name, r.transform || '{}', r.created_at);
+    db.prepare(`UPDATE projects SET model_url = NULL, model_type = NULL, model_name = NULL, transform = '{}' WHERE id = ?`).run(r.id);
+  }
 
   const q = {
     listProjects: db.prepare(`
@@ -57,14 +76,24 @@ export function openDb(dataDir) {
     deleteAnnotation: db.prepare(`DELETE FROM annotations WHERE id = ? AND project_id = ?`),
     countAnnotations: db.prepare(`SELECT COUNT(*) AS n FROM annotations`),
     touchProject: db.prepare(`UPDATE projects SET updated_at = ? WHERE id = ?`),
+    listAssets: db.prepare(`SELECT * FROM assets WHERE project_id = ? ORDER BY sort, created_at`),
+    getAsset: db.prepare(`SELECT * FROM assets WHERE id = ? AND project_id = ?`),
+    insertAsset: db.prepare(`INSERT INTO assets (id, project_id, url, type, name, transform, options, visible, sort, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+    updateAsset: db.prepare(`UPDATE assets SET name = ?, transform = ?, options = ?, visible = ?, sort = ? WHERE id = ? AND project_id = ?`),
+    deleteAsset: db.prepare(`DELETE FROM assets WHERE id = ? AND project_id = ?`),
+    countAssets: db.prepare(`SELECT COUNT(*) AS n FROM assets WHERE project_id = ?`),
   };
 
   const now = () => new Date().toISOString();
+  const assetRow = (r) => r && ({
+    id: r.id, project: r.project_id, url: r.url, type: r.type, name: r.name,
+    transform: JSON.parse(r.transform || '{}'), options: JSON.parse(r.options || '{}'),
+    visible: !!r.visible, sort: r.sort, createdAt: r.created_at,
+  });
   const projectRow = (r) => r && ({
     id: r.id, name: r.name,
-    modelUrl: r.model_url, modelType: r.model_type, modelName: r.model_name,
-    transform: JSON.parse(r.transform || '{}'),
     createdAt: r.created_at, updatedAt: r.updated_at,
+    assets: q.listAssets.all(r.id).map(assetRow),
     ...(r.annotation_count !== undefined ? { annotationCount: Number(r.annotation_count) } : {}),
   });
   const annotationRow = (r) => r && ({
@@ -89,8 +118,27 @@ export function openDb(dataDir) {
         q.updateProject.run(name ?? cur.name, JSON.stringify(transform ?? cur.transform), now(), id);
         return api.projects.get(id);
       },
-      setModel: (id, { url, type, name }) => { q.setModel.run(url, type, name, now(), id); return api.projects.get(id); },
       remove: (id) => q.deleteProject.run(id).changes > 0,
+    },
+    assets: {
+      list: (projectId) => q.listAssets.all(projectId).map(assetRow),
+      get: (projectId, id) => assetRow(q.getAsset.get(id, projectId)),
+      create: (projectId, { url, type, name, transform = {}, options = {} }) => {
+        const id = randomUUID().slice(0, 8);
+        const sort = q.countAssets.get(projectId).n;
+        q.insertAsset.run(id, projectId, url, type, name, JSON.stringify(transform), JSON.stringify(options), 1, sort, now());
+        q.touchProject.run(now(), projectId);
+        return api.assets.get(projectId, id);
+      },
+      update: (projectId, id, patch) => {
+        const cur = api.assets.get(projectId, id);
+        if (!cur) return null;
+        q.updateAsset.run(patch.name ?? cur.name, JSON.stringify(patch.transform ?? cur.transform), JSON.stringify(patch.options ?? cur.options),
+          (patch.visible ?? cur.visible) ? 1 : 0, patch.sort ?? cur.sort, id, projectId);
+        q.touchProject.run(now(), projectId);
+        return api.assets.get(projectId, id);
+      },
+      remove: (projectId, id) => { const row = api.assets.get(projectId, id); if (row) q.deleteAsset.run(id, projectId); return row; },
     },
     annotations: {
       list: (projectId) => q.listAnnotations.all(projectId).map(annotationRow),
