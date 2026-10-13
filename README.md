@@ -141,6 +141,7 @@ Verified 12 Oct 2026: server round-trip (projects, model upload, annotations, ex
 - Companion web form bound to an existing anchor: text, photos, consent from a phone or tablet, no headset needed.
 - Export mapped to standard metadata schemas.
 - Accounts, project membership, share links, object storage for files.
+- Production transcription: the local CPU backend is for development; a deployment should either switch to the API backend (`GLOSSY_TRANSCRIBE=openai`) or run a larger Whisper model on a box with the CPU or GPU for it.
 
 ## Lineage
 
