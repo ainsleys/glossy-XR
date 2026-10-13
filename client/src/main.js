@@ -490,7 +490,7 @@ let hoverId = null;
 function updateHover() {
   let id = null;
   if (renderer.xr.isPresenting) { for (const c of xrControllers) { id = aimMarker(c); if (id) break; } }
-  else if (lock.isLocked) id = aimMarker(camera);
+  else if (captured()) id = aimMarker(camera);
   if (id === hoverId) return;
   const prev = markers.get(hoverId);
   if (prev) { prev.mesh.userData.hover = false; prev.mesh.material.emissiveIntensity = prev.mesh.userData.playing ? 1.0 : 0.35; }
@@ -526,17 +526,29 @@ const cursor = new THREE.Mesh(new THREE.SphereGeometry(MARKER_RADIUS * 1.2, 16, 
 cursor.visible = false;
 scene.add(cursor);
 let anchorSource = null;             // Object3D whose aim decides the anchor while recording
+let starting = null;                 // source whose recording is still waiting on the microphone
+let releasedEarly = false;           // trigger/button let go before the microphone was ready
 
 async function beginRecording(source) {
-  if (recorder.isRecording) return;
+  if (recorder.isRecording || starting) return;
   if (!project) return setStatus('no project');
   if (!hud.author.value.trim()) return setStatus('enter your name first');
   if (!hud.consent.checked) return setStatus('tick consent first');
-  try { await recorder.start(); } catch (e) { return setStatus('mic blocked: ' + e.message); }
+  starting = source; releasedEarly = false;
+  setStatus('starting microphone…');
+  try { await recorder.start(); } catch (e) { starting = null; return setStatus('mic blocked: ' + e.message); }
+  starting = null;
   anchorSource = source;
   cursor.visible = true;
   hud.rec.classList.add('on'); crosshair.classList.add('rec');
   setStatus('recording… (' + hud.layer.value + ')');
+  if (releasedEarly) endRecording();  // the first press on a cold mic: honour the release that already happened
+}
+
+// Release of the button/trigger that started a recording. Safe to call while the mic is still warming up.
+function releaseRecording(source) {
+  if (starting === source) { releasedEarly = true; return; }
+  if (recorder.isRecording && anchorSource === source) endRecording();
 }
 
 async function endRecording() {
@@ -626,7 +638,7 @@ for (let i = 0; i < 2; i++) {
     const hit = aimMarker(ctrl);
     if (hit) play(hit); else beginRecording(ctrl);
   });
-  ctrl.addEventListener('selectend', () => { if (recorder.isRecording && anchorSource === ctrl) endRecording(); });
+  ctrl.addEventListener('selectend', () => releaseRecording(ctrl));
   ctrl.addEventListener('squeezestart', () => {
     const next = LAYERS[(LAYERS.indexOf(hud.layer.value) + 1) % LAYERS.length];
     hud.layer.value = next; hud.layer.dispatchEvent(new Event('change'));
@@ -642,29 +654,52 @@ for (let i = 0; i < 2; i++) {
 
 const lock = new PointerLockControls(camera, renderer.domElement);
 const crosshair = document.getElementById('crosshair');
+// Where the Pointer Lock API is unavailable (some iframes, headless browsers)
+// the mouse is "captured" in software instead: same look-and-record behaviour,
+// the cursor just stays visible. Esc releases either kind of capture.
+let softCapture = false;
+const captured = () => lock.isLocked || softCapture;
+const euler = new THREE.Euler(0, 0, 0, 'YXZ');
+function softLook(e) {
+  if (!softCapture || lock.isLocked) return;
+  euler.setFromQuaternion(camera.quaternion);
+  euler.y -= e.movementX * 0.002;
+  euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x - e.movementY * 0.002));
+  camera.quaternion.setFromEuler(euler);
+}
+function setCaptured(on) {
+  crosshair.hidden = !on;
+  if (!on) releaseRecording(camera);   // Esc mid-recording still saves
+}
 // First click captures the mouse. After that the mouse button works like the
 // controller trigger: hold to record at the crosshair, release to save, and a
 // click on a marker plays it instead of recording.
 renderer.domElement.addEventListener('mousedown', (e) => {
   if (renderer.xr.isPresenting || e.button !== 0) return;
-  if (!lock.isLocked) { lock.lock(); return; }
+  if (!captured()) {
+    // ask for pointer lock ourselves so a refusal (headless, some iframes) is a quiet pointerlockerror, not an unhandled rejection
+    try { renderer.domElement.requestPointerLock()?.catch?.(() => {}); } catch {}
+    return;
+  }
   const hit = aimMarker(camera);
   if (hit) play(hit); else beginRecording(camera);
 });
-renderer.domElement.addEventListener('mouseup', (e) => {
-  if (e.button === 0 && recorder.isRecording && anchorSource === camera) endRecording();
+renderer.domElement.addEventListener('mouseup', (e) => { if (e.button === 0) releaseRecording(camera); });
+renderer.domElement.addEventListener('mousemove', softLook);
+document.addEventListener('pointerlockchange', () => { softCapture = false; setCaptured(lock.isLocked); });
+document.addEventListener('pointerlockerror', () => {
+  if (lock.isLocked) return;
+  softCapture = true; setCaptured(true);
+  setStatus('pointer lock unavailable here; mouse look without hiding the cursor, Esc to release');
 });
-document.addEventListener('pointerlockchange', () => {
-  crosshair.hidden = !lock.isLocked;
-  if (!lock.isLocked && recorder.isRecording && anchorSource === camera) endRecording();   // Esc mid-recording still saves
-});
+window.addEventListener('keydown', (e) => { if (e.code === 'Escape' && softCapture) { softCapture = false; setCaptured(false); } });
 const keys = new Set();
 let pendingDelete = null;
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   keys.add(e.code);
   if (e.code === 'KeyK') beginRecording(camera);
-  if (e.code === 'KeyL') endRecording();
+  if (e.code === 'KeyL') releaseRecording(camera);
   if (e.code === 'Space') { const hit = aimMarker(camera); if (hit) play(hit); }
   if (e.code === 'Delete' || e.code === 'Backspace') {
     const hit = aimMarker(camera);
@@ -695,7 +730,13 @@ const net = connect({
 });
 
 // dev-only handle for poking at the scene from the console
-if (import.meta.env.DEV) window.__glossy = { scene, renderer, camera, assetsRoot, loaded, markers, get project() { return project; }, get selected() { return selected(); }, autoFit, frameAll, applyTransform, aimPoint, aimMarker, lock };
+if (import.meta.env.DEV) window.__glossy = {
+  scene, renderer, camera, rig, room, assetsRoot, loaded, markers, recorder, hud, keys, lock,
+  get project() { return project; }, get selected() { return selected(); }, get playingId() { return playingId; },
+  get status() { return hud.status.textContent; },
+  get captured() { return captured(); },
+  autoFit, frameAll, applyTransform, aimPoint, aimMarker, floorBelow, spawnInside,
+};
 
 // ---- boot ------------------------------------------------------------------
 
@@ -713,7 +754,7 @@ const near = new THREE.Vector3();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
 
-  if (!renderer.xr.isPresenting && lock.isLocked) {
+  if (!renderer.xr.isPresenting && captured()) {
     const speed = (keys.has('ShiftLeft') ? 4 : 1.8) * dt;
     if (hud.walk.checked) {
       // walk: WASD on the ground plane, slide along walls, follow the floor

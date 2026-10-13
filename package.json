@@ -10,7 +10,9 @@
     "client": "vite --host",
     "build": "vite build",
     "preview": "vite preview --host",
-    "start": "NODE_ENV=production node --disable-warning=ExperimentalWarning server/index.js"
+    "start": "NODE_ENV=production node --disable-warning=ExperimentalWarning server/index.js",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed"
   },
   "dependencies": {
     "@sparkjsdev/spark": "^2.3.1",
@@ -20,8 +22,10 @@
     "three-mesh-bvh": "^0.9.16"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.0",
     "@vitejs/plugin-basic-ssl": "^2.3.0",
     "concurrently": "^9.1.2",
+    "iwer": "^2.6.0",
     "socket.io-client": "^4.8.4",
     "three": "^0.186.1",
     "vite": "^8.3.4"

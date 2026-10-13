@@ -4,3 +4,6 @@ data/audio/*
 data/annotations.json
 !data/audio/.gitkeep
 .DS_Store
+test-results/
+playwright-report/
+.test-data/

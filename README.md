@@ -68,7 +68,7 @@ npm run dev        # API on :3000, client on http://localhost:5173
 
 Node 22.13 or newer (for `node:sqlite`). Data lives in `data/` (`glossy.db`, `audio/`, `models/`); set `GLOSSY_DATA` to move it. A pre-SQLite `annotations.json` found there is imported once into a project called `default`, and single-model projects from earlier builds migrate into the assets table on first start.
 
-**Desktop:** click the canvas, `W A S D` to move, `Q`/`E` down and up, `Shift` to run, `K` start recording, `L` stop, `Space` play the marker you are looking at. Walking within about a metre of a marker on the active layer also plays it.
+**Desktop:** click the canvas to capture the mouse, `W A S D` to walk (floor following and wall collision by default; untick *Walk mode* to fly with `Q`/`E`), `Shift` to run, hold the mouse button to record at the crosshair and release to save, click a marker to play it, `Space` plays the marker under the crosshair, `Delete` twice removes it, `K`/`L` start and stop recording from the keyboard. Walking within about a metre of a marker on the active layer also plays it.
 
 **Headset (Quest 3 or any WebXR browser):** the headset reaches your machine by IP, which browsers do not treat as secure, so either serve HTTPS and accept the self-signed certificate once:
 
@@ -79,6 +79,16 @@ HTTPS=1 npm run dev     # then open https://<your-ip>:5173 and press Enter VR
 or, for Quest over USB, `adb reverse tcp:5173 tcp:5173` and open `http://localhost:5173`. Trigger records while held (release to save) or plays a marker you are pointing at. Squeeze cycles the layer.
 
 **Production:** `npm run build && npm start` serves client and API from one process on `:3000`. `GLOSSY_MAX_MODEL_MB` caps uploads (default 1024).
+
+## Testing
+
+```sh
+npm test               # headless end-to-end suite; npm run test:headed to watch it
+```
+
+Playwright drives a headless Chromium with software WebGL, a fake microphone fed from a generated tone, and, for the headset path, Meta's Immersive Web Emulation Runtime (IWER) standing in for a Quest 3. The suite starts its own API server on `:3100` with a throwaway data directory and Vite on `:5174`, so a running dev session is untouched. It covers: rendering the default room; walking with floor following and stopping at a wall; hold-to-record through the mouse, playback, hover feedback, and two-press delete; a click released before the microphone is ready; live sync to a second client; entering VR through the real `VRButton`, recording with the emulated controller's trigger, and cycling layers with squeeze. `test/scene.spec.js` additionally uploads a real interior (OBJ + MTL + textures) when one is present at `../test-assets/interiors/fireplace_room` or `GLOSSY_TEST_SCENE`, and checks spawn on the floor, wall collision, and an annotation anchored to a named mesh. Screenshots land in `test-results/`.
+
+Headless Chromium refuses the Pointer Lock API, so the client falls back to a software mouse capture (same controls, cursor stays visible, Esc releases); that fallback is what the tests exercise, and it also covers embedding contexts where pointer lock is denied.
 
 ## API
 
@@ -98,7 +108,7 @@ Validation: anchor must be numeric, author required, consent must be `true`, mod
 
 ## Status
 
-Verified 12 Oct 2026: server round-trip (projects, model upload, annotations, export, delete, restart persistence) with curl; desktop client rendering, project switching, and every format in the table above in Chrome. Not yet verified: recording through a live microphone prompt, and the WebXR path on a headset.
+Verified 12 Oct 2026: server round-trip (projects, model upload, annotations, export, delete, restart persistence) with curl; desktop client rendering, project switching, and every format in the table above in Chrome. Verified 13 Oct 2026 by the end-to-end suite: recording through `getUserMedia` and `MediaRecorder`, playback, delete, live sync, and the WebXR session and controller path against an emulated headset. Not yet verified on physical hardware: a real Quest.
 
 ## Known limits
 
