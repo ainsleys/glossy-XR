@@ -22,6 +22,12 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 import { VoiceRecorder } from './recorder.js';
 import { connect, projects as projectsApi, assets as assetsApi, annotations as annotationsApi } from './api.js';
 import { loadModel, SUPPORTED_EXTENSIONS } from './loaders.js';
+import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
+
+// BVH-accelerated raycasts for every mesh: anchoring, hover, and collision
+THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
+THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
+THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
 // ---- config ----------------------------------------------------------------
 
@@ -39,6 +45,7 @@ const hud = {
   assetList: $('assetList'), assetFile: $('assetFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), annList: $('annList'),
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
+  walk: $('walk'),
 };
 const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 hud.author.value = ls.get('glossy.author', '');
@@ -47,6 +54,8 @@ hud.consent.checked = ls.get('glossy.consent', '0') === '1';
 hud.author.addEventListener('change', () => ls.set('glossy.author', hud.author.value));
 hud.layer.addEventListener('change', () => ls.set('glossy.layer', hud.layer.value));
 hud.consent.addEventListener('change', () => ls.set('glossy.consent', hud.consent.checked ? '1' : '0'));
+hud.walk.checked = ls.get('glossy.walk', '1') === '1';
+hud.walk.addEventListener('change', () => ls.set('glossy.walk', hud.walk.checked ? '1' : '0'));
 const setStatus = (t) => { hud.status.textContent = t; };
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmtDur = (ms) => (ms ? (ms / 1000).toFixed(1) + 's' : '');
@@ -111,7 +120,10 @@ let selectedId = null;            // asset whose transform the panel edits
 const selected = () => loaded.get(selectedId) || null;
 
 async function showAssets(p) {
-  for (const e of loaded.values()) { assetsRoot.remove(e.group); e.model?.dispose(); }
+  for (const e of loaded.values()) {
+    e.model?.object.traverse((o) => o.geometry?.boundsTree && o.geometry.disposeBoundsTree());
+    assetsRoot.remove(e.group); e.model?.dispose();
+  }
   loaded.clear();
   const list = p.assets || [];
   room.visible = list.length === 0;
@@ -136,6 +148,9 @@ async function loadAsset(asset, index = loaded.size) {
       onProgress: (e) => { if (e.lengthComputable) { entry.progress = e.loaded / e.total; renderAssets(); } },
     });
     group.add(entry.model.object);
+    if (entry.model.kind === 'mesh' && entry.model.imageMode !== 'sphere') {
+      entry.model.object.traverse((o) => { if (o.isMesh && o.geometry?.attributes?.position && !o.geometry.boundsTree) o.geometry.computeBoundsTree(); });
+    }
     applyTransform(entry);
     if (!asset.transform || Object.keys(asset.transform).length === 0) {
       autoFit(entry, index);                                // first time this asset is shown
@@ -177,6 +192,7 @@ function autoFit(entry, index = 0) {
 // desktop only: step the camera back far enough to see every visible asset
 function frameAll() {
   if (renderer.xr.isPresenting) return;
+  if (hud.walk.checked && spawnInside()) return;        // walkable scene: start on the floor inside it, not outside looking in
   assetsRoot.updateMatrixWorld(true);
   const box = new THREE.Box3();
   for (const e of loaded.values()) {
@@ -189,6 +205,88 @@ function frameAll() {
   const dist = Math.max(2, Math.max(size.x, size.y, size.z) * 1.1);
   camera.position.set(c.x, Math.max(1.6, c.y), c.z + dist);
   camera.lookAt(c.x, c.y, c.z);
+}
+
+// Put the camera inside the largest walkable mesh asset, on its floor.
+function spawnInside() {
+  let best = null, bestVol = 0;
+  for (const e of loaded.values()) {
+    if (!e.model || e.model.kind !== 'mesh' || e.model.imageMode || !e.group.visible) continue;
+    const b = e.model.box.clone().applyMatrix4(e.group.matrixWorld), s = b.getSize(new THREE.Vector3());
+    const vol = s.x * s.y * s.z;
+    if (s.x > 2 && s.z > 2 && s.y > 1.5 && vol > bestVol) { best = b; bestVol = vol; }   // room-sized
+  }
+  if (!best) return false;
+  const c = best.getCenter(new THREE.Vector3()), size = best.getSize(new THREE.Vector3());
+  // Probe a grid of points, nearest-to-centre first, and take the first one whose
+  // "floor" is actually the floor (within 30 cm of the scene's lowest point) with
+  // standing headroom. The exact centre of a room is often a table.
+  const probes = [];
+  for (let i = -4; i <= 4; i++) for (let j = -4; j <= 4; j++) probes.push([c.x + i * size.x / 10, c.z + j * size.z / 10]);
+  probes.sort((p, q) => (p[0] - c.x) ** 2 + (p[1] - c.z) ** 2 - ((q[0] - c.x) ** 2 + (q[1] - c.z) ** 2));
+  const probe = new THREE.Vector3();
+  for (const [x, z] of probes) {
+    probe.set(x, best.min.y + EYE_HEIGHT + 0.3, z);      // start just above where a standing eye would be
+    const floor = floorBelow(probe);
+    if (floor === null || floor > best.min.y + 0.3) continue;
+    if (!headroom(x, floor, z)) continue;
+    camera.position.set(x, floor + EYE_HEIGHT, z);
+    camera.lookAt(c.x === x && c.z === z ? x + 1 : c.x, floor + EYE_HEIGHT, c.z === z && c.x === x ? z : c.z);
+    return true;
+  }
+  camera.position.set(c.x, best.max.y - 0.2, c.z);      // nothing qualified: drop in and let floor-following settle
+  camera.lookAt(c.x + 1, camera.position.y, c.z);
+  return true;
+}
+// is there clear space from the floor up to eye height at this spot?
+function headroom(x, floorY, z) {
+  const targets = collidables(); if (!targets.length) return true;
+  _from.set(x, floorY + 0.05, z);
+  walkRay.set(_from, new THREE.Vector3(0, 1, 0)); walkRay.far = EYE_HEIGHT + 0.2;
+  return !walkRay.intersectObjects(targets, true).some((h) => h.object.type !== 'GridHelper');
+}
+
+// ---- walking: floor-following and wall collision (desktop) ----------------
+const EYE_HEIGHT = 1.6, BODY_RADIUS = 0.35, STEP_UP = 0.4;
+const walkRay = new THREE.Raycaster();
+walkRay.firstHitOnly = true;                            // three-mesh-bvh: stop at the nearest hit
+const _down = new THREE.Vector3(0, -1, 0), _from = new THREE.Vector3(), _dir = new THREE.Vector3(), _n = new THREE.Vector3();
+
+function collidables() {
+  const out = [];
+  for (const e of loaded.values()) if (e.model?.kind === 'mesh' && !e.model.imageMode && e.group.visible) out.push(e.model.object);
+  if (room.visible) out.push(room);
+  return out;
+}
+// floor height under a point, searching from knee height upward so small steps are climbable
+function floorBelow(pos) {
+  const targets = collidables(); if (!targets.length) return null;
+  _from.set(pos.x, pos.y - EYE_HEIGHT + STEP_UP, pos.z);
+  walkRay.set(_from, _down); walkRay.far = 4;
+  const hit = walkRay.intersectObjects(targets, true).find((h) => h.object.type !== 'GridHelper');
+  return hit ? hit.point.y : null;
+}
+// move horizontally by `delta`, sliding along walls
+function walkMove(delta) {
+  const targets = collidables();
+  if (!targets.length || delta.lengthSq() === 0) { camera.position.add(delta); return; }
+  let d = delta.clone();
+  for (let pass = 0; pass < 2 && d.lengthSq() > 1e-10; pass++) {
+    let blocked = null;
+    for (const h of [0, -EYE_HEIGHT + 0.5]) {           // probe at eye level and at hip level
+      _from.copy(camera.position); _from.y += h;
+      _dir.copy(d).normalize();
+      walkRay.set(_from, _dir); walkRay.far = d.length() + BODY_RADIUS;
+      const hit = walkRay.intersectObjects(targets, true).find((x) => x.object.type !== 'GridHelper');
+      if (hit && (!blocked || hit.distance < blocked.distance)) blocked = hit;
+    }
+    if (!blocked) { camera.position.add(d); return; }
+    _n.copy(blocked.face.normal).transformDirection(blocked.object.matrixWorld); _n.y = 0; _n.normalize();
+    const allowed = Math.max(0, blocked.distance - BODY_RADIUS);
+    camera.position.addScaledVector(_dir, allowed);
+    d.sub(_n.multiplyScalar(d.dot(_n)));                // slide: drop the component into the wall
+    d.multiplyScalar(0.98);
+  }
 }
 
 // transform panel edits the selected asset
@@ -616,13 +714,29 @@ renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
 
   if (!renderer.xr.isPresenting && lock.isLocked) {
-    const speed = (keys.has('ShiftLeft') ? 5 : 2) * dt;
-    if (keys.has('KeyW')) lock.moveForward(speed);
-    if (keys.has('KeyS')) lock.moveForward(-speed);
-    if (keys.has('KeyA')) lock.moveRight(-speed);
-    if (keys.has('KeyD')) lock.moveRight(speed);
-    if (keys.has('KeyE')) camera.position.y += speed;
-    if (keys.has('KeyQ')) camera.position.y -= speed;
+    const speed = (keys.has('ShiftLeft') ? 4 : 1.8) * dt;
+    if (hud.walk.checked) {
+      // walk: WASD on the ground plane, slide along walls, follow the floor
+      const fwd = new THREE.Vector3(); camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+      const right = new THREE.Vector3().crossVectors(fwd, camera.up).normalize();
+      const move = new THREE.Vector3();
+      if (keys.has('KeyW')) move.add(fwd); if (keys.has('KeyS')) move.sub(fwd);
+      if (keys.has('KeyD')) move.add(right); if (keys.has('KeyA')) move.sub(right);
+      if (move.lengthSq() > 0) walkMove(move.normalize().multiplyScalar(speed));
+      const floor = floorBelow(camera.position);
+      if (floor !== null) {
+        const target = floor + EYE_HEIGHT;
+        camera.position.y += (target - camera.position.y) * Math.min(1, dt * 12);
+      }
+    } else {
+      // fly: the original free movement
+      if (keys.has('KeyW')) lock.moveForward(speed);
+      if (keys.has('KeyS')) lock.moveForward(-speed);
+      if (keys.has('KeyA')) lock.moveRight(-speed);
+      if (keys.has('KeyD')) lock.moveRight(speed);
+      if (keys.has('KeyE')) camera.position.y += speed;
+      if (keys.has('KeyQ')) camera.position.y -= speed;
+    }
   }
 
   if (recorder.isRecording && anchorSource) cursor.position.copy(aimPoint(anchorSource).point);

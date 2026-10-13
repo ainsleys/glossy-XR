@@ -77,6 +77,7 @@
         <option value="final">final</option>
       </select>
       <div class="row" style="margin-top:6px"><input type="checkbox" id="consent" /><label for="consent" style="margin:0">I consent to my recording being stored and shared</label></div>
+      <div class="row" style="margin-top:4px"><input type="checkbox" id="walk" checked /><label for="walk" style="margin:0" title="Floor-following and wall collision on desktop; untick to fly with Q/E">Walk mode (collide with the scene)</label></div>
       <div id="status"><span id="rec"></span><span id="statusText">connecting…</span></div>
 
       <details id="annPanel" open>
@@ -112,7 +113,7 @@
 
       <div id="help">
         Headset: trigger = record (release to save) or play the marker you point at; squeeze = cycle layer.<br />
-        Desktop: click once to capture the mouse, then <b>hold the mouse button to record</b> at the crosshair and release to save; click a marker to play it (again to stop), <kbd>Delete</kbd> twice removes the marker you aim at. <kbd>W A S D</kbd> move, <kbd>Q</kbd>/<kbd>E</kbd> down/up, <kbd>Esc</kbd> releases the mouse. (<kbd>K</kbd>/<kbd>L</kbd>/<kbd>Space</kbd> still work.)
+        Desktop: click once to capture the mouse, then <b>hold the mouse button to record</b> at the crosshair and release to save; click a marker to play it (again to stop), <kbd>Delete</kbd> twice removes the marker you aim at. <kbd>W A S D</kbd> move, <kbd>Q</kbd>/<kbd>E</kbd> down/up when not walking, <kbd>Esc</kbd> releases the mouse. (<kbd>K</kbd>/<kbd>L</kbd>/<kbd>Space</kbd> still work.)
         Annotations anchor to the surface you point at.
         <a id="exportLink" href="/api/export" target="_blank">Export JSON</a>
       </div>

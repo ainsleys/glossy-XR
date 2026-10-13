@@ -152,6 +152,14 @@ app.post('/api/projects/:id/assets', projectOr404, modelUpload.fields([{ name: '
   if (!type) return res.status(400).json({ error: 'unsupported asset type' });
   const options = {};
   if (type === 'image' && req.body?.mode) options.mode = req.body.mode === 'sphere' ? 'sphere' : 'plane';
+  // Sidecars are stored flat next to the model, so point MTL texture references
+  // at bare file names (archives often use textures/foo.png).
+  for (const f of [main, ...(req.files?.files || [])]) {
+    if (!/\.mtl$/i.test(f.filename)) continue;
+    const mtl = fs.readFileSync(f.path, 'utf8').replace(/^(\s*map_\w+|\s*bump|\s*disp|\s*decal|\s*refl)(\s+(?:-\S+\s+\S+\s+)*)(.*?)$/gm,
+      (_m, key, opts, file) => `${key}${opts || ' '}${safeName(file.trim().split(/[\\/]/).pop())}`);
+    fs.writeFileSync(f.path, mtl);
+  }
   const asset = db.assets.create(req.params.id, { url: `/models/${req.params.id}/${main.filename}`, type, name: main.originalname, options });
   io.emit('project:updated', db.projects.get(req.params.id));
   res.status(201).json(asset);
