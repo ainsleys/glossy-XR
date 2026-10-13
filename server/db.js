@@ -51,6 +51,10 @@ export function openDb(dataDir) {
     );
     CREATE INDEX IF NOT EXISTS assets_project ON assets(project_id, sort, created_at);
   `);
+  // columns added after the first release
+  const cols = db.prepare(`PRAGMA table_info(annotations)`).all().map((c) => c.name);
+  if (!cols.includes('transcript_status')) db.exec(`ALTER TABLE annotations ADD COLUMN transcript_status TEXT`);
+  if (!cols.includes('transcript_meta')) db.exec(`ALTER TABLE annotations ADD COLUMN transcript_meta TEXT`);
   // migrate single-model projects into the assets table
   for (const r of db.prepare(`SELECT id, model_url, model_type, model_name, transform, created_at FROM projects WHERE model_url IS NOT NULL`).all()) {
     db.prepare(`INSERT INTO assets (id, project_id, url, type, name, transform, options, visible, sort, created_at) VALUES (?, ?, ?, ?, ?, ?, '{}', 1, 0, ?)`)
@@ -71,8 +75,10 @@ export function openDb(dataDir) {
     listAllAnnotations: db.prepare(`SELECT * FROM annotations ORDER BY project_id, created_at`),
     getAnnotation: db.prepare(`SELECT * FROM annotations WHERE id = ? AND project_id = ?`),
     insertAnnotation: db.prepare(`
-      INSERT INTO annotations (id, project_id, author, created_at, x, y, z, object_id, layer, audio_url, duration_ms, transcript, consent)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+      INSERT INTO annotations (id, project_id, author, created_at, x, y, z, object_id, layer, audio_url, duration_ms, transcript, transcript_status, consent)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+    setTranscript: db.prepare(`UPDATE annotations SET transcript = ?, transcript_status = ?, transcript_meta = ? WHERE id = ? AND project_id = ?`),
+    listByTranscriptStatus: db.prepare(`SELECT * FROM annotations WHERE transcript_status = ? ORDER BY created_at`),
     deleteAnnotation: db.prepare(`DELETE FROM annotations WHERE id = ? AND project_id = ?`),
     countAnnotations: db.prepare(`SELECT COUNT(*) AS n FROM annotations`),
     touchProject: db.prepare(`UPDATE projects SET updated_at = ? WHERE id = ?`),
@@ -100,7 +106,9 @@ export function openDb(dataDir) {
     id: r.id, project: r.project_id, author: r.author, createdAt: r.created_at,
     anchor: { x: r.x, y: r.y, z: r.z, ...(r.object_id ? { objectId: r.object_id } : {}) },
     layer: r.layer, audioUrl: r.audio_url, durationMs: r.duration_ms, transcript: r.transcript, consent: !!r.consent,
+    transcription: { status: r.transcript_status || (r.transcript ? 'done' : 'none'), ...safeJson(r.transcript_meta) },
   });
+  function safeJson(t) { try { return t ? JSON.parse(t) : {}; } catch { return {}; } }
 
   const api = {
     projects: {
@@ -148,10 +156,16 @@ export function openDb(dataDir) {
         const id = a.id || randomUUID();
         const t = a.createdAt || now();
         q.insertAnnotation.run(id, projectId, a.author, t, a.x, a.y, a.z, a.objectId ?? null, a.layer || 'default',
-          a.audioUrl, a.durationMs ?? null, a.transcript ?? null, a.consent ? 1 : 0);
+          a.audioUrl, a.durationMs ?? null, a.transcript ?? null, a.transcriptStatus ?? (a.transcript ? 'done' : 'pending'), a.consent ? 1 : 0);
         q.touchProject.run(t, projectId);
         return api.annotations.get(projectId, id);
       },
+      /** status: pending | done | failed | skipped; meta holds words, model, backend, language, ms, or error */
+      setTranscript: (projectId, id, { transcript, status, meta = {} }) => {
+        q.setTranscript.run(transcript ?? null, status, JSON.stringify(meta), id, projectId);
+        return api.annotations.get(projectId, id);
+      },
+      listByTranscriptStatus: (status) => q.listByTranscriptStatus.all(status).map(annotationRow),
       remove: (projectId, id) => {
         const row = api.annotations.get(projectId, id);
         if (!row) return null;

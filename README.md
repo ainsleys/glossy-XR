@@ -17,10 +17,11 @@ The original ran on the WebVR API, which browsers removed in 2020. Nothing in th
 | Audio capture | recorder.js + opus worker, WAV | `MediaRecorder`, webm/opus |
 | Transport | Socket.IO 1 | Socket.IO 4, one room per project |
 | Storage | audio base64-encoded into MongoDB documents | SQLite (`node:sqlite`) for metadata, files on disk for audio and assets |
+| Transcription | none | Whisper on the server (transformers.js), word-timestamped |
 | Environment | a textured box | any mix of glTF/GLB, PLY, PCD, OBJ, Gaussian splats, photos, panoramas, and video per project |
 | Anchoring | fixed offset from the controller | the surface the user points at, with the mesh name |
 | Build | script tags, jQuery, `node_modules` committed | Vite, ES modules, no framework |
-| Record shape | `{id, x, y, z, audioObject}` | author, timestamp, anchor, layer, consent, transcript slot |
+| Record shape | `{id, x, y, z, audioObject}` | author, timestamp, anchor, layer, consent, transcript with word timestamps |
 
 The server also no longer emits the previous record instead of the one just saved, a bug noted in the 2016 commit log.
 
@@ -52,12 +53,29 @@ Tested on 12 Oct 2026 with public-domain or permissively licensed files: Khronos
   "layer": "review",
   "audioUrl": "/audio/011e1a87-….webm",
   "durationMs": 1000,
-  "transcript": null,
+  "transcript": "The lamp on the table is broken.",
+  "transcription": { "status": "done", "words": [{ "w": "The", "s": 0, "e": 0.2 }, { "w": "lamp", "s": 0.2, "e": 0.5 }], "language": null, "backend": "local", "model": "onnx-community/whisper-base_timestamped", "ms": 540 },
   "consent": true
 }
 ```
 
-`GET /api/projects/:id/export` returns a project with all its annotations; `GET /api/export` returns everything. `transcript` is reserved for a later speech-to-text pass.
+`GET /api/projects/:id/export` returns a project with all its annotations; `GET /api/export` returns everything.
+
+## Transcription
+
+Every clip is transcribed on the server after it is saved, off the request path. The record carries `transcript` (plain text) and `transcription` (`status`: `pending`, `done`, `failed`, or `skipped`; plus `words` as `[{w, s, e}]` with second offsets, `language`, `backend`, `model`, `ms`). Clients in the project receive `annotation:updated` when the text lands; the HUD list shows it under each entry and the crosshair status quotes it on hover. `POST /api/projects/:id/annotations/:aid/transcribe` re-runs one clip, and jobs left pending by a previous run are picked up on boot.
+
+The default backend is Whisper running locally through transformers.js (ONNX on CPU, no Python): `onnx-community/whisper-base_timestamped`, quantised, about 77 MB downloaded on first use into `~/.cache/glossy-xr/models`. A two-second clip takes about half a second on an Apple laptop. Decoding needs `ffmpeg` on the PATH (or `FFMPEG=/path/to/ffmpeg`); without it the server logs a warning and marks clips `failed`. Language is auto-detected.
+
+| Variable | Default | |
+|---|---|---|
+| `GLOSSY_TRANSCRIBE` | `local` | `openai` uses the Whisper API with `OPENAI_API_KEY`; `none` disables transcription (records are marked `skipped`) |
+| `GLOSSY_WHISPER_MODEL` | `onnx-community/whisper-base_timestamped` | `whisper-small_timestamped` or `whisper-large-v3-turbo_timestamped` for better accuracy at more CPU |
+| `GLOSSY_WHISPER_DTYPE` | `q8` | `fp32`, `fp16`, `q4` |
+| `GLOSSY_LANGUAGE` | auto | ISO code to force, e.g. `tr` |
+| `GLOSSY_MODEL_CACHE` | `~/.cache/glossy-xr/models` | |
+
+Word timestamps are kept so later work can jump playback to a word, tag a clip by its content, or make the set of annotations queryable.
 
 ## Run it
 
@@ -66,7 +84,7 @@ npm install
 npm run dev        # API on :3000, client on http://localhost:5173
 ```
 
-Node 22.13 or newer (for `node:sqlite`). Data lives in `data/` (`glossy.db`, `audio/`, `models/`); set `GLOSSY_DATA` to move it. A pre-SQLite `annotations.json` found there is imported once into a project called `default`, and single-model projects from earlier builds migrate into the assets table on first start.
+Node 22.13 or newer (for `node:sqlite`) and `ffmpeg` on the PATH for transcription. Data lives in `data/` (`glossy.db`, `audio/`, `models/`); set `GLOSSY_DATA` to move it. A pre-SQLite `annotations.json` found there is imported once into a project called `default`, and single-model projects from earlier builds migrate into the assets table on first start.
 
 **Desktop:** click the canvas to capture the mouse, `W A S D` to walk (floor following and wall collision by default; untick *Walk mode* to fly with `Q`/`E`), `Shift` to run, hold the mouse button to record at the crosshair and release to save, click a marker to play it, `Space` plays the marker under the crosshair, `Delete` twice removes it, `K`/`L` start and stop recording from the keyboard. Walking within about a metre of a marker on the active layer also plays it.
 
@@ -86,7 +104,7 @@ or, for Quest over USB, `adb reverse tcp:5173 tcp:5173` and open `http://localho
 npm test               # headless end-to-end suite; npm run test:headed to watch it
 ```
 
-Playwright drives a headless Chromium with software WebGL, a fake microphone fed from a generated tone, and, for the headset path, Meta's Immersive Web Emulation Runtime (IWER) standing in for a Quest 3. The suite starts its own API server on `:3100` with a throwaway data directory and Vite on `:5174`, so a running dev session is untouched. It covers: rendering the default room; walking with floor following and stopping at a wall; hold-to-record through the mouse, playback, hover feedback, and two-press delete; a click released before the microphone is ready; live sync to a second client; entering VR through the real `VRButton`, recording with the emulated controller's trigger, and cycling layers with squeeze. `test/scene.spec.js` additionally uploads a real interior (OBJ + MTL + textures) when one is present at `../test-assets/interiors/fireplace_room` or `GLOSSY_TEST_SCENE`, and checks spawn on the floor, wall collision, and an annotation anchored to a named mesh. Screenshots land in `test-results/`.
+Playwright drives a headless Chromium with software WebGL, a fake microphone fed from a generated tone, and, for the headset path, Meta's Immersive Web Emulation Runtime (IWER) standing in for a Quest 3. The suite starts its own API server on `:3100` with a throwaway data directory and Vite on `:5174`, so a running dev session is untouched. It covers: rendering the default room; walking with floor following and stopping at a wall; hold-to-record through the mouse, playback, hover feedback, and two-press delete; transcription of the clip (on macOS the fake microphone speaks a sentence from the system voice, and the test checks the words come back) and the re-transcribe endpoint; a click released before the microphone is ready; live sync to a second client; entering VR through the real `VRButton`, recording with the emulated controller's trigger, and cycling layers with squeeze. `test/scene.spec.js` additionally uploads a real interior (OBJ + MTL + textures) when one is present at `../test-assets/interiors/fireplace_room` or `GLOSSY_TEST_SCENE`, and checks spawn on the floor, wall collision, and an annotation anchored to a named mesh. Screenshots land in `test-results/`.
 
 Headless Chromium refuses the Pointer Lock API, so the client falls back to a software mouse capture (same controls, cursor stays visible, Esc releases); that fallback is what the tests exercise, and it also covers embedding contexts where pointer lock is denied.
 
@@ -99,10 +117,11 @@ Headless Chromium refuses the Pointer Lock API, so the client falls back to a so
 | GET / POST | `/api/projects/:id/assets` | list; add (multipart `model` plus optional `files` sidecars; `mode=sphere` for a panorama) |
 | PATCH / DELETE | `/api/projects/:id/assets/:aid` | update `{name, transform, options, visible, sort}`; remove |
 | GET / POST | `/api/projects/:id/annotations` | list; create (multipart `audio`, `x`, `y`, `z`, `author`, `layer`, `consent=true`, optional `objectId`, `durationMs`) |
+| POST | `/api/projects/:id/annotations/:aid/transcribe` | re-run speech-to-text for one clip (202) |
 | DELETE | `/api/projects/:id/annotations/:aid` | remove record and file |
 | GET | `/api/projects/:id/export`, `/api/export` | JSON export |
 | GET | `/audio/<id>.webm`, `/models/<project>/<file>` | files |
-| Socket.IO | `join {project}` → `annotation:all`; then `annotation:new`, `annotation:deleted`, `project:updated`, `project:created`, `project:deleted` | live sync |
+| Socket.IO | `join {project}` → `annotation:all`; then `annotation:new`, `annotation:updated` (transcript landed), `annotation:deleted`, `project:updated`, `project:created`, `project:deleted` | live sync |
 
 Validation: anchor must be numeric, author required, consent must be `true`, model extension must be supported. Rejected uploads are deleted from disk.
 
@@ -114,13 +133,12 @@ Verified 12 Oct 2026: server round-trip (projects, model upload, annotations, ex
 
 - Point-cloud raycasting is brute force; clouds over 3 M points skip surface anchoring and fall back to a point just ahead of the controller.
 - The JSON store became SQLite, but there is still no auth: anyone who can reach the server can do anything.
-- Transcripts are a reserved column with no pipeline behind them.
+- Transcription runs one clip at a time on the CPU; a long backlog (re-importing a big project) will take a while.
 - The three.js bundle is not code-split; Spark loads lazily only when a splat is opened.
 
 ## Roadmap
 
 - Companion web form bound to an existing anchor: text, photos, consent from a phone or tablet, no headset needed.
-- Speech-to-text into `transcript`.
 - Export mapped to standard metadata schemas.
 - Accounts, project membership, share links, object storage for files.
 

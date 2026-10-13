@@ -5,10 +5,24 @@
 import { defineConfig, devices } from '@playwright/test';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { writeToneWav } from './test/fixtures/tone.js';
 
 const API_PORT = 3100, VITE_PORT = 5174;
-const tone = writeToneWav(path.join(os.tmpdir(), 'glossy-test-tone.wav'));
+
+// The fake microphone plays this file on a loop. On macOS it is real speech
+// from the system voice, so transcripts can be checked for words; elsewhere
+// it is a tone and transcript tests only check that the pipeline completes.
+export const SPOKEN = 'The lamp on the table is broken. The lamp on the table is broken.';
+export const SPEECH_WORDS = /lamp|table|broken/i;
+function fakeMic() {
+  const wav = path.join(os.tmpdir(), 'glossy-test-mic.wav');
+  if (process.platform === 'darwin') {
+    try { execFileSync('say', ['--file-format=WAVE', '--data-format=LEI16@16000', '-o', wav, SPOKEN]); process.env.GLOSSY_TEST_SPEECH = '1'; return wav; } catch {}
+  }
+  return writeToneWav(wav);
+}
+const tone = fakeMic();
 
 export default defineConfig({
   testDir: './test',

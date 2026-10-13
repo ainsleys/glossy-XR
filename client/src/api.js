@@ -35,6 +35,7 @@ export const assets = {
 export const annotations = {
   list: (project) => fetch(`/api/projects/${project}/annotations`).then(json),
   remove: (project, id) => fetch(`/api/projects/${project}/annotations/${id}`, { method: 'DELETE' }).then(json),
+  transcribe: (project, id) => fetch(`/api/projects/${project}/annotations/${id}/transcribe`, { method: 'POST' }).then(json),
   create: async ({ project, blob, durationMs, anchor, author, layer, consent, objectId }) => {
     const fd = new FormData();
     fd.append('audio', blob, 'clip');
@@ -55,6 +56,7 @@ export function connect(handlers) {
   socket.on('annotation:all', handlers.onAll);
   socket.on('annotation:new', handlers.onNew);
   socket.on('annotation:deleted', handlers.onDeleted);
+  socket.on('annotation:updated', handlers.onUpdated);
   socket.on('project:updated', handlers.onProjectUpdated);
   socket.on('project:created', handlers.onProjectsChanged);
   socket.on('project:deleted', handlers.onProjectsChanged);

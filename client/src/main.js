@@ -59,6 +59,7 @@ hud.walk.addEventListener('change', () => ls.set('glossy.walk', hud.walk.checked
 const setStatus = (t) => { hud.status.textContent = t; };
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmtDur = (ms) => (ms ? (ms / 1000).toFixed(1) + 's' : '');
+const snippet = (t, n = 70) => (t.length > n ? t.slice(0, n - 1).trimEnd() + '…' : t);
 
 // ---- renderer / scene ------------------------------------------------------
 
@@ -498,7 +499,7 @@ function updateHover() {
   const cur = markers.get(id);
   if (cur) { cur.mesh.userData.hover = true; if (!cur.mesh.userData.playing) cur.mesh.material.emissiveIntensity = 0.8; }
   crosshair.classList.toggle('hover', !!id);
-  if (cur && !recorder.isRecording) setStatus(`${cur.record.author} · ${cur.record.layer} · ${fmtDur(cur.record.durationMs)} — click to ${cur.record.id === playingId ? 'stop' : 'play'}`);
+  if (cur && !recorder.isRecording) setStatus(`${cur.record.author} · ${cur.record.layer} · ${fmtDur(cur.record.durationMs)}${cur.record.transcript ? ' · “' + snippet(cur.record.transcript) + '”' : ''} — click to ${cur.record.id === playingId ? 'stop' : 'play'}`);
   else if (!id && !recorder.isRecording && !playingId) setStatus('');
 }
 
@@ -510,9 +511,15 @@ function renderList() {
   for (const { record } of items) {
     const li = document.createElement('li');
     li.className = (record.id === playingId ? 'playing ' : '') + (record.layer === hud.layer.value ? '' : 'dim');
-    li.innerHTML = `<button class="play" title="play">${record.id === playingId ? '■' : '▶'}</button><span class="who">${esc(record.author)}</span><span class="meta">${esc(record.layer)} · ${fmtDur(record.durationMs)}${record.anchor.objectId ? ' · ' + esc(record.anchor.objectId) : ''}</span><button class="del" title="delete">✕</button>`;
+    const tr = record.transcription || {};
+    const text = record.transcript ? `<div class="text">${esc(record.transcript)}</div>`
+      : tr.status === 'pending' ? `<div class="text pending">transcribing…</div>`
+      : tr.status === 'failed' ? `<div class="text failed" title="${esc(tr.error || '')}">transcription failed <button class="retry">retry</button></div>`
+      : tr.status === 'done' ? `<div class="text pending">(no speech detected)</div>` : '';
+    li.innerHTML = `<button class="play" title="play">${record.id === playingId ? '■' : '▶'}</button><span class="who">${esc(record.author)}</span><span class="meta">${esc(record.layer)} · ${fmtDur(record.durationMs)}${record.anchor.objectId ? ' · ' + esc(record.anchor.objectId) : ''}</span><button class="del" title="delete">✕</button>${text}`;
     li.querySelector('.play').addEventListener('click', () => play(record.id));
     li.querySelector('.del').addEventListener('click', () => deleteAnnotation(record.id));
+    li.querySelector('.retry')?.addEventListener('click', () => annotationsApi.transcribe(project.id, record.id).catch((e) => setStatus('retry failed: ' + e.message)));
     li.addEventListener('mouseenter', () => { const m = markers.get(record.id); if (m) m.mesh.material.emissiveIntensity = 0.9; });
     li.addEventListener('mouseleave', () => { const m = markers.get(record.id); if (m && !m.mesh.userData.playing) m.mesh.material.emissiveIntensity = 0.35; });
     ul.appendChild(li);
@@ -716,6 +723,13 @@ const net = connect({
   onAll: (all) => { clearMarkers(); all.forEach(addMarker); setStatus(`loaded ${markers.size}`); },
   onNew: (a) => a.project === project?.id && addMarker(a),
   onDeleted: removeMarker,
+  onUpdated: (a) => {                 // transcript arrived (or failed) for an existing marker
+    const m = markers.get(a.id);
+    if (!m || a.project !== project?.id) return;
+    m.record = a;
+    renderList();
+    if (hoverId === a.id) { hoverId = null; updateHover(); }
+  },
   onProjectUpdated: async (p) => {
     refreshProjectList();
     if (p.id !== project?.id) return;

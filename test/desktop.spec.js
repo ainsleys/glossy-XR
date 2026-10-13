@@ -43,7 +43,7 @@ test('records, saves, plays back, and deletes an annotation', async ({ page, req
   const aim = await page.evaluate(() => { const a = window.__glossy.aimPoint(window.__glossy.camera); return { p: a.point.toArray(), id: a.objectId }; });
   expect(aim.id).toBe('table');
 
-  await recordWithMouse(page, 1200);
+  await recordWithMouse(page, 2600);                   // long enough to catch a full sentence from the looping fake mic
   expect(await markerCount(page)).toBe(1);
 
   const list = await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json();
@@ -51,12 +51,27 @@ test('records, saves, plays back, and deletes an annotation', async ({ page, req
   const a = list[0];
   expect(a.author).toBe('Tester');
   expect(a.anchor.objectId).toBe('table');
-  expect(a.durationMs).toBeGreaterThanOrEqual(1000);
+  expect(a.durationMs).toBeGreaterThanOrEqual(2400);
   expect(a.consent).toBe(true);
   const audio = await request.get(`${API}${a.audioUrl}`);
   expect(audio.ok()).toBeTruthy();
   expect((await audio.body()).length).toBeGreaterThan(2000);     // ~1.2 s of opus from the fake mic, not an empty container
   expect(fs.existsSync(`.test-data/audio/${a.id}.webm`)).toBe(true);
+
+  // transcription runs off the request path and arrives over the socket
+  expect(a.transcription.status).toBe('pending');
+  await expect.poll(async () => (await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json())[0].transcription.status, { timeout: 120_000 }).toBe('done');
+  const done = (await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json())[0];
+  expect(done.transcription.backend).toBe('local');
+  expect(Array.isArray(done.transcription.words)).toBe(true);
+  if (process.env.GLOSSY_TEST_SPEECH) {
+    expect(done.transcript).toMatch(/lamp|table|broken/i);
+    expect(done.transcription.words.length).toBeGreaterThan(2);
+    expect(done.transcription.words[0].s).toBeGreaterThanOrEqual(0);
+    await expect(page.locator('#annList li .text')).toHaveText(/lamp|table|broken/i);
+  } else {
+    await expect(page.locator('#annList li .text')).not.toHaveText(/transcribing/);
+  }
 
   // hover feedback + Space plays
   await page.evaluate(() => { const g = window.__glossy; g.camera.lookAt([...g.markers.values()][0].mesh.position); g.camera.updateMatrixWorld(true); });
@@ -75,6 +90,31 @@ test('records, saves, plays back, and deletes an annotation', async ({ page, req
   const after = await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json();
   expect(after).toHaveLength(0);
   expect(fs.existsSync(`.test-data/audio/${a.id}.webm`)).toBe(false);
+});
+
+test('re-transcribe endpoint and deleting while a job is queued', async ({ page, request }) => {
+  const project = await openProject(page, request, 'retranscribe');
+  await prepareRecording(page);
+  await lockPointer(page);
+  await recordWithMouse(page, 800);
+  const [a] = await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json();
+  await expect.poll(async () => (await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json())[0].transcription.status, { timeout: 120_000 }).toBe('done');
+  const re = await request.post(`${API}/api/projects/${project.id}/annotations/${a.id}/transcribe`);
+  expect(re.status()).toBe(202);
+  expect((await re.json()).transcription.status).toBe('pending');
+  // the old text stays on screen while the job re-runs (it takes well under a second), then the fresh result lands
+  await expect.poll(async () => (await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json())[0].transcription.status, { timeout: 120_000 }).toBe('done');
+  if (process.env.GLOSSY_TEST_SPEECH) await expect(page.locator('#annList li .text')).toHaveText(/lamp|table|broken/i);
+  // queue another and delete it before the job finishes: no crash, no resurrected row
+  await aimCamera(page, [0, 1.6, 0.6], [-2, 0.4, 0.5]);   // look at the chest, away from the marker we just made (a click on it would play, not record)
+  await recordWithMouse(page, 600);
+  const list = await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json();
+  const fresh = list.find((r) => r.id !== a.id);
+  expect((await request.delete(`${API}/api/projects/${project.id}/annotations/${fresh.id}`)).status()).toBe(204);
+  await page.waitForTimeout(3000);
+  const after = await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json();
+  expect(after.map((r) => r.id)).toEqual([a.id]);
+  expect((await (await request.get(`${API}/api/health`)).json()).transcription.backend).toBe('local');
 });
 
 test('a click released before the microphone is ready does not leave the recorder stuck', async ({ page, request }) => {

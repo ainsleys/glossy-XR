@@ -21,6 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { openDb } from './db.js';
+import { createTranscriber } from './transcribe.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -35,6 +36,24 @@ const db = openDb(DATA_DIR);
 const imported = db.importLegacyJson(path.join(DATA_DIR, 'annotations.json'));
 if (imported) console.log(`imported ${imported} annotations from annotations.json`);
 if (db.projects.list().length === 0) db.projects.create({ name: 'default' });
+
+// ---- transcription -----------------------------------------------------------
+// Clips are transcribed off the request path; clients get `annotation:updated`
+// when the text lands. Jobs left pending by a previous run are picked up on boot.
+
+const transcriber = createTranscriber({ log: console });
+function queueTranscription(record) {
+  if (!transcriber.enabled) return;
+  const file = path.join(AUDIO_DIR, path.basename(record.audioUrl));
+  transcriber.enqueue(record.id, file, {}, (err, result) => {
+    const cur = db.annotations.get(record.project, record.id);
+    if (!cur) return;                                        // deleted while queued
+    const updated = err
+      ? db.annotations.setTranscript(record.project, record.id, { transcript: cur.transcript, status: 'failed', meta: { error: err.message } })
+      : db.annotations.setTranscript(record.project, record.id, { transcript: result.text, status: 'done', meta: { words: result.words, language: result.language, backend: result.backend, model: result.model, ms: result.ms } });
+    io.to(record.project).emit('annotation:updated', updated);
+  });
+}
 
 // ---- model types -----------------------------------------------------------
 
@@ -115,7 +134,7 @@ const projectOr404 = (req, res, next) => {
   next();
 };
 
-app.get('/api/health', (_req, res) => res.json({ ok: true, projects: db.projects.list().length }));
+app.get('/api/health', (_req, res) => res.json({ ok: true, projects: db.projects.list().length, transcription: transcriber.info() }));
 app.get('/api/model-types', (_req, res) => res.json(MODEL_TYPES));
 
 // projects
@@ -211,9 +230,22 @@ app.post('/api/projects/:id/annotations', projectOr404, audioUpload.single('audi
     id: path.parse(req.file.filename).name,
     author: v.author, x: v.x, y: v.y, z: v.z, objectId: v.objectId, layer: v.layer,
     audioUrl: `/audio/${req.file.filename}`, durationMs: Number(req.body.durationMs) || null, consent: true,
+    transcriptStatus: transcriber.enabled ? 'pending' : 'skipped',
   });
   io.to(req.params.id).emit('annotation:new', record);     // the record we just saved, to everyone in the project
   res.status(201).json(record);
+  queueTranscription(record);
+});
+
+// (re)run speech-to-text for one annotation
+app.post('/api/projects/:id/annotations/:aid/transcribe', projectOr404, (req, res) => {
+  const cur = db.annotations.get(req.params.id, req.params.aid);
+  if (!cur) return res.status(404).end();
+  if (!transcriber.enabled) return res.status(503).json({ error: 'transcription disabled', ...transcriber.info() });
+  const record = db.annotations.setTranscript(req.params.id, cur.id, { transcript: cur.transcript, status: 'pending', meta: {} });
+  io.to(req.params.id).emit('annotation:updated', record);
+  res.status(202).json(record);
+  queueTranscription(record);
 });
 
 app.delete('/api/projects/:id/annotations/:aid', projectOr404, async (req, res) => {
@@ -263,6 +295,8 @@ io.on('connection', (socket) => {
   socket.on('presence', (p) => { for (const r of socket.rooms) if (r !== socket.id) socket.to(r).emit('presence', { id: socket.id, ...p }); });
   socket.on('disconnect', () => io.emit('presence:left', { id: socket.id }));
 });
+
+for (const a of db.annotations.listByTranscriptStatus('pending')) queueTranscription(a);
 
 server.listen(PORT, () => {
   console.log(`glossy-xr server on http://localhost:${PORT}  (${db.projects.list().length} projects, data in ${DATA_DIR})`);

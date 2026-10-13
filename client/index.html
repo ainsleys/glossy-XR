@@ -39,8 +39,12 @@
       #assetList .meta { color: #9ab; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
       #assetList button { width: auto; padding: 1px 6px; font-size: 11px; }
       #assetList .del { color: #f88; }
-      #annList { list-style: none; margin: 4px 0 0; padding: 0; max-height: 160px; overflow: auto; }
-      #annList li { display: flex; gap: 6px; align-items: center; padding: 3px 4px; border-radius: 4px; font-size: 12px; }
+      #annList { list-style: none; margin: 4px 0 0; padding: 0; max-height: 240px; overflow: auto; }
+      #annList li { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 3px 4px; border-radius: 4px; font-size: 12px; }
+      #annList .text { flex: 1 0 100%; padding: 0 0 2px 30px; color: #cfd8e3; font-size: 11px; line-height: 1.35; white-space: normal; }
+      #annList .text.pending { color: #8a9bb0; font-style: italic; }
+      #annList .text.failed { color: #f88; }
+      #annList .text .retry { margin-left: 4px; }
       #annList li:hover { background: rgba(255,255,255,.06); }
       #annList li.playing { background: rgba(140,200,255,.15); }
       #annList li.dim { opacity: .5; }
