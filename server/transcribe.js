@@ -95,12 +95,21 @@ function localBackend(log) {
     async transcribe(file, { language = LANGUAGE } = {}) {
       const asr = await load();
       const audio = await decodeToPcm(file);
-      if (audio.length < 1600) return { text: '', words: [], language };
-      let detected = false;
-      if (!language) { language = await detectLanguage(asr, audio); detected = true; }
-      const out = await asr(audio, { return_timestamps: 'word', chunk_length_s: 30, language: language || 'en', task: 'transcribe' });
-      const words = (out.chunks || []).map((c) => ({ w: c.text.trim(), s: round(c.timestamp[0]), e: round(c.timestamp[1]) })).filter((c) => c.w);
-      return { text: out.text.trim(), words, language, detected };
+      const gc = asr.model.generation_config;
+      if (audio.length < 1600) return { text: '', words: [], language: language || null, detected: false };
+      let detected = false, fallback = false;
+      if (!gc?.is_multilingual) {
+        // English-only checkpoint (whisper-*.en): the library refuses language/task options, and the answer is always English
+        const out = await asr(audio, { return_timestamps: 'word', chunk_length_s: 30 });
+        return { text: out.text.trim(), words: wordsOf(out), language: 'en', detected: false, fallback: !!language && language !== 'en' };
+      }
+      if (!language) {
+        language = await detectLanguage(asr, audio);
+        detected = !!language;
+        if (!language) { language = 'en'; fallback = true; }       // no language tokens to score against
+      }
+      const out = await asr(audio, { return_timestamps: 'word', chunk_length_s: 30, language, task: 'transcribe' });
+      return { text: out.text.trim(), words: wordsOf(out), language, detected, fallback };
     },
   };
 }
@@ -121,12 +130,17 @@ function openaiBackend() {
       const res = await fetch('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { authorization: `Bearer ${key}` }, body: fd });
       if (!res.ok) throw new Error(`openai ${res.status}: ${(await res.text()).slice(0, 200)}`);
       const j = await res.json();
-      return { text: (j.text || '').trim(), words: (j.words || []).map((w) => ({ w: w.word, s: round(w.start), e: round(w.end) })), language: j.language || language, detected: !language };
+      return { text: (j.text || '').trim(), words: (j.words || []).map((w) => ({ w: w.word, s: round(w.start), e: round(w.end) })), language: toCode(j.language) || language || null, detected: !language && !!j.language, fallback: false };
     },
   };
 }
 
 const round = (n) => (Number.isFinite(n) ? Math.round(n * 100) / 100 : null);
+const wordsOf = (out) => (out.chunks || []).map((c) => ({ w: c.text.trim(), s: round(c.timestamp[0]), e: round(c.timestamp[1]) })).filter((c) => c.w);
+
+// The OpenAI backend reports a language name ("turkish"); the local one an ISO code. Store codes.
+const LANGUAGE_CODES = { english: 'en', turkish: 'tr', german: 'de', french: 'fr', spanish: 'es', italian: 'it', arabic: 'ar', greek: 'el', polish: 'pl', dutch: 'nl', portuguese: 'pt', russian: 'ru', japanese: 'ja', chinese: 'zh', korean: 'ko', kurdish: 'ku', persian: 'fa', hindi: 'hi', ukrainian: 'uk', romanian: 'ro', bulgarian: 'bg', hungarian: 'hu', czech: 'cs', swedish: 'sv', danish: 'da', norwegian: 'no', finnish: 'fi', hebrew: 'he', armenian: 'hy', georgian: 'ka', azerbaijani: 'az' };
+const toCode = (l) => { if (!l) return null; const k = String(l).toLowerCase(); return k.length <= 3 ? k : (LANGUAGE_CODES[k] || k); };
 
 // ---- queue ------------------------------------------------------------------
 

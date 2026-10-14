@@ -68,7 +68,7 @@ Tested on 12 Oct 2026 with public-domain or permissively licensed files: Khronos
 ```
 
 - `period` is the temporal reference: free-form `from`, `to`, `label` strings (years, dates, "always"), or `null` when unspecified. It can be set at creation or afterwards with `PATCH …/annotations/:aid {period}`.
-- `parent` makes the record a reply to another clip in the same project; a reply shares its parent's anchor and shows as a small marker above it. `replies` counts them. Erasing the parent keeps the replies as roots.
+- `parent` makes the record a reply to another clip in the same project; a reply shares its parent's anchor and shows as a small marker above it. Replies are one level deep: a reply to a reply attaches to the original. `replies` counts them, and the server broadcasts the parent's record whenever the count changes. Erasing the parent detaches its replies, which continue as roots at the same anchor.
 - `pose` is the author's viewpoint sampled at 10 Hz for the length of the clip, in scene coordinates, and `poseSource` says what produced it: `xr` for the headset pose, `desktop` for the mouse-steered virtual camera. The headset trace is a gaze path and lets a later viewer see where the speaker was looking at a given word; the desktop trace is only where the view was pointed, and a viewer should treat it as such or ignore it.
 - `prompt` and `mode` record that the clip was an answer to a question in interview mode (below); otherwise `mode` is `walk`.
 - `language` is a per-clip transcription language, rarely set; the project's language or detection usually decides. The detected or applied language is in `transcription.language`, with `detected` saying which.
@@ -89,7 +89,7 @@ Every clip is transcribed on the server after it is saved, off the request path.
 
 The default backend is Whisper running locally through transformers.js (ONNX on CPU, no Python): `onnx-community/whisper-base_timestamped`, quantised, about 77 MB downloaded on first use into `~/.cache/glossy-xr/models`. A two-second clip takes about half a second on an Apple laptop, plus about 0.2 s for language detection. Decoding needs `ffmpeg` on the PATH (or `FFMPEG=/path/to/ffmpeg`); without it the server logs a warning and marks clips `failed`.
 
-Language is decided per clip: the clip's own `language` if set, else the project's (`PATCH /api/projects/:id {language: "tr"}`, or the select in the HUD), else `GLOSSY_LANGUAGE`, else the local backend detects it with one decoder step over Whisper's language tokens before transcribing. The library on its own would default to English without saying so, which is wrong for most of the speakers this tool is for. The suite checks a Turkish clip comes back as Turkish.
+Language is decided per clip: the clip's own `language` if set, else the project's (`PATCH /api/projects/:id {language: "tr"}`, or the select in the HUD), else `GLOSSY_LANGUAGE`, else the local backend detects it with one decoder step over Whisper's language tokens before transcribing. The library on its own would default to English without saying so, which is wrong for most of the speakers this tool is for. Codes are bare ISO codes (`tr`, not `tr-TR`). The record's `transcription` says what happened: `language` as applied, `detected: true` when it came from detection, `fallback: true` when English was used because the model could not say (English-only checkpoints such as `whisper-tiny.en` always transcribe English and ignore the setting). Detection reads the first 30 seconds of a clip. The suite checks a Turkish clip comes back as Turkish.
 
 | Variable | Default | |
 |---|---|---|
@@ -141,7 +141,7 @@ Headless Chromium refuses the Pointer Lock API, so the client falls back to a so
 | GET / POST | `/api/projects/:id/assets` | list; add (multipart `model` plus optional `files` sidecars; `mode=sphere` for a panorama) |
 | PATCH / DELETE | `/api/projects/:id/assets/:aid` | update `{name, transform, options, visible, sort}`; remove |
 | GET / POST | `/api/projects/:id/annotations` | list; create (multipart `audio`, `x`, `y`, `z`, `author`, `layer`, `consent=true`; optional `objectId`, `durationMs`, `parent`, `period` (JSON), `pose` (JSON), `prompt`, `mode`, `language`) |
-| PATCH / DELETE | `/api/projects/:id/annotations/:aid` | update `{layer, period, consent}`; erase record, audio file and derived data |
+| PATCH / DELETE | `/api/projects/:id/annotations/:aid` | update `{layer, period, consent}` (a reviewer may withdraw consent after the fact; the clip stays until erased); erase record, audio file and derived data, detaching any replies |
 | POST | `/api/projects/:id/annotations/:aid/transcribe` | re-run speech-to-text for one clip (202) |
 | GET | `/api/projects/:id/export`, `/api/export` | JSON export, schema `glossy-xr/project/0.4`: project plus `contributions[]` |
 | GET | `/audio/<id>.webm`, `/models/<project>/<file>` | files |

@@ -383,21 +383,32 @@ async function openProject(id) {
   selectedId = null;
   clearMarkers();
   net.join(id);
-  projectToHud();
+  projectToHud({ fresh: true });
   await showAssets(project);
 }
 
-// per-project settings in the HUD: transcription language and the interview script
-function projectToHud() {
+// per-project settings in the HUD: transcription language and the interview script.
+// Called on project open and when another client changes the settings; the
+// question position is kept unless the questions themselves changed, and a
+// textarea being edited is left alone.
+let shownScript = null;
+function projectToHud({ fresh = false } = {}) {
   hud.language.value = project?.language || '';
-  hud.scriptText.value = (project?.script?.questions || []).map((q) => q.text).join('\n');
-  qIndex = 0;
+  const scriptKey = JSON.stringify((project?.script?.questions || []).map((q) => q.text));
+  if (fresh || scriptKey !== shownScript) {
+    if (document.activeElement !== hud.scriptText) hud.scriptText.value = (project?.script?.questions || []).map((q) => q.text).join('\n');
+    qIndex = 0;
+    shownScript = scriptKey;
+    if (project?.script?.questions?.length) $('interviewPanel').open = true;   // a script arriving, or a scripted project opening, shows its questions
+  }
   renderInterview();
 }
 hud.language.addEventListener('change', async () => {
   if (!project) return;
-  project = await projectsApi.update(project.id, { language: hud.language.value || null });
-  setStatus(hud.language.value ? 'transcription language: ' + hud.language.value : 'transcription language: detect');
+  try {
+    project = await projectsApi.update(project.id, { language: hud.language.value || null });
+    setStatus(hud.language.value ? 'transcription language: ' + hud.language.value : 'transcription language: detect');
+  } catch (e) { hud.language.value = project.language || ''; setStatus('language not saved: ' + e.message); }
 });
 hud.saveScript.addEventListener('click', async () => {
   if (!project) return;
@@ -419,7 +430,6 @@ const currentQuestion = () => questions()[qIndex] || null;
 function renderInterview() {
   const qs = questions();
   const q = currentQuestion();
-  if (project?.script?.questions?.length) $('interviewPanel').open = true;   // a scripted project shows its questions
   hud.question.textContent = !project?.script?.questions?.length ? 'no script: add questions below'
     : !hud.interview.checked ? `${project.script.questions.length} question${project.script.questions.length === 1 ? '' : 's'} (tick to start)`
     : q ? `${qIndex + 1}/${qs.length} · ${q.text}` : 'all questions answered';
@@ -433,14 +443,21 @@ hud.nextQ.addEventListener('click', () => stepQuestion(1));
 // Read the question aloud with the browser's speech synthesis where it exists.
 // Never while the microphone is open: the headset speakers leak into its mic.
 function speak(text) {
-  if (!('speechSynthesis' in window) || !text || recorder.isRecording) return false;
+  if (!text) return 'nothing';
+  if (recorder.isRecording || starting) return 'muted';
+  if (!('speechSynthesis' in window)) return 'unavailable';
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
   if (project?.language) u.lang = project.language;
   speechSynthesis.speak(u);
-  return true;
+  return 'ok';
 }
-hud.askQ.addEventListener('click', () => { const q = currentQuestion(); if (q && !speak(q.text)) setStatus('speech synthesis unavailable; read the question from the panel'); });
+hud.askQ.addEventListener('click', () => {
+  const q = currentQuestion(); if (!q) return;
+  const r = speak(q.text);
+  if (r === 'muted') setStatus('finish recording first; the question is not read while the microphone is open');
+  else if (r === 'unavailable') setStatus('speech synthesis unavailable here; read the question from the panel');
+});
 
 hud.project.addEventListener('change', () => openProject(hud.project.value));
 hud.newProject.addEventListener('click', async () => {
@@ -466,14 +483,14 @@ function addMarker(record) {
     new THREE.MeshStandardMaterial({ color: layerColor(record.layer), emissive: layerColor(record.layer), emissiveIntensity: 0.35 }),
   );
   mesh.position.set(record.anchor.x, record.anchor.y, record.anchor.z);
-  if (record.parent) {                                      // replies sit in a short column above their parent
+  const isReply = !!record.parent && markers.has(record.parent);   // a reply whose parent is gone stands as a root
+  if (isReply) {                                            // replies sit in a short column above their parent
     const n = [...markers.values()].filter((m) => m.record.parent === record.parent).length;
     mesh.position.y += 0.12 * (n + 1);
-    mesh.scale.setScalar(0.75);
   }
   mesh.userData.id = record.id;
   markerGroup.add(mesh);
-  mesh.userData.reply = !!record.parent;
+  mesh.userData.reply = isReply;
   const sound = new THREE.PositionalAudio(listener);
   sound.setRefDistance(0.4);
   sound.setRolloffFactor(2);
@@ -622,6 +639,7 @@ const POSE_HZ = 10;
 const pose = { samples: [], timer: null, t0: 0, source: 'desktop' };
 const _pp = new THREE.Vector3(), _pq = new THREE.Quaternion();
 function poseStart() {
+  clearInterval(pose.timer);
   pose.samples = []; pose.t0 = performance.now(); pose.source = renderer.xr.isPresenting ? 'xr' : 'desktop';
   poseSample();
   pose.timer = setInterval(poseSample, 1000 / POSE_HZ);
@@ -638,7 +656,7 @@ async function beginRecording(source, opts = {}) {
   if (!hud.author.value.trim()) return setStatus('enter your name first');
   if (!hud.consent.checked) return setStatus('tick consent first');
   if ('speechSynthesis' in window) speechSynthesis.cancel();   // never record over our own voice
-  starting = source; releasedEarly = false; recOpts = opts;
+  starting = source; releasedEarly = false; recOpts = { ...opts, projectId: project.id };
   setStatus('starting microphone…');
   try { await recorder.start(); } catch (e) { starting = null; return setStatus('mic blocked: ' + e.message); }
   starting = null;
@@ -653,8 +671,16 @@ async function beginRecording(source, opts = {}) {
 
 // Release of the button/trigger that started a recording. Safe to call while the mic is still warming up.
 function releaseRecording(source) {
-  if (starting === source) { releasedEarly = true; return; }
+  if (starting === source) { releasedEarly = true; releaseAt = performance.now(); return; }
   if (recorder.isRecording && anchorSource === source) { releaseAt = performance.now(); endRecording(); }
+}
+
+// Reset the recording UI when the microphone stops on its own (track ended,
+// device unplugged) or when the clip cannot be kept.
+function resetRecordingUi() {
+  clearInterval(pose.timer); pose.timer = null;
+  cursor.visible = false; anchorSource = null; recOpts = {};
+  hud.rec.classList.remove('on'); crosshair.classList.remove('rec');
 }
 
 // A provisional marker goes into the scene at release, before the clip is
@@ -672,6 +698,10 @@ function clearProvisional(mesh) { scene.remove(mesh); pendingMarkers.delete(mesh
 async function endRecording() {
   if (!recorder.isRecording) return;
   const opts = recOpts; recOpts = {};
+  if (opts.projectId !== project?.id) {                     // the project changed under the recording: nothing sensible to anchor to
+    await recorder.stop(); resetRecordingUi();
+    return setStatus('project changed while recording; clip discarded');
+  }
   const parentRec = opts.parent ? markers.get(opts.parent)?.record : null;
   const { point: anchor, objectId } = parentRec
     ? { point: new THREE.Vector3(parentRec.anchor.x, parentRec.anchor.y, parentRec.anchor.z), objectId: parentRec.anchor.objectId }
@@ -679,8 +709,7 @@ async function endRecording() {
   const provisional = placeProvisional(anchor);
   const samples = poseStop();
   const clip = await recorder.stop();
-  cursor.visible = false;
-  hud.rec.classList.remove('on'); crosshair.classList.remove('rec');
+  resetRecordingUi();
   if (!clip) { clearProvisional(provisional); return setStatus('too short, discarded'); }
   setStatus('saving…');
   const q = currentQuestion();
@@ -692,8 +721,7 @@ async function endRecording() {
     });
     clearProvisional(provisional);
     setStatus(parentRec ? `saved reply to ${parentRec.author}` : `saved ${fmtDur(clip.durationMs)} at (${anchor.x.toFixed(2)}, ${anchor.y.toFixed(2)}, ${anchor.z.toFixed(2)})${objectId ? ' on ' + objectId : ''}`);
-    addMarker(rec);                  // local echo; server broadcast is deduped by id
-    if (parentRec) { const m = markers.get(parentRec.id); if (m) { m.record = { ...m.record, replies: (m.record.replies || 0) + 1 }; renderList(); } }
+    addMarker(rec);                  // local echo; server broadcast is deduped by id (the parent's reply count arrives as annotation:updated)
     if (q) stepQuestion(1);
   } catch (e) {
     clearProvisional(provisional);
@@ -848,10 +876,13 @@ const net = connect({
   onAll: (all) => { clearMarkers(); all.forEach(addMarker); setStatus(`loaded ${markers.size}`); },
   onNew: (a) => a.project === project?.id && addMarker(a),
   onDeleted: (d) => { removeMarker(d); renderList(); },
-  onUpdated: (a) => {                 // transcript arrived (or failed) for an existing marker
+  onUpdated: (a) => {                 // transcript, period, reply count or parent changed for an existing marker
     const m = markers.get(a.id);
     if (!m || a.project !== project?.id) return;
+    if (m.record.parent && !a.parent) { m.mesh.position.set(a.anchor.x, a.anchor.y, a.anchor.z); m.mesh.userData.reply = false; }   // parent erased: now a root
+    if (m.record.layer !== a.layer) { m.mesh.material.color.copy(layerColor(a.layer)); m.mesh.material.emissive.copy(layerColor(a.layer)); }
     m.record = a;
+    applyLayerFilter();
     renderList();
     if (hoverId === a.id) { hoverId = null; updateHover(); }
   },
@@ -925,6 +956,7 @@ renderer.setAnimationLoop(() => {
   }
 
   if (recorder.isRecording && anchorSource) cursor.position.copy(aimPoint(anchorSource).point);
+  else if (anchorSource && !starting && !recorder.isRecording) { resetRecordingUi(); setStatus('microphone stopped; nothing saved'); }   // the track ended under us
   updateHover();
   scaleMarkers();
 

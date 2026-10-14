@@ -76,7 +76,7 @@ const safeName = (n) => path.basename(n).replace(/[^\w.\-]+/g, '_').slice(0, 120
 
 // ---- validation ------------------------------------------------------------
 
-const LANG_RE = /^[a-z]{2,3}(-[A-Za-z]{2,8})?$/;
+const LANG_RE = /^[a-z]{2,3}$/;             // Whisper takes bare ISO codes (tr, en), not region tags
 const MAX_POSE_SAMPLES = 6000;                  // 10 Hz for ten minutes
 
 /** Temporal reference: { from, to, label } with free-form strings (years, dates, "always"); null clears it. */
@@ -116,8 +116,13 @@ function validateAnnotation(body, projectId) {
   const objectId = body.objectId ? String(body.objectId).slice(0, 200) : undefined;
   const consent = body.consent === 'true' || body.consent === true;
   if (!consent) errors.push('consent must be true');
+  // replies are one level deep: a reply to a reply attaches to the original
   let parent = body.parent ? String(body.parent).slice(0, 80) : null;
-  if (parent && !db.annotations.get(projectId, parent)) { errors.push('parent annotation not found'); parent = null; }
+  if (parent) {
+    const p = db.annotations.get(projectId, parent);
+    if (!p) { errors.push('parent annotation not found'); parent = null; }
+    else if (p.parent) parent = p.parent;
+  }
   let period = null, pose = [];
   try { period = parsePeriod(body.period) ?? null; } catch (e) { errors.push('period: ' + e.message); }
   try { pose = parsePose(body.pose); } catch (e) { errors.push('pose: ' + e.message); }
@@ -299,6 +304,7 @@ app.post('/api/projects/:id/annotations', projectOr404, audioUpload.single('audi
     parent: v.parent, period: v.period, pose: v.pose, poseSource: v.poseSource, prompt: v.prompt, mode: v.mode, language: v.language,
   });
   io.to(req.params.id).emit('annotation:new', record);     // the record we just saved, to everyone in the project
+  if (record.parent) io.to(req.params.id).emit('annotation:updated', db.annotations.get(req.params.id, record.parent));   // its reply count moved
   res.status(201).json(record);
   queueTranscription(record);
 });
@@ -327,12 +333,14 @@ app.post('/api/projects/:id/annotations/:aid/transcribe', projectOr404, (req, re
 });
 
 // Erase: the row, its audio file and its derived data go together. Replies to
-// the erased clip stay but lose their parent.
+// the erased clip stay, detached, as roots.
 app.delete('/api/projects/:id/annotations/:aid', projectOr404, async (req, res) => {
   const gone = db.annotations.remove(req.params.id, req.params.aid);
   if (!gone) return res.status(404).end();
   await fsp.unlink(path.join(AUDIO_DIR, path.basename(gone.audioUrl))).catch(() => {});
   io.to(req.params.id).emit('annotation:deleted', { id: gone.id });
+  for (const cid of gone.detached) io.to(req.params.id).emit('annotation:updated', db.annotations.get(req.params.id, cid));   // now roots
+  if (gone.parent) { const p = db.annotations.get(req.params.id, gone.parent); if (p) io.to(req.params.id).emit('annotation:updated', p); }   // one reply fewer
   res.status(204).end();
 });
 

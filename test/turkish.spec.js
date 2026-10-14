@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 import { API, openProject, prepareRecording, lockPointer, recordWithMouse, listAnnotations, aimCamera } from './helpers.js';
 import { SPEECH_WORDS_TR } from '../playwright.config.js';
 
-test.skip(!process.env.GLOSSY_TEST_SPEECH, 'needs the macOS system voice for the fake microphone');
+test.skip(!process.env.GLOSSY_TEST_SPEECH_TR, 'needs the macOS Turkish system voice (Yelda) for the fake microphone');
 
 test('a Turkish clip is detected and transcribed as Turkish', async ({ page, request }) => {
   const project = await openProject(page, request, 'turkish');

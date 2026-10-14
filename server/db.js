@@ -1,6 +1,5 @@
 // SQLite persistence via node:sqlite (built into Node 22.13+ / 23.4+, no
-// native build step). Two tables: projects own a model and a set of
-// annotations. Swapping this for Postgres later is a matter of replacing the
+// native build step). Three tables: projects own assets and annotations. Swapping this for Postgres later is a matter of replacing the
 // handful of query functions below; the HTTP layer never touches SQL.
 
 import { DatabaseSync } from 'node:sqlite';
@@ -70,6 +69,10 @@ export function openDb(dataDir) {
     ['language', 'TEXT'],           // default transcription language for the project; NULL = detect
     ['script', 'TEXT'],             // interview script: JSON {questions:[{id, text, ...}]}
   ]);
+  db.exec(`CREATE INDEX IF NOT EXISTS annotations_parent ON annotations(project_id, parent_id)`);
+
+  // every annotation read carries its reply count in one query
+  const ANN = `SELECT a.*, (SELECT COUNT(*) FROM annotations r WHERE r.project_id = a.project_id AND r.parent_id = a.id) AS reply_count FROM annotations a`;
   // migrate single-model projects into the assets table
   for (const r of db.prepare(`SELECT id, model_url, model_type, model_name, transform, created_at FROM projects WHERE model_url IS NOT NULL`).all()) {
     db.prepare(`INSERT INTO assets (id, project_id, url, type, name, transform, options, visible, sort, created_at) VALUES (?, ?, ?, ?, ?, ?, '{}', 1, 0, ?)`)
@@ -86,17 +89,18 @@ export function openDb(dataDir) {
     updateProject: db.prepare(`UPDATE projects SET name = ?, transform = ?, language = ?, script = ?, updated_at = ? WHERE id = ?`),
     setModel: db.prepare(`UPDATE projects SET model_url = ?, model_type = ?, model_name = ?, updated_at = ? WHERE id = ?`),
     deleteProject: db.prepare(`DELETE FROM projects WHERE id = ?`),
-    listAnnotations: db.prepare(`SELECT * FROM annotations WHERE project_id = ? ORDER BY created_at`),
-    listAllAnnotations: db.prepare(`SELECT * FROM annotations ORDER BY project_id, created_at`),
-    getAnnotation: db.prepare(`SELECT * FROM annotations WHERE id = ? AND project_id = ?`),
+    listAnnotations: db.prepare(`${ANN} WHERE a.project_id = ? ORDER BY a.created_at`),
+    listAllAnnotations: db.prepare(`${ANN} ORDER BY a.project_id, a.created_at`),
+    getAnnotation: db.prepare(`${ANN} WHERE a.id = ? AND a.project_id = ?`),
+    listChildren: db.prepare(`SELECT id FROM annotations WHERE parent_id = ? AND project_id = ?`),
+    detachChildren: db.prepare(`UPDATE annotations SET parent_id = NULL WHERE parent_id = ? AND project_id = ?`),
     insertAnnotation: db.prepare(`
       INSERT INTO annotations (id, project_id, author, created_at, x, y, z, object_id, layer, audio_url, duration_ms, transcript, transcript_status, consent,
                                parent_id, period, pose, pose_source, prompt, mode, language)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
     updateAnnotation: db.prepare(`UPDATE annotations SET layer = ?, period = ?, consent = ? WHERE id = ? AND project_id = ?`),
-    countReplies: db.prepare(`SELECT COUNT(*) AS n FROM annotations WHERE parent_id = ? AND project_id = ?`),
     setTranscript: db.prepare(`UPDATE annotations SET transcript = ?, transcript_status = ?, transcript_meta = ? WHERE id = ? AND project_id = ?`),
-    listByTranscriptStatus: db.prepare(`SELECT * FROM annotations WHERE transcript_status = ? ORDER BY created_at`),
+    listByTranscriptStatus: db.prepare(`${ANN} WHERE a.transcript_status = ? ORDER BY a.created_at`),
     deleteAnnotation: db.prepare(`DELETE FROM annotations WHERE id = ? AND project_id = ?`),
     countAnnotations: db.prepare(`SELECT COUNT(*) AS n FROM annotations`),
     touchProject: db.prepare(`UPDATE projects SET updated_at = ? WHERE id = ?`),
@@ -126,7 +130,7 @@ export function openDb(dataDir) {
     anchor: { x: r.x, y: r.y, z: r.z, ...(r.object_id ? { objectId: r.object_id } : {}) },
     period: safeJson(r.period, null),
     parent: r.parent_id || null,
-    replies: Number(q.countReplies.get(r.id, r.project_id).n),
+    replies: Number(r.reply_count || 0),
     mode: r.mode || 'walk', prompt: r.prompt || null, language: r.language || null,
     pose: safeJson(r.pose, []), poseSource: r.pose_source || null,
     layer: r.layer, audioUrl: r.audio_url, durationMs: r.duration_ms, transcript: r.transcript, consent: !!r.consent,
@@ -203,11 +207,14 @@ export function openDb(dataDir) {
         return api.annotations.get(projectId, id);
       },
       listByTranscriptStatus: (status) => q.listByTranscriptStatus.all(status).map(annotationRow),
+      /** Removes the row; replies to it become roots. Returns the removed record with `detached`: the ids of those replies. */
       remove: (projectId, id) => {
         const row = api.annotations.get(projectId, id);
         if (!row) return null;
+        const detached = q.listChildren.all(id, projectId).map((c) => c.id);
+        q.detachChildren.run(id, projectId);
         q.deleteAnnotation.run(id, projectId);
-        return row;
+        return { ...row, detached };
       },
     },
     /** One-time import of the pre-SQLite JSON store into a project. */

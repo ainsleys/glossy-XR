@@ -118,8 +118,11 @@ test('records, saves, plays back, and deletes an annotation', async ({ page, req
   expect((await exportProject(request, project.id)).contributions).toHaveLength(0);
 });
 
-test('a reply is a clip anchored to another clip', async ({ page, request }) => {
+test('a reply is a clip anchored to another clip', async ({ page, request, browser }) => {
   const project = await openProject(page, request, 'reply');
+  const other = await browser.newPage();                    // a second client watches the counts
+  await other.goto(`/?project=${project.id}`);
+  await other.waitForFunction((id) => window.__glossy?.project?.id === id, project.id);
   await prepareRecording(page, 'Author');
   await lockPointer(page);
   await aimCamera(page, [0.4, 1.6, 0.6], [0.4, 0.79, -1.2]);
@@ -143,14 +146,38 @@ test('a reply is a clip anchored to another clip', async ({ page, request }) => 
   expect(list.find((r) => r.id === first.id).replies).toBe(1);
   await expect(page.locator('#annList li.reply')).toHaveCount(1);
   await expect(page.locator('#annList .badge')).toHaveText(/1/);
+  await expect(other.locator('#annList .badge')).toHaveText(/1/);           // the count reached the other client too
+  await expect(other.locator('#annList li.reply')).toHaveCount(1);
   // a reply to a missing parent is refused
-  const bad = await request.post(`${API}/api/projects/${project.id}/annotations`, { multipart: { audio: { name: 'c.webm', mimeType: 'audio/webm', buffer: Buffer.from('x') }, x: '0', y: '0', z: '0', author: 'x', consent: 'true', parent: 'nope' } });
+  const clip = { audio: { name: 'c.webm', mimeType: 'audio/webm', buffer: Buffer.from('x') }, x: '0', y: '0', z: '0', author: 'x', consent: 'true' };
+  const bad = await request.post(`${API}/api/projects/${project.id}/annotations`, { multipart: { ...clip, parent: 'nope' } });
   expect(bad.status()).toBe(400);
   expect((await bad.json()).error).toMatch(/parent/);
-  // erasing the parent keeps the reply, now a root
+  // a reply to a reply attaches to the original: one level deep
+  const nested = await (await request.post(`${API}/api/projects/${project.id}/annotations`, { multipart: { ...clip, parent: reply.id } })).json();
+  expect(nested.parent).toBe(first.id);
+  await expect(page.locator('#annList .badge')).toHaveText(/2/);
+  await expect(page.locator('#annList li.reply')).toHaveCount(2);
+  // deleting a reply moves the count down everywhere
+  expect((await request.delete(`${API}/api/projects/${project.id}/annotations/${nested.id}`)).status()).toBe(204);
+  await expect(page.locator('#annList .badge')).toHaveText(/1/);
+  await expect(other.locator('#annList .badge')).toHaveText(/1/);
+  // malformed pose and a bad language code are refused; a region-tagged project language is refused
+  expect((await request.post(`${API}/api/projects/${project.id}/annotations`, { multipart: { ...clip, pose: '[{"t":0,"p":[1,2],"q":[0,0,0,1]}]' } })).status()).toBe(400);
+  expect((await request.patch(`${API}/api/projects/${project.id}`, { data: { language: 'tr-TR' } })).status()).toBe(400);
+  // erasing the parent keeps the reply, detached as a root at its own anchor
   expect((await request.delete(`${API}/api/projects/${project.id}/annotations/${first.id}`)).status()).toBe(204);
   await expect.poll(() => markerCount(page)).toBe(1);
-  expect((await listAnnotations(request, project.id)).map((r) => r.id)).toEqual([reply.id]);
+  const [left] = await listAnnotations(request, project.id);
+  expect(left.id).toBe(reply.id);
+  expect(left.parent).toBeNull();
+  await expect.poll(() => page.evaluate(() => { const m = [...window.__glossy.markers.values()][0]; return [m.record.parent, m.mesh.userData.reply, m.mesh.position.y]; })).toEqual([null, false, first.anchor.y]);
+  await expect(page.locator('#annList li.reply')).toHaveCount(0);
+  await expect(other.locator('#annList li.reply')).toHaveCount(0);
+  // a layer change from the API recolours the marker on an open client
+  await request.patch(`${API}/api/projects/${project.id}/annotations/${reply.id}`, { data: { layer: 'final' } });
+  await expect.poll(() => page.evaluate(() => [...window.__glossy.markers.values()][0].record.layer)).toBe('final');
+  await other.close();
 });
 
 test('interview mode records each clip as the answer to the current question', async ({ page, request }) => {
