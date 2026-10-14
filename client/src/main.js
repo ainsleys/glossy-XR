@@ -45,7 +45,8 @@ const hud = {
   assetList: $('assetList'), assetFile: $('assetFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), annList: $('annList'),
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
-  walk: $('walk'),
+  walk: $('walk'), language: $('language'),
+  interview: $('interview'), question: $('question'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
 };
 const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 hud.author.value = ls.get('glossy.author', '');
@@ -56,6 +57,8 @@ hud.layer.addEventListener('change', () => ls.set('glossy.layer', hud.layer.valu
 hud.consent.addEventListener('change', () => ls.set('glossy.consent', hud.consent.checked ? '1' : '0'));
 hud.walk.checked = ls.get('glossy.walk', '1') === '1';
 hud.walk.addEventListener('change', () => ls.set('glossy.walk', hud.walk.checked ? '1' : '0'));
+hud.interview.checked = ls.get('glossy.interview', '0') === '1';
+hud.interview.addEventListener('change', () => { ls.set('glossy.interview', hud.interview.checked ? '1' : '0'); renderInterview(); });
 const setStatus = (t) => { hud.status.textContent = t; };
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmtDur = (ms) => (ms ? (ms / 1000).toFixed(1) + 's' : '');
@@ -380,8 +383,64 @@ async function openProject(id) {
   selectedId = null;
   clearMarkers();
   net.join(id);
+  projectToHud();
   await showAssets(project);
 }
+
+// per-project settings in the HUD: transcription language and the interview script
+function projectToHud() {
+  hud.language.value = project?.language || '';
+  hud.scriptText.value = (project?.script?.questions || []).map((q) => q.text).join('\n');
+  qIndex = 0;
+  renderInterview();
+}
+hud.language.addEventListener('change', async () => {
+  if (!project) return;
+  project = await projectsApi.update(project.id, { language: hud.language.value || null });
+  setStatus(hud.language.value ? 'transcription language: ' + hud.language.value : 'transcription language: detect');
+});
+hud.saveScript.addEventListener('click', async () => {
+  if (!project) return;
+  const questions = hud.scriptText.value.split('\n').map((t) => t.trim()).filter(Boolean).map((text) => ({ text }));
+  project = await projectsApi.update(project.id, { script: questions.length ? { questions } : null });
+  qIndex = 0; renderInterview();
+  setStatus(questions.length ? `saved ${questions.length} question${questions.length === 1 ? '' : 's'}` : 'script cleared');
+});
+
+// ---- interview mode ---------------------------------------------------------
+// The project's script is a list of questions. With interview mode on, the HUD
+// shows one at a time, "Ask" reads it aloud, and every clip recorded answers
+// the current question (stored as `prompt`, mode 'interview'). Saving a clip
+// advances to the next question.
+
+let qIndex = 0;
+const questions = () => (hud.interview.checked && project?.script?.questions) || [];
+const currentQuestion = () => questions()[qIndex] || null;
+function renderInterview() {
+  const qs = questions();
+  const q = currentQuestion();
+  if (project?.script?.questions?.length) $('interviewPanel').open = true;   // a scripted project shows its questions
+  hud.question.textContent = !project?.script?.questions?.length ? 'no script: add questions below'
+    : !hud.interview.checked ? `${project.script.questions.length} question${project.script.questions.length === 1 ? '' : 's'} (tick to start)`
+    : q ? `${qIndex + 1}/${qs.length} · ${q.text}` : 'all questions answered';
+  hud.prevQ.disabled = !qs.length || qIndex === 0;
+  hud.nextQ.disabled = !qs.length || qIndex >= qs.length;
+  hud.askQ.disabled = !q;
+}
+function stepQuestion(d) { const n = questions().length; qIndex = Math.max(0, Math.min(n, qIndex + d)); renderInterview(); }
+hud.prevQ.addEventListener('click', () => stepQuestion(-1));
+hud.nextQ.addEventListener('click', () => stepQuestion(1));
+// Read the question aloud with the browser's speech synthesis where it exists.
+// Never while the microphone is open: the headset speakers leak into its mic.
+function speak(text) {
+  if (!('speechSynthesis' in window) || !text || recorder.isRecording) return false;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  if (project?.language) u.lang = project.language;
+  speechSynthesis.speak(u);
+  return true;
+}
+hud.askQ.addEventListener('click', () => { const q = currentQuestion(); if (q && !speak(q.text)) setStatus('speech synthesis unavailable; read the question from the panel'); });
 
 hud.project.addEventListener('change', () => openProject(hud.project.value));
 hud.newProject.addEventListener('click', async () => {
@@ -407,8 +466,14 @@ function addMarker(record) {
     new THREE.MeshStandardMaterial({ color: layerColor(record.layer), emissive: layerColor(record.layer), emissiveIntensity: 0.35 }),
   );
   mesh.position.set(record.anchor.x, record.anchor.y, record.anchor.z);
+  if (record.parent) {                                      // replies sit in a short column above their parent
+    const n = [...markers.values()].filter((m) => m.record.parent === record.parent).length;
+    mesh.position.y += 0.12 * (n + 1);
+    mesh.scale.setScalar(0.75);
+  }
   mesh.userData.id = record.id;
   markerGroup.add(mesh);
+  mesh.userData.reply = !!record.parent;
   const sound = new THREE.PositionalAudio(listener);
   sound.setRefDistance(0.4);
   sound.setRolloffFactor(2);
@@ -449,6 +514,7 @@ function scaleMarkers() {
     const d = mesh.position.distanceTo(tmpV);
     const r = THREE.MathUtils.clamp(0.012 * d, 0.02, 0.15);              // world radius, ~0.7° of view
     mesh.scale.setScalar((mesh.userData.baseScale ?? 1) * (mesh.userData.playing ? 1.3 : mesh.userData.hover ? 1.15 : 1) * r / MARKER_RADIUS);
+    if (mesh.userData.reply) mesh.scale.multiplyScalar(0.75);
   }
 }
 
@@ -507,16 +573,25 @@ function updateHover() {
 function renderList() {
   const ul = hud.annList;
   ul.innerHTML = '';
-  const items = [...markers.values()].sort((a, b) => a.record.createdAt < b.record.createdAt ? 1 : -1);
-  for (const { record } of items) {
+  // newest first; replies directly under their parent, oldest reply first
+  const all = [...markers.values()].map((m) => m.record);
+  const byParent = new Map();
+  for (const r of all) if (r.parent) byParent.set(r.parent, [...(byParent.get(r.parent) || []), r]);
+  const roots = all.filter((r) => !r.parent || !markers.has(r.parent)).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  const items = [];
+  for (const r of roots) { items.push(r); for (const c of (byParent.get(r.id) || []).sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))) items.push(c); }
+  for (const record of items) {
     const li = document.createElement('li');
-    li.className = (record.id === playingId ? 'playing ' : '') + (record.layer === hud.layer.value ? '' : 'dim');
+    li.className = (record.id === playingId ? 'playing ' : '') + (record.layer === hud.layer.value ? '' : 'dim ') + (record.parent && markers.has(record.parent) ? 'reply' : '');
     const tr = record.transcription || {};
     const text = record.transcript ? `<div class="text">${esc(record.transcript)}</div>`
       : tr.status === 'pending' ? `<div class="text pending">transcribing…</div>`
       : tr.status === 'failed' ? `<div class="text failed" title="${esc(tr.error || '')}">transcription failed <button class="retry">retry</button></div>`
       : tr.status === 'done' ? `<div class="text pending">(no speech detected)</div>` : '';
-    li.innerHTML = `<button class="play" title="play">${record.id === playingId ? '■' : '▶'}</button><span class="who">${esc(record.author)}</span><span class="meta">${esc(record.layer)} · ${fmtDur(record.durationMs)}${record.anchor.objectId ? ' · ' + esc(record.anchor.objectId) : ''}</span><button class="del" title="delete">✕</button>${text}`;
+    const periodLabel = record.period ? (record.period.label || [record.period.from, record.period.to].filter(Boolean).join('–')) : '';
+    const badges = (record.replies ? `<span class="badge" title="replies">↩ ${record.replies}</span>` : '') + (periodLabel ? `<span class="period" title="period">${esc(periodLabel)}</span>` : '');
+    const prompt = record.prompt ? `<div class="prompt">Q: ${esc(record.prompt)}</div>` : '';
+    li.innerHTML = `<button class="play" title="play">${record.id === playingId ? '■' : '▶'}</button><span class="who">${esc(record.author)}</span><span class="meta">${esc(record.layer)} · ${fmtDur(record.durationMs)}${record.anchor.objectId ? ' · ' + esc(record.anchor.objectId) : ''}</span>${badges}<button class="del" title="delete">✕</button>${prompt}${text}`;
     li.querySelector('.play').addEventListener('click', () => play(record.id));
     li.querySelector('.del').addEventListener('click', () => deleteAnnotation(record.id));
     li.querySelector('.retry')?.addEventListener('click', () => annotationsApi.transcribe(project.id, record.id).catch((e) => setStatus('retry failed: ' + e.message)));
@@ -535,44 +610,91 @@ scene.add(cursor);
 let anchorSource = null;             // Object3D whose aim decides the anchor while recording
 let starting = null;                 // source whose recording is still waiting on the microphone
 let releasedEarly = false;           // trigger/button let go before the microphone was ready
+let recOpts = {};                    // { parent } for a reply
+let releaseAt = 0;                   // performance.now() at the release that ended the clip
+let lastPlacementMs = null;          // release -> provisional marker visible, measured on the last clip
 
-async function beginRecording(source) {
+// Author head pose over the clip, sampled at POSE_HZ from the camera's world
+// transform (the headset pose in XR, the desktop camera otherwise).
+const POSE_HZ = 10;
+const pose = { samples: [], timer: null, t0: 0 };
+const _pp = new THREE.Vector3(), _pq = new THREE.Quaternion();
+function poseStart() {
+  pose.samples = []; pose.t0 = performance.now();
+  poseSample();
+  pose.timer = setInterval(poseSample, 1000 / POSE_HZ);
+}
+function poseSample() {
+  camera.getWorldPosition(_pp); camera.getWorldQuaternion(_pq);
+  pose.samples.push({ t: Math.round(performance.now() - pose.t0), p: [_pp.x, _pp.y, _pp.z], q: [_pq.x, _pq.y, _pq.z, _pq.w] });
+}
+function poseStop() { clearInterval(pose.timer); pose.timer = null; poseSample(); return pose.samples; }
+
+async function beginRecording(source, opts = {}) {
   if (recorder.isRecording || starting) return;
   if (!project) return setStatus('no project');
   if (!hud.author.value.trim()) return setStatus('enter your name first');
   if (!hud.consent.checked) return setStatus('tick consent first');
-  starting = source; releasedEarly = false;
+  if ('speechSynthesis' in window) speechSynthesis.cancel();   // never record over our own voice
+  starting = source; releasedEarly = false; recOpts = opts;
   setStatus('starting microphone…');
   try { await recorder.start(); } catch (e) { starting = null; return setStatus('mic blocked: ' + e.message); }
   starting = null;
   anchorSource = source;
-  cursor.visible = true;
+  poseStart();
+  cursor.visible = !opts.parent;
   hud.rec.classList.add('on'); crosshair.classList.add('rec');
-  setStatus('recording… (' + hud.layer.value + ')');
+  const q = currentQuestion();
+  setStatus(opts.parent ? 'recording a reply…' : q ? `recording answer ${qIndex + 1}…` : 'recording… (' + hud.layer.value + ')');
   if (releasedEarly) endRecording();  // the first press on a cold mic: honour the release that already happened
 }
 
 // Release of the button/trigger that started a recording. Safe to call while the mic is still warming up.
 function releaseRecording(source) {
   if (starting === source) { releasedEarly = true; return; }
-  if (recorder.isRecording && anchorSource === source) endRecording();
+  if (recorder.isRecording && anchorSource === source) { releaseAt = performance.now(); endRecording(); }
 }
+
+// A provisional marker goes into the scene at release, before the clip is
+// encoded or uploaded, so the mark lands where the user is still looking.
+const pendingMarkers = new Set();
+function placeProvisional(anchor) {
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(MARKER_RADIUS, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, wireframe: true }));
+  mesh.position.copy(anchor);
+  scene.add(mesh); pendingMarkers.add(mesh);
+  lastPlacementMs = Math.round(performance.now() - releaseAt);
+  return mesh;
+}
+function clearProvisional(mesh) { scene.remove(mesh); pendingMarkers.delete(mesh); }
 
 async function endRecording() {
   if (!recorder.isRecording) return;
-  const { point: anchor, objectId } = aimPoint(anchorSource);
+  const opts = recOpts; recOpts = {};
+  const parentRec = opts.parent ? markers.get(opts.parent)?.record : null;
+  const { point: anchor, objectId } = parentRec
+    ? { point: new THREE.Vector3(parentRec.anchor.x, parentRec.anchor.y, parentRec.anchor.z), objectId: parentRec.anchor.objectId }
+    : aimPoint(anchorSource);
+  const provisional = placeProvisional(anchor);
+  const samples = poseStop();
   const clip = await recorder.stop();
   cursor.visible = false;
   hud.rec.classList.remove('on'); crosshair.classList.remove('rec');
-  if (!clip) return setStatus('too short, discarded');
+  if (!clip) { clearProvisional(provisional); return setStatus('too short, discarded'); }
   setStatus('saving…');
+  const q = currentQuestion();
   try {
     const rec = await annotationsApi.create({
       project: project.id, ...clip, anchor, objectId, author: hud.author.value.trim(), layer: hud.layer.value, consent: true,
+      parent: parentRec?.id, pose: samples,
+      prompt: q?.text, mode: q ? 'interview' : 'walk',
     });
-    setStatus(`saved ${fmtDur(clip.durationMs)} at (${anchor.x.toFixed(2)}, ${anchor.y.toFixed(2)}, ${anchor.z.toFixed(2)})${objectId ? ' on ' + objectId : ''}`);
+    clearProvisional(provisional);
+    setStatus(parentRec ? `saved reply to ${parentRec.author}` : `saved ${fmtDur(clip.durationMs)} at (${anchor.x.toFixed(2)}, ${anchor.y.toFixed(2)}, ${anchor.z.toFixed(2)})${objectId ? ' on ' + objectId : ''}`);
     addMarker(rec);                  // local echo; server broadcast is deduped by id
+    if (parentRec) { const m = markers.get(parentRec.id); if (m) { m.record = { ...m.record, replies: (m.record.replies || 0) + 1 }; renderList(); } }
+    if (q) stepQuestion(1);
   } catch (e) {
+    clearProvisional(provisional);
     setStatus('save failed: ' + e.message);
   }
 }
@@ -707,6 +829,7 @@ window.addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (e.code === 'KeyK') beginRecording(camera);
   if (e.code === 'KeyL') releaseRecording(camera);
+  if (e.code === 'KeyR' && !e.repeat) { const hit = aimMarker(camera); if (hit) beginRecording(camera, { parent: hit }); else setStatus('aim at a marker to reply to it'); }
   if (e.code === 'Space') { const hit = aimMarker(camera); if (hit) play(hit); }
   if (e.code === 'Delete' || e.code === 'Backspace') {
     const hit = aimMarker(camera);
@@ -715,14 +838,14 @@ window.addEventListener('keydown', (e) => {
     else { pendingDelete = hit; setStatus('press Delete again to delete this annotation'); setTimeout(() => { if (pendingDelete === hit) pendingDelete = null; }, 2500); }
   }
 });
-window.addEventListener('keyup', (e) => keys.delete(e.code));
+window.addEventListener('keyup', (e) => { keys.delete(e.code); if (e.code === 'KeyR') releaseRecording(camera); });
 
 // ---- network ---------------------------------------------------------------
 
 const net = connect({
   onAll: (all) => { clearMarkers(); all.forEach(addMarker); setStatus(`loaded ${markers.size}`); },
   onNew: (a) => a.project === project?.id && addMarker(a),
-  onDeleted: removeMarker,
+  onDeleted: (d) => { removeMarker(d); renderList(); },
   onUpdated: (a) => {                 // transcript arrived (or failed) for an existing marker
     const m = markers.get(a.id);
     if (!m || a.project !== project?.id) return;
@@ -735,7 +858,9 @@ const net = connect({
     if (p.id !== project?.id) return;
     const key = (x) => JSON.stringify((x.assets || []).map((a) => [a.id, a.url, a.visible, a.options]));
     const changed = key(p) !== key(project);
+    const settingsChanged = p.language !== project.language || JSON.stringify(p.script) !== JSON.stringify(project.script);
     project = p;
+    if (settingsChanged) projectToHud();
     if (changed) await showAssets(p);
     else { for (const a of p.assets || []) { const e = loaded.get(a.id); if (e) e.asset = a; } renderAssets(); }
   },
@@ -749,6 +874,9 @@ if (import.meta.env.DEV) window.__glossy = {
   get project() { return project; }, get selected() { return selected(); }, get playingId() { return playingId; },
   get status() { return hud.status.textContent; },
   get captured() { return captured(); },
+  get lastPlacementMs() { return lastPlacementMs; },
+  get pending() { return pendingMarkers.size; },
+  get interview() { return { on: hud.interview.checked, index: qIndex, question: currentQuestion()?.text || null, total: questions().length }; },
   autoFit, frameAll, applyTransform, aimPoint, aimMarker, floorBelow, spawnInside,
 };
 

@@ -21,7 +21,7 @@ The original ran on the WebVR API, which browsers removed in 2020. Nothing in th
 | Environment | a textured box | any mix of glTF/GLB, PLY, PCD, OBJ, Gaussian splats, photos, panoramas, and video per project |
 | Anchoring | fixed offset from the controller | the surface the user points at, with the mesh name |
 | Build | script tags, jQuery, `node_modules` committed | Vite, ES modules, no framework |
-| Record shape | `{id, x, y, z, audioObject}` | author, timestamp, anchor, layer, consent, transcript with word timestamps |
+| Record shape | `{id, x, y, z, audioObject}` | author, timestamp, anchor, period, layer, consent, transcript with word timestamps, head pose over the clip, parent (replies), prompt (interview) |
 
 The server also no longer emits the previous record instead of the one just saved, a bug noted in the 2016 commit log.
 
@@ -50,29 +50,52 @@ Tested on 12 Oct 2026 with public-domain or permissively licensed files: Khronos
   "author": "Ainsley",
   "createdAt": "2026-10-12T12:25:36.267Z",
   "anchor": { "x": 0.1, "y": 0.9, "z": -1.2, "objectId": "pot" },
+  "period": { "from": "1950", "to": "1965", "label": "harvest years" },
+  "parent": null,
+  "replies": 2,
+  "mode": "interview",
+  "prompt": "Where did the family eat in summer?",
+  "language": null,
+  "pose": [{ "t": 0, "p": [0.4, 1.6, 0.6], "q": [0, 0.38, 0, 0.92] }, { "t": 100, "p": [0.4, 1.6, 0.6], "q": [0.01, 0.4, 0, 0.92] }],
   "layer": "review",
   "audioUrl": "/audio/011e1a87-….webm",
   "durationMs": 1000,
   "transcript": "The lamp on the table is broken.",
-  "transcription": { "status": "done", "words": [{ "w": "The", "s": 0, "e": 0.2 }, { "w": "lamp", "s": 0.2, "e": 0.5 }], "language": null, "backend": "local", "model": "onnx-community/whisper-base_timestamped", "ms": 540 },
+  "transcription": { "status": "done", "words": [{ "w": "The", "s": 0, "e": 0.2 }, { "w": "lamp", "s": 0.2, "e": 0.5 }], "language": "en", "detected": true, "backend": "local", "model": "onnx-community/whisper-base_timestamped", "ms": 760 },
   "consent": true
 }
 ```
 
-`GET /api/projects/:id/export` returns a project with all its annotations; `GET /api/export` returns everything.
+- `period` is the temporal reference: free-form `from`, `to`, `label` strings (years, dates, "always"), or `null` when unspecified. It can be set at creation or afterwards with `PATCH …/annotations/:aid {period}`.
+- `parent` makes the record a reply to another clip in the same project; a reply shares its parent's anchor and shows as a small marker above it. `replies` counts them. Erasing the parent keeps the replies as roots.
+- `pose` is the author's head position and orientation sampled at 10 Hz for the length of the clip, in scene coordinates (the headset in XR, the desktop camera otherwise). It is what lets a later viewer see where the speaker was looking at a given word.
+- `prompt` and `mode` record that the clip was an answer to a question in interview mode (below); otherwise `mode` is `walk`.
+- `language` is a per-clip transcription language, rarely set; the project's language or detection usually decides. The detected or applied language is in `transcription.language`, with `detected` saying which.
+
+`GET /api/projects/:id/export` returns the project and its contributions; `GET /api/export` returns every project the same way. Each contribution carries `attribution`, `timestamp`, `anchor`, `period`, `parent`, `mode`, `prompt`, `layer`, `consent`, `audio`, `durationMs`, `language`, `transcript`, `words` and `pose`, so a set can be reviewed, filtered by period or mapped to another schema without the viewer. Erasing a clip removes the row, the audio file and the derived data, and the export no longer contains it.
+
+## Interview mode and replies
+
+A project can hold a script: an ordered list of questions, edited in the HUD's Interview panel or set with `PATCH /api/projects/:id {script: {questions: [{text}]}}`. With interview mode ticked, the HUD shows one question at a time, **Ask** reads it aloud through the browser's speech synthesis (never while the microphone is open), and every clip recorded answers the current question: it is saved with `mode: "interview"` and `prompt` set to the question, and the panel advances. The intended use is a guided session with a former resident or an expert during prototyping, on a screen or in the headset, with the record written as they speak. The script is plain data, so a dialogue model can replace the fixed list later without changing what is stored.
+
+To reply to a clip on desktop, aim at its marker and hold `R`; release to save. The reply records like any other clip, but with `parent` set and the parent's anchor. The HUD list nests replies under their parent and shows a reply count on it.
+
+On release of the button or trigger, a provisional marker is placed in the scene before the clip is encoded or uploaded, so the mark lands where the speaker was still looking (the suite measures this at about 1 ms); the saved marker replaces it.
 
 ## Transcription
 
 Every clip is transcribed on the server after it is saved, off the request path. The record carries `transcript` (plain text) and `transcription` (`status`: `pending`, `done`, `failed`, or `skipped`; plus `words` as `[{w, s, e}]` with second offsets, `language`, `backend`, `model`, `ms`). Clients in the project receive `annotation:updated` when the text lands; the HUD list shows it under each entry and the crosshair status quotes it on hover. `POST /api/projects/:id/annotations/:aid/transcribe` re-runs one clip, and jobs left pending by a previous run are picked up on boot.
 
-The default backend is Whisper running locally through transformers.js (ONNX on CPU, no Python): `onnx-community/whisper-base_timestamped`, quantised, about 77 MB downloaded on first use into `~/.cache/glossy-xr/models`. A two-second clip takes about half a second on an Apple laptop. Decoding needs `ffmpeg` on the PATH (or `FFMPEG=/path/to/ffmpeg`); without it the server logs a warning and marks clips `failed`. Language is auto-detected.
+The default backend is Whisper running locally through transformers.js (ONNX on CPU, no Python): `onnx-community/whisper-base_timestamped`, quantised, about 77 MB downloaded on first use into `~/.cache/glossy-xr/models`. A two-second clip takes about half a second on an Apple laptop, plus about 0.2 s for language detection. Decoding needs `ffmpeg` on the PATH (or `FFMPEG=/path/to/ffmpeg`); without it the server logs a warning and marks clips `failed`.
+
+Language is decided per clip: the clip's own `language` if set, else the project's (`PATCH /api/projects/:id {language: "tr"}`, or the select in the HUD), else `GLOSSY_LANGUAGE`, else the local backend detects it with one decoder step over Whisper's language tokens before transcribing. The library on its own would default to English without saying so, which is wrong for most of the speakers this tool is for. The suite checks a Turkish clip comes back as Turkish.
 
 | Variable | Default | |
 |---|---|---|
 | `GLOSSY_TRANSCRIBE` | `local` | `openai` uses the Whisper API with `OPENAI_API_KEY`; `none` disables transcription (records are marked `skipped`) |
 | `GLOSSY_WHISPER_MODEL` | `onnx-community/whisper-base_timestamped` | `whisper-small_timestamped` or `whisper-large-v3-turbo_timestamped` for better accuracy at more CPU |
 | `GLOSSY_WHISPER_DTYPE` | `q8` | `fp32`, `fp16`, `q4` |
-| `GLOSSY_LANGUAGE` | auto | ISO code to force, e.g. `tr` |
+| `GLOSSY_LANGUAGE` | unset | ISO code to force for every clip, e.g. `tr`; unset means per project, else detected |
 | `GLOSSY_MODEL_CACHE` | `~/.cache/glossy-xr/models` | |
 
 Word timestamps are kept so later work can jump playback to a word, tag a clip by its content, or make the set of annotations queryable.
@@ -104,7 +127,7 @@ or, for Quest over USB, `adb reverse tcp:5173 tcp:5173` and open `http://localho
 npm test               # headless end-to-end suite; npm run test:headed to watch it
 ```
 
-Playwright drives a headless Chromium with software WebGL, a fake microphone fed from a generated tone, and, for the headset path, Meta's Immersive Web Emulation Runtime (IWER) standing in for a Quest 3. The suite starts its own API server on `:3100` with a throwaway data directory and Vite on `:5174`, so a running dev session is untouched. It covers: rendering the default room; walking with floor following and stopping at a wall; hold-to-record through the mouse, playback, hover feedback, and two-press delete; transcription of the clip (on macOS the fake microphone speaks a sentence from the system voice, and the test checks the words come back) and the re-transcribe endpoint; a click released before the microphone is ready; live sync to a second client; entering VR through the real `VRButton`, recording with the emulated controller's trigger, and cycling layers with squeeze. `test/scene.spec.js` additionally uploads a real interior (OBJ + MTL + textures) when one is present at `../test-assets/interiors/fireplace_room` or `GLOSSY_TEST_SCENE`, and checks spawn on the floor, wall collision, and an annotation anchored to a named mesh. Screenshots land in `test-results/`.
+Playwright drives a headless Chromium with software WebGL, a fake microphone fed from a generated tone, and, for the headset path, Meta's Immersive Web Emulation Runtime (IWER) standing in for a Quest 3. The suite starts its own API server on `:3100` with a throwaway data directory and Vite on `:5174`, so a running dev session is untouched. It covers: rendering the default room; walking with floor following and stopping at a wall; hold-to-record through the mouse, playback, hover feedback, and two-press delete; transcription of the clip (on macOS the fake microphone speaks a sentence from the system voice, and the test checks the words come back) and the re-transcribe endpoint; head pose captured over the clip; the provisional marker placed within 100 ms of release; the export shape and that an erased clip leaves the export and the disk; replies by holding `R` on a marker; interview mode advancing through a script and stamping each clip with its question; setting a period after the fact; a click released before the microphone is ready; live sync to a second client; entering VR through the real `VRButton`, recording with the emulated controller's trigger, and cycling layers with squeeze. A second Playwright project (`chromium-tr`) runs the same browser with Turkish speech on the fake microphone (macOS `Yelda` voice) and checks language detection and the project-language override. `test/scene.spec.js` additionally uploads a real interior (OBJ + MTL + textures) when one is present at `../test-assets/interiors/fireplace_room` or `GLOSSY_TEST_SCENE`, and checks spawn on the floor, wall collision, and an annotation anchored to a named mesh. Screenshots land in `test-results/`.
 
 Headless Chromium refuses the Pointer Lock API, so the client falls back to a software mouse capture (same controls, cursor stays visible, Esc releases); that fallback is what the tests exercise, and it also covers embedding contexts where pointer lock is denied.
 
@@ -113,13 +136,13 @@ Headless Chromium refuses the Pointer Lock API, so the client falls back to a so
 | Method | Path | |
 |---|---|---|
 | GET / POST | `/api/projects` | list; create `{name}` |
-| GET / PATCH / DELETE | `/api/projects/:id` | read (includes `assets[]`); rename; delete with files |
+| GET / PATCH / DELETE | `/api/projects/:id` | read (includes `assets[]`, `language`, `script`); update `{name, transform, language, script}`; delete with files |
 | GET / POST | `/api/projects/:id/assets` | list; add (multipart `model` plus optional `files` sidecars; `mode=sphere` for a panorama) |
 | PATCH / DELETE | `/api/projects/:id/assets/:aid` | update `{name, transform, options, visible, sort}`; remove |
-| GET / POST | `/api/projects/:id/annotations` | list; create (multipart `audio`, `x`, `y`, `z`, `author`, `layer`, `consent=true`, optional `objectId`, `durationMs`) |
+| GET / POST | `/api/projects/:id/annotations` | list; create (multipart `audio`, `x`, `y`, `z`, `author`, `layer`, `consent=true`; optional `objectId`, `durationMs`, `parent`, `period` (JSON), `pose` (JSON), `prompt`, `mode`, `language`) |
+| PATCH / DELETE | `/api/projects/:id/annotations/:aid` | update `{layer, period, consent}`; erase record, audio file and derived data |
 | POST | `/api/projects/:id/annotations/:aid/transcribe` | re-run speech-to-text for one clip (202) |
-| DELETE | `/api/projects/:id/annotations/:aid` | remove record and file |
-| GET | `/api/projects/:id/export`, `/api/export` | JSON export |
+| GET | `/api/projects/:id/export`, `/api/export` | JSON export, schema `glossy-xr/project/0.4`: project plus `contributions[]` |
 | GET | `/audio/<id>.webm`, `/models/<project>/<file>` | files |
 | Socket.IO | `join {project}` → `annotation:all`; then `annotation:new`, `annotation:updated` (transcript landed), `annotation:deleted`, `project:updated`, `project:created`, `project:deleted` | live sync |
 
@@ -127,7 +150,7 @@ Validation: anchor must be numeric, author required, consent must be `true`, mod
 
 ## Status
 
-Verified 12 Oct 2026: server round-trip (projects, model upload, annotations, export, delete, restart persistence) with curl; desktop client rendering, project switching, and every format in the table above in Chrome. Verified 13 Oct 2026 by the end-to-end suite: recording through `getUserMedia` and `MediaRecorder`, playback, delete, live sync, and the WebXR session and controller path against an emulated headset. Not yet verified on physical hardware: a real Quest.
+Verified 12 Oct 2026: server round-trip (projects, model upload, annotations, export, delete, restart persistence) with curl; desktop client rendering, project switching, and every format in the table above in Chrome. Verified 13 Oct 2026 by the end-to-end suite: recording through `getUserMedia` and `MediaRecorder`, playback, delete, live sync, and the WebXR session and controller path against an emulated headset. Verified 15 Oct 2026 by the suite: language detection (Turkish and English), per-project language, head pose, provisional placement, export, replies, interview mode, periods. Not yet verified on physical hardware: a real Quest.
 
 ## Known limits
 
@@ -139,7 +162,8 @@ Verified 12 Oct 2026: server round-trip (projects, model upload, annotations, ex
 ## Roadmap
 
 - Companion web form bound to an existing anchor: text, photos, consent from a phone or tablet, no headset needed.
-- Export mapped to standard metadata schemas.
+- Export mapped to standard metadata schemas (the contribution record already carries what Europeana Data Model and CIDOC-CRM mappings need).
+- A time control in the viewer that filters by `period`; replies from the controller in XR; a dialogue model driving the interview script.
 - Accounts, project membership, share links, object storage for files.
 - Production transcription: the local CPU backend is for development; a deployment should either switch to the API backend (`GLOSSY_TRANSCRIBE=openai`) or run a larger Whisper model on a box with the CPU or GPU for it.
 

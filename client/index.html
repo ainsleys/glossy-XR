@@ -52,6 +52,12 @@
       #annList .meta { color: #9ab; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       #annList button { width: auto; padding: 1px 6px; font-size: 11px; }
       #annList .del { color: #f88; }
+      #annList li.reply { margin-left: 18px; border-left: 2px solid #345; }
+      #annList .badge { color: #6cf; font-size: 11px; white-space: nowrap; }
+      #annList .period { color: #d9b36c; font-size: 11px; white-space: nowrap; }
+      #annList .prompt { flex: 1 0 100%; padding: 0 0 0 30px; color: #8a9bb0; font-size: 11px; font-style: italic; }
+      #interviewPanel #question { font-size: 13px; color: #fff; margin: 6px 0; min-height: 1.4em; }
+      #interviewPanel .row button { flex: 1 1 0; }
       #crosshair { position: fixed; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; pointer-events: none; z-index: 5; }
       #crosshair::before, #crosshair::after { content: ''; position: absolute; background: rgba(255,255,255,.8); }
       #crosshair::before { left: 8px; top: 0; width: 2px; height: 18px; }
@@ -80,9 +86,36 @@
         <option value="review">review</option>
         <option value="final">final</option>
       </select>
+      <label for="language">Transcription language (project)</label>
+      <select id="language">
+        <option value="">detect automatically</option>
+        <option value="tr">Türkçe (tr)</option>
+        <option value="en">English (en)</option>
+        <option value="de">Deutsch (de)</option>
+        <option value="fr">français (fr)</option>
+        <option value="es">español (es)</option>
+        <option value="it">italiano (it)</option>
+        <option value="ar">العربية (ar)</option>
+        <option value="el">ελληνικά (el)</option>
+        <option value="pl">polski (pl)</option>
+      </select>
       <div class="row" style="margin-top:6px"><input type="checkbox" id="consent" /><label for="consent" style="margin:0">I consent to my recording being stored and shared</label></div>
       <div class="row" style="margin-top:4px"><input type="checkbox" id="walk" checked /><label for="walk" style="margin:0" title="Floor-following and wall collision on desktop; untick to fly with Q/E">Walk mode (collide with the scene)</label></div>
       <div id="status"><span id="rec"></span><span id="statusText">connecting…</span></div>
+
+      <details id="interviewPanel">
+        <summary>Interview</summary>
+        <div class="row" style="margin-top:4px"><input type="checkbox" id="interview" /><label for="interview" style="margin:0" title="Ask the project's questions one at a time; each clip you record answers the current question">Interview mode</label></div>
+        <div id="question">no script: add questions below</div>
+        <div class="row">
+          <button id="prevQ" title="previous question">‹</button>
+          <button id="askQ" title="read the question aloud">Ask</button>
+          <button id="nextQ" title="next question">›</button>
+        </div>
+        <label for="scriptText">Questions, one per line (saved to the project)</label>
+        <textarea id="scriptText" rows="4" style="width:100%;box-sizing:border-box;font:inherit;background:#111;color:#eee;border:1px solid #444;border-radius:4px;padding:5px 6px"></textarea>
+        <button id="saveScript" style="margin-top:4px">Save questions</button>
+      </details>
 
       <details id="annPanel" open>
         <summary>Annotations</summary>
@@ -117,7 +150,7 @@
 
       <div id="help">
         Headset: trigger = record (release to save) or play the marker you point at; squeeze = cycle layer.<br />
-        Desktop: click once to capture the mouse, then <b>hold the mouse button to record</b> at the crosshair and release to save; click a marker to play it (again to stop), <kbd>Delete</kbd> twice removes the marker you aim at. <kbd>W A S D</kbd> move, <kbd>Q</kbd>/<kbd>E</kbd> down/up when not walking, <kbd>Esc</kbd> releases the mouse. (<kbd>K</kbd>/<kbd>L</kbd>/<kbd>Space</kbd> still work.)
+        Desktop: click once to capture the mouse, then <b>hold the mouse button to record</b> at the crosshair and release to save; click a marker to play it (again to stop), hold <kbd>R</kbd> while aiming at a marker to record a reply to it, <kbd>Delete</kbd> twice removes the marker you aim at. <kbd>W A S D</kbd> move, <kbd>Q</kbd>/<kbd>E</kbd> down/up when not walking, <kbd>Esc</kbd> releases the mouse. (<kbd>K</kbd>/<kbd>L</kbd>/<kbd>Space</kbd> still work.)
         Annotations anchor to the surface you point at.
         <a id="exportLink" href="/api/export" target="_blank">Export JSON</a>
       </div>

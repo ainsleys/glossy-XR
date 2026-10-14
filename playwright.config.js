@@ -15,14 +15,25 @@ const API_PORT = 3100, VITE_PORT = 5174;
 // it is a tone and transcript tests only check that the pipeline completes.
 export const SPOKEN = 'The lamp on the table is broken. The lamp on the table is broken.';
 export const SPEECH_WORDS = /lamp|table|broken/i;
-function fakeMic() {
-  const wav = path.join(os.tmpdir(), 'glossy-test-mic.wav');
+// Turkish fixture for the language test (macOS ships the Yelda voice)
+export const SPOKEN_TR = 'Pekmez kazanı avluda, asmanın altında dururdu. Pekmez kazanı avluda, asmanın altında dururdu.';
+export const SPEECH_WORDS_TR = /pekmez|kazan|avlu|asma|durur/i;
+function fakeMic(name, text, voice) {
+  const wav = path.join(os.tmpdir(), name);
   if (process.platform === 'darwin') {
-    try { execFileSync('say', ['--file-format=WAVE', '--data-format=LEI16@16000', '-o', wav, SPOKEN]); process.env.GLOSSY_TEST_SPEECH = '1'; return wav; } catch {}
+    try { execFileSync('say', [...(voice ? ['-v', voice] : []), '--file-format=WAVE', '--data-format=LEI16@16000', '-o', wav, text]); process.env.GLOSSY_TEST_SPEECH = '1'; return wav; } catch {}
   }
   return writeToneWav(wav);
 }
-const tone = fakeMic();
+const tone = fakeMic('glossy-test-mic.wav', SPOKEN);
+const toneTr = fakeMic('glossy-test-mic-tr.wav', SPOKEN_TR, 'Yelda');
+const launchArgs = (mic) => [
+  '--use-fake-ui-for-media-stream',
+  '--use-fake-device-for-media-stream',
+  `--use-file-for-fake-audio-capture=${mic}`,
+  '--autoplay-policy=no-user-gesture-required',
+  '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist',
+];
 
 export default defineConfig({
   testDir: './test',
@@ -39,17 +50,13 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
     permissions: ['microphone'],
-    launchOptions: {
-      args: [
-        '--use-fake-ui-for-media-stream',
-        '--use-fake-device-for-media-stream',
-        `--use-file-for-fake-audio-capture=${tone}`,
-        '--autoplay-policy=no-user-gesture-required',
-        '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist',
-      ],
-    },
+    launchOptions: { args: launchArgs(tone) },
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /turkish/ },
+    // same browser, Turkish speech on the fake microphone
+    { name: 'chromium-tr', use: { ...devices['Desktop Chrome'], launchOptions: { args: launchArgs(toneTr) } }, testMatch: /turkish/ },
+  ],
   webServer: [
     {
       command: `rm -rf .test-data && GLOSSY_DATA=.test-data PORT=${API_PORT} node --disable-warning=ExperimentalWarning server/index.js`,

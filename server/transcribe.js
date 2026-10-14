@@ -5,14 +5,18 @@
 // through the model one at a time, and come back as text plus word
 // timestamps. First use downloads the model into GLOSSY_MODEL_CACHE
 // (~/.cache/glossy-xr/models). An OpenAI Whisper backend is available for
-// machines without the CPU budget. Nothing here is specific to a project:
-// language is auto-detected unless GLOSSY_LANGUAGE pins it.
+// machines without the CPU budget. Nothing here is specific to a project.
+//
+// Language: a job may pass `language` (ISO code) from the annotation or its
+// project; otherwise GLOSSY_LANGUAGE; otherwise the local backend detects it
+// with one decoder step over the language tokens (about 200 ms) before
+// transcribing. The library itself would silently default to English.
 //
 //   GLOSSY_TRANSCRIBE      local (default) | openai | none
 //   GLOSSY_WHISPER_MODEL   HF id, default onnx-community/whisper-base_timestamped
 //                          (whisper-small_timestamped, whisper-large-v3-turbo_timestamped for better accuracy)
 //   GLOSSY_WHISPER_DTYPE   q8 (default) | fp32 | fp16 | q4
-//   GLOSSY_LANGUAGE        ISO code to force, e.g. en, tr; unset = detect
+//   GLOSSY_LANGUAGE        ISO code to force for every clip, e.g. en, tr; unset = per project, else detect
 //   GLOSSY_MODEL_CACHE     where models are stored
 //   FFMPEG                 path to ffmpeg if not on PATH
 //   OPENAI_API_KEY         for the openai backend
@@ -52,10 +56,12 @@ async function ffmpegAvailable() {
 
 function localBackend(log) {
   let pipelinePromise = null;
+  let Tensor = null;
   const load = () => {
     if (pipelinePromise) return pipelinePromise;
     pipelinePromise = (async () => {
-      const { pipeline, env } = await import('@huggingface/transformers');
+      const { pipeline, env, Tensor: T } = await import('@huggingface/transformers');
+      Tensor = T;
       env.cacheDir = CACHE;
       fs.mkdirSync(CACHE, { recursive: true });
       const t0 = Date.now();
@@ -70,6 +76,19 @@ function localBackend(log) {
     pipelinePromise.catch(() => { pipelinePromise = null; });   // allow a retry after a failed download
     return pipelinePromise;
   };
+  // One decoder step from <|startoftranscript|>: the highest-scoring language
+  // token is the detected language. Returns null for English-only models.
+  async function detectLanguage(asr, audio) {
+    const gc = asr.model.generation_config;
+    if (!gc?.is_multilingual || !gc.lang_to_id) return null;
+    const feats = await asr.processor(audio);
+    const out = await asr.model({ ...feats, decoder_input_ids: new Tensor('int64', [BigInt(gc.decoder_start_token_id)], [1, 1]) });
+    const data = out.logits.data, vocab = out.logits.dims.at(-1);
+    const last = data.subarray(data.length - vocab);
+    let best = null;
+    for (const [tok, id] of Object.entries(gc.lang_to_id)) if (best === null || last[id] > last[best.id]) best = { tok, id };
+    return best ? best.tok.slice(2, -2) : null;
+  }
   return {
     name: 'local', model: MODEL,
     warm: load,
@@ -77,9 +96,11 @@ function localBackend(log) {
       const asr = await load();
       const audio = await decodeToPcm(file);
       if (audio.length < 1600) return { text: '', words: [], language };
-      const out = await asr(audio, { return_timestamps: 'word', chunk_length_s: 30, language: language || null, task: 'transcribe' });
+      let detected = false;
+      if (!language) { language = await detectLanguage(asr, audio); detected = true; }
+      const out = await asr(audio, { return_timestamps: 'word', chunk_length_s: 30, language: language || 'en', task: 'transcribe' });
       const words = (out.chunks || []).map((c) => ({ w: c.text.trim(), s: round(c.timestamp[0]), e: round(c.timestamp[1]) })).filter((c) => c.w);
-      return { text: out.text.trim(), words, language };
+      return { text: out.text.trim(), words, language, detected };
     },
   };
 }
@@ -100,7 +121,7 @@ function openaiBackend() {
       const res = await fetch('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { authorization: `Bearer ${key}` }, body: fd });
       if (!res.ok) throw new Error(`openai ${res.status}: ${(await res.text()).slice(0, 200)}`);
       const j = await res.json();
-      return { text: (j.text || '').trim(), words: (j.words || []).map((w) => ({ w: w.word, s: round(w.start), e: round(w.end) })), language: j.language || language };
+      return { text: (j.text || '').trim(), words: (j.words || []).map((w) => ({ w: w.word, s: round(w.start), e: round(w.end) })), language: j.language || language, detected: !language };
     },
   };
 }
@@ -146,7 +167,7 @@ export function createTranscriber({ log = console } = {}) {
 
   return {
     get enabled() { return !!backend; },
-    info: () => ({ backend: backend?.name || 'none', model: backend?.model || null, language: LANGUAGE || 'auto', queued: queue.length + (busy ? 1 : 0), unavailable }),
+    info: () => ({ backend: backend?.name || 'none', model: backend?.model || null, language: LANGUAGE || 'per project, else detected', queued: queue.length + (busy ? 1 : 0), unavailable }),
     enqueue(id, file, opts, done) { queue.push({ id, file, opts, done }); pump(); },
     ready: () => ready,
   };

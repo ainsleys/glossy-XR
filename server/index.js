@@ -5,8 +5,11 @@
 // client when it connects. Since then:
 //   - audio and models live on disk as files, metadata in SQLite (node:sqlite)
 //   - a project owns one model (GLB/glTF, PLY, PCD, OBJ, splat) and its annotations
-//   - every annotation carries author, timestamp, spatial anchor and layer, so
-//     a set can be filtered, reviewed and exported without the viewer
+//   - every annotation carries author, timestamp, spatial anchor, layer and an
+//     optional temporal reference (period), so a set can be filtered, reviewed
+//     and exported without the viewer; a reply carries its parent; a clip made
+//     in interview mode carries the question it answers; the author's head pose
+//     over the clip is stored alongside
 //   - the "lagging one behind" bug is gone: the server emits the record it just
 //     saved, not the last record in the table
 //   - GET /api/projects/:id/export returns one project as a JSON document
@@ -45,12 +48,14 @@ const transcriber = createTranscriber({ log: console });
 function queueTranscription(record) {
   if (!transcriber.enabled) return;
   const file = path.join(AUDIO_DIR, path.basename(record.audioUrl));
-  transcriber.enqueue(record.id, file, {}, (err, result) => {
+  // language: the clip's own setting, else the project's, else the backend detects
+  const language = record.language || db.projects.get(record.project)?.language || undefined;
+  transcriber.enqueue(record.id, file, { language }, (err, result) => {
     const cur = db.annotations.get(record.project, record.id);
     if (!cur) return;                                        // deleted while queued
     const updated = err
       ? db.annotations.setTranscript(record.project, record.id, { transcript: cur.transcript, status: 'failed', meta: { error: err.message } })
-      : db.annotations.setTranscript(record.project, record.id, { transcript: result.text, status: 'done', meta: { words: result.words, language: result.language, backend: result.backend, model: result.model, ms: result.ms } });
+      : db.annotations.setTranscript(record.project, record.id, { transcript: result.text, status: 'done', meta: { words: result.words, language: result.language, detected: !!result.detected, backend: result.backend, model: result.model, ms: result.ms } });
     io.to(record.project).emit('annotation:updated', updated);
   });
 }
@@ -71,7 +76,36 @@ const safeName = (n) => path.basename(n).replace(/[^\w.\-]+/g, '_').slice(0, 120
 
 // ---- validation ------------------------------------------------------------
 
-function validateAnnotation(body) {
+const LANG_RE = /^[a-z]{2,3}(-[A-Za-z]{2,8})?$/;
+const MAX_POSE_SAMPLES = 6000;                  // 10 Hz for ten minutes
+
+/** Temporal reference: { from, to, label } with free-form strings (years, dates, "always"); null clears it. */
+function parsePeriod(v) {
+  if (v === undefined) return undefined;
+  if (v === null || v === '' || v === 'null') return null;
+  const o = typeof v === 'string' ? JSON.parse(v) : v;
+  if (!o || typeof o !== 'object') throw new Error('period must be an object');
+  const str = (k) => (o[k] === undefined || o[k] === null ? undefined : String(o[k]).trim().slice(0, 60) || undefined);
+  const out = { from: str('from'), to: str('to'), label: str('label') };
+  if (!out.from && !out.to && !out.label) return null;
+  return out;
+}
+
+/** Head pose over the clip: [{t, p:[x,y,z], q:[x,y,z,w]}], t in ms from the start of recording. */
+function parsePose(v) {
+  if (v === undefined || v === null || v === '') return [];
+  const arr = typeof v === 'string' ? JSON.parse(v) : v;
+  if (!Array.isArray(arr)) throw new Error('pose must be an array');
+  const r3 = (n) => Math.round(Number(n) * 1000) / 1000, r4 = (n) => Math.round(Number(n) * 10000) / 10000;
+  return arr.slice(0, MAX_POSE_SAMPLES).map((s) => {
+    if (!s || !Array.isArray(s.p) || s.p.length !== 3 || !Array.isArray(s.q) || s.q.length !== 4) throw new Error('pose sample must have p[3] and q[4]');
+    const out = { t: Math.max(0, Math.round(Number(s.t) || 0)), p: s.p.map(r3), q: s.q.map(r4) };
+    if ([...out.p, ...out.q].some((n) => !Number.isFinite(n))) throw new Error('pose values must be numbers');
+    return out;
+  });
+}
+
+function validateAnnotation(body, projectId) {
   const errors = [];
   const num = (v) => (v === undefined || v === null || v === '' ? NaN : Number(v));
   const x = num(body.x), y = num(body.y), z = num(body.z);
@@ -82,7 +116,15 @@ function validateAnnotation(body) {
   const objectId = body.objectId ? String(body.objectId).slice(0, 200) : undefined;
   const consent = body.consent === 'true' || body.consent === true;
   if (!consent) errors.push('consent must be true');
-  return { errors, x, y, z, author, layer, objectId, consent };
+  let parent = body.parent ? String(body.parent).slice(0, 80) : null;
+  if (parent && !db.annotations.get(projectId, parent)) { errors.push('parent annotation not found'); parent = null; }
+  let period = null, pose = [];
+  try { period = parsePeriod(body.period) ?? null; } catch (e) { errors.push('period: ' + e.message); }
+  try { pose = parsePose(body.pose); } catch (e) { errors.push('pose: ' + e.message); }
+  const prompt = body.prompt ? String(body.prompt).trim().slice(0, 500) : null;
+  const mode = body.mode === 'interview' ? 'interview' : 'walk';
+  const language = body.language && LANG_RE.test(String(body.language)) ? String(body.language) : null;
+  return { errors, x, y, z, author, layer, objectId, consent, parent, period, pose, prompt, mode, language };
 }
 
 // ---- http ------------------------------------------------------------------
@@ -150,10 +192,32 @@ app.get('/api/projects/:id', projectOr404, (req, res) => res.json(req.project));
 app.patch('/api/projects/:id', projectOr404, (req, res) => {
   const name = req.body?.name !== undefined ? String(req.body.name).trim().slice(0, 120) : undefined;
   const transform = req.body?.transform !== undefined ? sanitizeTransform(req.body.transform) : undefined;
-  const p = db.projects.update(req.params.id, { name, transform });
+  let language, script;
+  if (req.body?.language !== undefined) {
+    language = req.body.language ? String(req.body.language) : null;
+    if (language && !LANG_RE.test(language)) return res.status(400).json({ error: 'language must be an ISO code such as en or tr' });
+  }
+  if (req.body?.script !== undefined) {
+    script = req.body.script ? sanitizeScript(req.body.script) : null;
+    if (script === false) return res.status(400).json({ error: 'script must be { questions: [{ text }] }' });
+  }
+  const p = db.projects.update(req.params.id, { name, transform, language, script });
   io.emit('project:updated', p);
   res.json(p);
 });
+
+// Interview script: an ordered list of questions the client asks before each
+// clip. Each question keeps `text` and an optional `id`; extra keys (e.g.
+// translations) are kept as given.
+function sanitizeScript(sc) {
+  if (!sc || typeof sc !== 'object' || !Array.isArray(sc.questions)) return false;
+  const questions = sc.questions.slice(0, 200).map((q, i) => {
+    const o = typeof q === 'string' ? { text: q } : q;
+    if (!o || typeof o !== 'object' || !o.text) return null;
+    return { ...o, id: String(o.id || `q${i + 1}`).slice(0, 40), text: String(o.text).trim().slice(0, 500) };
+  }).filter(Boolean);
+  return { ...sc, questions };
+}
 app.delete('/api/projects/:id', projectOr404, async (req, res) => {
   for (const a of db.annotations.list(req.params.id)) await fsp.unlink(path.join(AUDIO_DIR, path.basename(a.audioUrl))).catch(() => {});
   await fsp.rm(path.join(MODEL_DIR, req.params.id), { recursive: true, force: true });
@@ -221,7 +285,7 @@ app.get('/api/projects/:id/annotations', projectOr404, (req, res) => res.json(db
 
 app.post('/api/projects/:id/annotations', projectOr404, audioUpload.single('audio'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'audio file is required' });
-  const v = validateAnnotation(req.body);
+  const v = validateAnnotation(req.body, req.params.id);
   if (v.errors.length) {
     await fsp.unlink(req.file.path).catch(() => {});
     return res.status(400).json({ error: v.errors.join('; ') });
@@ -231,10 +295,23 @@ app.post('/api/projects/:id/annotations', projectOr404, audioUpload.single('audi
     author: v.author, x: v.x, y: v.y, z: v.z, objectId: v.objectId, layer: v.layer,
     audioUrl: `/audio/${req.file.filename}`, durationMs: Number(req.body.durationMs) || null, consent: true,
     transcriptStatus: transcriber.enabled ? 'pending' : 'skipped',
+    parent: v.parent, period: v.period, pose: v.pose, prompt: v.prompt, mode: v.mode, language: v.language,
   });
   io.to(req.params.id).emit('annotation:new', record);     // the record we just saved, to everyone in the project
   res.status(201).json(record);
   queueTranscription(record);
+});
+
+// edit the fields a reviewer may change after the fact: layer, period (temporal reference), consent
+app.patch('/api/projects/:id/annotations/:aid', projectOr404, (req, res) => {
+  const patch = {};
+  if (req.body?.layer !== undefined) patch.layer = String(req.body.layer).trim().slice(0, 120) || 'default';
+  if (req.body?.consent !== undefined) patch.consent = !!req.body.consent;
+  try { if (req.body?.period !== undefined) patch.period = parsePeriod(req.body.period); } catch (e) { return res.status(400).json({ error: 'period: ' + e.message }); }
+  const a = db.annotations.update(req.params.id, req.params.aid, patch);
+  if (!a) return res.status(404).end();
+  io.to(req.params.id).emit('annotation:updated', a);
+  res.json(a);
 });
 
 // (re)run speech-to-text for one annotation
@@ -248,6 +325,8 @@ app.post('/api/projects/:id/annotations/:aid/transcribe', projectOr404, (req, re
   queueTranscription(record);
 });
 
+// Erase: the row, its audio file and its derived data go together. Replies to
+// the erased clip stay but lose their parent.
 app.delete('/api/projects/:id/annotations/:aid', projectOr404, async (req, res) => {
   const gone = db.annotations.remove(req.params.id, req.params.aid);
   if (!gone) return res.status(404).end();
@@ -256,18 +335,29 @@ app.delete('/api/projects/:id/annotations/:aid', projectOr404, async (req, res) 
   res.status(204).end();
 });
 
+// Export. Every contribution carries attribution (author), timestamp
+// (createdAt), spatial anchor (anchor, in the project's scene coordinates) and
+// temporal reference (period, null when unspecified), plus transcript, word
+// timestamps, head pose, parent (for replies), prompt and mode.
+function exportProject(p) {
+  const annotations = db.annotations.list(p.id);
+  return {
+    project: p,
+    contributions: annotations.map((a) => ({
+      id: a.id, attribution: a.author, timestamp: a.createdAt, anchor: a.anchor, period: a.period,
+      parent: a.parent, mode: a.mode, prompt: a.prompt, layer: a.layer, consent: a.consent,
+      audio: a.audioUrl, durationMs: a.durationMs, language: a.transcription?.language || a.language || null,
+      transcript: a.transcript, words: a.transcription?.words || [], pose: a.pose,
+    })),
+  };
+}
 app.get('/api/projects/:id/export', projectOr404, (req, res) => {
   res.setHeader('Content-Disposition', `attachment; filename="glossy-${req.params.id}.json"`);
-  res.json({
-    exportedAt: new Date().toISOString(),
-    schema: 'glossy-xr/project/0.3',
-    project: req.project,
-    annotations: db.annotations.list(req.params.id),
-  });
+  res.json({ exportedAt: new Date().toISOString(), schema: 'glossy-xr/project/0.4', ...exportProject(req.project) });
 });
 app.get('/api/export', (_req, res) => {
   res.setHeader('Content-Disposition', 'attachment; filename="glossy-all.json"');
-  res.json({ exportedAt: new Date().toISOString(), schema: 'glossy-xr/all/0.3', projects: db.projects.list(), annotations: db.annotations.listAll() });
+  res.json({ exportedAt: new Date().toISOString(), schema: 'glossy-xr/all/0.4', projects: db.projects.list().map(exportProject) });
 });
 
 // serve the built client in production

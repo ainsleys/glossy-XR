@@ -73,3 +73,12 @@ export async function recordWithMouse(page, ms = 1200) {
   await page.mouse.up();
   await expect.poll(() => markerCount(page), { timeout: 10_000 }).toBe(before + 1);   // status flips to hover text as soon as the new marker sits under the crosshair
 }
+
+/** The project's export document. */
+export const exportProject = async (request, projectId) => (await request.get(`${API}/api/projects/${projectId}/export`)).json();
+export const listAnnotations = async (request, projectId) => (await request.get(`${API}/api/projects/${projectId}/annotations`)).json();
+/** Aim the camera at a marker and wait until the crosshair reports it. */
+export async function aimAtMarker(page, id) {
+  await page.evaluate((id) => { const g = window.__glossy; g.camera.lookAt(g.markers.get(id).mesh.position); g.camera.updateMatrixWorld(true); }, id);
+  await expect.poll(() => page.evaluate(() => window.__glossy.aimMarker(window.__glossy.camera))).toBe(id);
+}

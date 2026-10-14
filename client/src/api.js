@@ -36,7 +36,9 @@ export const annotations = {
   list: (project) => fetch(`/api/projects/${project}/annotations`).then(json),
   remove: (project, id) => fetch(`/api/projects/${project}/annotations/${id}`, { method: 'DELETE' }).then(json),
   transcribe: (project, id) => fetch(`/api/projects/${project}/annotations/${id}/transcribe`, { method: 'POST' }).then(json),
-  create: async ({ project, blob, durationMs, anchor, author, layer, consent, objectId }) => {
+  update: (project, id, patch) => fetch(`/api/projects/${project}/annotations/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then(json),
+  /** parent: id of the annotation this one replies to; pose: head samples over the clip; prompt/mode: interview question answered */
+  create: async ({ project, blob, durationMs, anchor, author, layer, consent, objectId, parent, period, pose, prompt, mode, language }) => {
     const fd = new FormData();
     fd.append('audio', blob, 'clip');
     fd.append('x', anchor.x); fd.append('y', anchor.y); fd.append('z', anchor.z);
@@ -45,6 +47,12 @@ export const annotations = {
     fd.append('layer', layer);
     fd.append('consent', String(consent));
     fd.append('durationMs', durationMs);
+    if (parent) fd.append('parent', parent);
+    if (period) fd.append('period', JSON.stringify(period));
+    if (pose?.length) fd.append('pose', JSON.stringify(pose));
+    if (prompt) fd.append('prompt', prompt);
+    if (mode) fd.append('mode', mode);
+    if (language) fd.append('language', language);
     return fetch(`/api/projects/${project}/annotations`, { method: 'POST', body: fd }).then(json);
   },
 };
