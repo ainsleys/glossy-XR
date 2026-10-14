@@ -34,6 +34,11 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 const LAYERS = ['default', 'draft', 'review', 'final'];
 const MARKER_RADIUS = 0.06;
 const PLAY_DISTANCE = 1.2;                        // metres; walk near a marker and it plays
+// A crowded room stays readable: only the nearest MAX_FULL markers within
+// FULL_DISTANCE draw at full size; the rest are abstracted to small faint
+// dots until approached. Nothing is hidden by this rule.
+const MAX_FULL = 40, FULL_DISTANCE = 8;
+const OLD_AFTER_DAYS = 180;                       // clips older than this are drawn a little dimmer
 const DEFAULT_TRANSFORM = { scale: 1, rotX: 0, rotY: 0, rotZ: 0, x: 0, y: 0, z: 0, pointSize: 0.01 };
 
 // ---- HUD -------------------------------------------------------------------
@@ -45,7 +50,7 @@ const hud = {
   assetList: $('assetList'), assetFile: $('assetFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), annList: $('annList'),
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
-  walk: $('walk'), language: $('language'),
+  walk: $('walk'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'),
   interview: $('interview'), question: $('question'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
 };
 const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
@@ -496,7 +501,7 @@ function addMarker(record) {
   sound.setRolloffFactor(2);
   mesh.add(sound);
   audioLoader.load(record.audioUrl, (buffer) => sound.setBuffer(buffer));
-  markers.set(record.id, { mesh, sound, record });
+  markers.set(record.id, { mesh, sound, record, dist: Infinity });
   updateCount();
   applyLayerFilter();
   renderList();
@@ -513,24 +518,84 @@ function removeMarker({ id }) {
 }
 function clearMarkers() { for (const id of [...markers.keys()]) removeMarker({ id }); }
 function updateCount() { hud.count.textContent = `${markers.size} annotation${markers.size === 1 ? '' : 's'}`; }
+
 function applyLayerFilter() {
   for (const { mesh, record } of markers.values()) {
     const active = record.layer === hud.layer.value;
     mesh.material.opacity = active ? 1 : 0.25;
-    mesh.material.transparent = !active;
+    mesh.material.transparent = true;
     mesh.userData.baseScale = active ? 1 : 0.7;
+    mesh.userData.layerActive = active;
+    mesh.visible = inTime(record);
   }
+  updateYearBounds();
 }
 hud.layer.addEventListener('change', () => { applyLayerFilter(); renderList(); });
 
+// ---- time as a navigation axis -----------------------------------------------
+// Every record may carry a period {from, to}. With "all periods" unticked the
+// year slider is the viewer's position in time: clips whose period includes
+// the year stay, clips outside it disappear, and clips with no period are
+// timeless and always stay.
+const yearOf = (v, d) => { const n = parseInt(String(v ?? ''), 10); return Number.isFinite(n) ? n : d; };
+function inTime(record) {
+  if (hud.timeAll.checked || !record.period) return true;
+  const y = Number(hud.year.value);
+  return yearOf(record.period.from, -Infinity) <= y && y <= yearOf(record.period.to, Infinity);
+}
+function updateYearBounds() {
+  let min = Infinity, max = -Infinity;
+  for (const { record } of markers.values()) {
+    if (!record.period) continue;
+    const a = yearOf(record.period.from, NaN), b = yearOf(record.period.to, NaN);
+    if (Number.isFinite(a)) { min = Math.min(min, a); max = Math.max(max, a); }
+    if (Number.isFinite(b)) { min = Math.min(min, b); max = Math.max(max, b); }
+  }
+  const has = Number.isFinite(min);
+  hud.year.disabled = hud.timeAll.checked || !has;
+  if (has) { hud.year.min = min; hud.year.max = max; if (Number(hud.year.value) < min || Number(hud.year.value) > max) hud.year.value = max; }
+  const vis = [...markers.values()].filter((m) => m.mesh.visible).length;
+  hud.yearLabel.textContent = hud.timeAll.checked ? (has ? `${min}–${max}` : '') : `${hud.year.value} · ${vis}/${markers.size}`;
+}
+function applyTime() {
+  for (const m of markers.values()) {
+    m.mesh.visible = inTime(m.record);
+    if (!m.mesh.visible && m.sound.isPlaying) { m.sound.stop(); if (playingId === m.record.id) stopAll(); }
+  }
+  updateYearBounds();
+  renderList();
+  if (!hud.timeAll.checked) setStatus(`year ${hud.year.value}: ${[...markers.values()].filter((m) => m.mesh.visible).length} of ${markers.size} clips in view`);
+}
+hud.timeAll.addEventListener('change', applyTime);
+hud.year.addEventListener('input', applyTime);
+
 // Markers keep a readable size on screen: bigger when far, smaller when close.
+// In a crowded room only the nearest MAX_FULL within FULL_DISTANCE are drawn in
+// full; the others become small faint dots (still there, still hoverable).
 const tmpV = new THREE.Vector3();
+const fullSet = new Set();
+let frameNo = 0;
 function scaleMarkers() {
   camera.getWorldPosition(tmpV);
+  if (frameNo++ % 10 === 0) {                                               // re-rank every tenth frame
+    const ranked = [];
+    for (const m of markers.values()) if (m.mesh.visible) { m.dist = m.mesh.position.distanceTo(tmpV); ranked.push(m); }
+    ranked.sort((a, b) => a.dist - b.dist);
+    fullSet.clear();
+    for (const m of ranked) { if (fullSet.size >= MAX_FULL || m.dist > FULL_DISTANCE) break; fullSet.add(m.record.id); }
+    const cutoff = Date.now() - OLD_AFTER_DAYS * 86400e3;
+    for (const m of markers.values()) {
+      const full = fullSet.has(m.record.id) || m.mesh.userData.playing || m.mesh.userData.hover || m.dist < PLAY_DISTANCE * 1.5;
+      m.mesh.userData.full = full;
+      const old = Date.parse(m.record.createdAt) < cutoff;
+      m.mesh.material.opacity = (m.mesh.userData.layerActive === false ? 0.25 : full ? 1 : 0.35) * (old ? 0.8 : 1);
+      if (!m.mesh.userData.playing && !m.mesh.userData.hover) m.mesh.material.emissiveIntensity = old ? 0.2 : 0.35;
+    }
+  }
   for (const { mesh } of markers.values()) {
     const d = mesh.position.distanceTo(tmpV);
     const r = THREE.MathUtils.clamp(0.012 * d, 0.02, 0.15);              // world radius, ~0.7° of view
-    mesh.scale.setScalar((mesh.userData.baseScale ?? 1) * (mesh.userData.playing ? 1.3 : mesh.userData.hover ? 1.15 : 1) * r / MARKER_RADIUS);
+    mesh.scale.setScalar((mesh.userData.baseScale ?? 1) * (mesh.userData.playing ? 1.3 : mesh.userData.hover ? 1.15 : mesh.userData.full === false ? 0.5 : 1) * r / MARKER_RADIUS);
     if (mesh.userData.reply) mesh.scale.multiplyScalar(0.75);
   }
 }
@@ -591,7 +656,7 @@ function renderList() {
   const ul = hud.annList;
   ul.innerHTML = '';
   // newest first; replies directly under their parent, oldest reply first
-  const all = [...markers.values()].map((m) => m.record);
+  const all = [...markers.values()].filter((m) => m.mesh.visible).map((m) => m.record);
   const byParent = new Map();
   for (const r of all) if (r.parent) byParent.set(r.parent, [...(byParent.get(r.parent) || []), r]);
   const roots = all.filter((r) => !r.parent || !markers.has(r.parent)).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -746,7 +811,7 @@ function aimRay(source) {
 }
 function aimMarker(source) {
   aimRay(source);
-  const hit = raycaster.intersectObjects(markerGroup.children, false)[0];
+  const hit = raycaster.intersectObjects(markerGroup.children, false).find((h) => h.object.visible);   // hidden by the time filter: not a target
   return hit?.object.userData.id || null;
 }
 function aimPoint(source) {
@@ -883,6 +948,7 @@ const net = connect({
     if (m.record.layer !== a.layer) { m.mesh.material.color.copy(layerColor(a.layer)); m.mesh.material.emissive.copy(layerColor(a.layer)); }
     m.record = a;
     applyLayerFilter();
+    m.mesh.visible = inTime(a);
     renderList();
     if (hoverId === a.id) { hoverId = null; updateHover(); }
   },
@@ -908,6 +974,9 @@ if (import.meta.env.DEV) window.__glossy = {
   get status() { return hud.status.textContent; },
   get captured() { return captured(); },
   get lastPlacementMs() { return lastPlacementMs; },
+  visibleIds: () => [...markers.values()].filter((m) => m.mesh.visible).map((m) => m.record.id),
+  fullIds: () => [...markers.values()].filter((m) => m.mesh.visible && m.mesh.userData.full !== false).map((m) => m.record.id),
+  nearestId: () => { camera.getWorldPosition(tmpV); let best = null, bd = Infinity; for (const m of markers.values()) { if (!m.mesh.visible) continue; const d = m.mesh.position.distanceTo(tmpV); if (d < bd) { bd = d; best = m.record.id; } } return best; },
   get pending() { return pendingMarkers.size; },
   get interview() { return { on: hud.interview.checked, index: qIndex, question: currentQuestion()?.text || null, total: questions().length }; },
   autoFit, frameAll, applyTransform, aimPoint, aimMarker, floorBelow, spawnInside,
@@ -963,7 +1032,7 @@ renderer.setAnimationLoop(() => {
   // proximity playback for the active layer: walk up to a marker and it plays
   camera.getWorldPosition(near);
   for (const { mesh, sound, record } of markers.values()) {
-    if (record.layer !== hud.layer.value || !sound.buffer) continue;
+    if (record.layer !== hud.layer.value || !sound.buffer || !mesh.visible) continue;
     const d = mesh.position.distanceTo(near);
     if (d < PLAY_DISTANCE && !sound.isPlaying && !mesh.userData.played) { mesh.userData.played = true; play(record.id); }
     if (d > PLAY_DISTANCE * 1.5) mesh.userData.played = false;

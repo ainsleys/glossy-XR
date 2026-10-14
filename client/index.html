@@ -101,6 +101,10 @@
       </select>
       <div class="row" style="margin-top:6px"><input type="checkbox" id="consent" /><label for="consent" style="margin:0">I consent to my recording being stored and shared</label></div>
       <div class="row" style="margin-top:4px"><input type="checkbox" id="walk" checked /><label for="walk" style="margin:0" title="Floor-following and wall collision on desktop; untick to fly with Q/E">Walk mode (collide with the scene)</label></div>
+      <div id="timeRow">
+        <div class="row" style="margin-top:6px"><input type="checkbox" id="timeAll" checked /><label for="timeAll" style="margin:0" title="Untick to move through time: only clips whose period includes the year stay, plus timeless ones">All periods</label><span id="yearLabel" style="flex:0 0 auto;color:#d9b36c;font-variant-numeric:tabular-nums"></span></div>
+        <input type="range" id="year" min="1900" max="2026" step="1" value="2026" disabled style="padding:0;margin-top:4px" />
+      </div>
       <div id="status"><span id="rec"></span><span id="statusText">connecting…</span></div>
 
       <details id="interviewPanel">
