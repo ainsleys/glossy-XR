@@ -60,7 +60,8 @@ export function openDb(dataDir) {
     ['transcript_status', 'TEXT'], ['transcript_meta', 'TEXT'],
     ['parent_id', 'TEXT'],          // reply to another annotation in the same project
     ['period', 'TEXT'],             // temporal reference: JSON {from, to, label} or NULL = unspecified
-    ['pose', 'TEXT'],               // author head pose over the clip: JSON [{t, p:[x,y,z], q:[x,y,z,w]}]
+    ['pose', 'TEXT'],               // author viewpoint over the clip: JSON [{t, p:[x,y,z], q:[x,y,z,w]}]
+    ['pose_source', 'TEXT'],        // xr (headset pose) | desktop (mouse-steered camera)
     ['prompt', 'TEXT'],             // the question this clip answers (interview mode)
     ['mode', 'TEXT'],               // walk | interview
     ['language', 'TEXT'],           // language requested for transcription; detected language lives in transcript_meta
@@ -90,8 +91,8 @@ export function openDb(dataDir) {
     getAnnotation: db.prepare(`SELECT * FROM annotations WHERE id = ? AND project_id = ?`),
     insertAnnotation: db.prepare(`
       INSERT INTO annotations (id, project_id, author, created_at, x, y, z, object_id, layer, audio_url, duration_ms, transcript, transcript_status, consent,
-                               parent_id, period, pose, prompt, mode, language)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+                               parent_id, period, pose, pose_source, prompt, mode, language)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
     updateAnnotation: db.prepare(`UPDATE annotations SET layer = ?, period = ?, consent = ? WHERE id = ? AND project_id = ?`),
     countReplies: db.prepare(`SELECT COUNT(*) AS n FROM annotations WHERE parent_id = ? AND project_id = ?`),
     setTranscript: db.prepare(`UPDATE annotations SET transcript = ?, transcript_status = ?, transcript_meta = ? WHERE id = ? AND project_id = ?`),
@@ -127,7 +128,7 @@ export function openDb(dataDir) {
     parent: r.parent_id || null,
     replies: Number(q.countReplies.get(r.id, r.project_id).n),
     mode: r.mode || 'walk', prompt: r.prompt || null, language: r.language || null,
-    pose: safeJson(r.pose, []),
+    pose: safeJson(r.pose, []), poseSource: r.pose_source || null,
     layer: r.layer, audioUrl: r.audio_url, durationMs: r.duration_ms, transcript: r.transcript, consent: !!r.consent,
     transcription: { status: r.transcript_status || (r.transcript ? 'done' : 'none'), ...safeJson(r.transcript_meta) },
   });
@@ -183,7 +184,7 @@ export function openDb(dataDir) {
         q.insertAnnotation.run(id, projectId, a.author, t, a.x, a.y, a.z, a.objectId ?? null, a.layer || 'default',
           a.audioUrl, a.durationMs ?? null, a.transcript ?? null, a.transcriptStatus ?? (a.transcript ? 'done' : 'pending'), a.consent ? 1 : 0,
           a.parent ?? null, a.period ? JSON.stringify(a.period) : null, a.pose?.length ? JSON.stringify(a.pose) : null,
-          a.prompt ?? null, a.mode ?? null, a.language ?? null);
+          a.pose?.length ? (a.poseSource || null) : null, a.prompt ?? null, a.mode ?? null, a.language ?? null);
         q.touchProject.run(t, projectId);
         return api.annotations.get(projectId, id);
       },

@@ -614,13 +614,15 @@ let recOpts = {};                    // { parent } for a reply
 let releaseAt = 0;                   // performance.now() at the release that ended the clip
 let lastPlacementMs = null;          // release -> provisional marker visible, measured on the last clip
 
-// Author head pose over the clip, sampled at POSE_HZ from the camera's world
-// transform (the headset pose in XR, the desktop camera otherwise).
+// The author's viewpoint over the clip, sampled at POSE_HZ from the camera's
+// world transform. In XR that is the headset pose; on desktop it is the
+// mouse-steered virtual camera, recorded with poseSource 'desktop' so a viewer
+// never mistakes it for a gaze path.
 const POSE_HZ = 10;
-const pose = { samples: [], timer: null, t0: 0 };
+const pose = { samples: [], timer: null, t0: 0, source: 'desktop' };
 const _pp = new THREE.Vector3(), _pq = new THREE.Quaternion();
 function poseStart() {
-  pose.samples = []; pose.t0 = performance.now();
+  pose.samples = []; pose.t0 = performance.now(); pose.source = renderer.xr.isPresenting ? 'xr' : 'desktop';
   poseSample();
   pose.timer = setInterval(poseSample, 1000 / POSE_HZ);
 }
@@ -685,7 +687,7 @@ async function endRecording() {
   try {
     const rec = await annotationsApi.create({
       project: project.id, ...clip, anchor, objectId, author: hud.author.value.trim(), layer: hud.layer.value, consent: true,
-      parent: parentRec?.id, pose: samples,
+      parent: parentRec?.id, pose: samples, poseSource: pose.source,
       prompt: q?.text, mode: q ? 'interview' : 'walk',
     });
     clearProvisional(provisional);

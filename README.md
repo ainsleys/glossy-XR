@@ -57,6 +57,7 @@ Tested on 12 Oct 2026 with public-domain or permissively licensed files: Khronos
   "prompt": "Where did the family eat in summer?",
   "language": null,
   "pose": [{ "t": 0, "p": [0.4, 1.6, 0.6], "q": [0, 0.38, 0, 0.92] }, { "t": 100, "p": [0.4, 1.6, 0.6], "q": [0.01, 0.4, 0, 0.92] }],
+  "poseSource": "xr",
   "layer": "review",
   "audioUrl": "/audio/011e1a87-….webm",
   "durationMs": 1000,
@@ -68,11 +69,11 @@ Tested on 12 Oct 2026 with public-domain or permissively licensed files: Khronos
 
 - `period` is the temporal reference: free-form `from`, `to`, `label` strings (years, dates, "always"), or `null` when unspecified. It can be set at creation or afterwards with `PATCH …/annotations/:aid {period}`.
 - `parent` makes the record a reply to another clip in the same project; a reply shares its parent's anchor and shows as a small marker above it. `replies` counts them. Erasing the parent keeps the replies as roots.
-- `pose` is the author's head position and orientation sampled at 10 Hz for the length of the clip, in scene coordinates (the headset in XR, the desktop camera otherwise). It is what lets a later viewer see where the speaker was looking at a given word.
+- `pose` is the author's viewpoint sampled at 10 Hz for the length of the clip, in scene coordinates, and `poseSource` says what produced it: `xr` for the headset pose, `desktop` for the mouse-steered virtual camera. The headset trace is a gaze path and lets a later viewer see where the speaker was looking at a given word; the desktop trace is only where the view was pointed, and a viewer should treat it as such or ignore it.
 - `prompt` and `mode` record that the clip was an answer to a question in interview mode (below); otherwise `mode` is `walk`.
 - `language` is a per-clip transcription language, rarely set; the project's language or detection usually decides. The detected or applied language is in `transcription.language`, with `detected` saying which.
 
-`GET /api/projects/:id/export` returns the project and its contributions; `GET /api/export` returns every project the same way. Each contribution carries `attribution`, `timestamp`, `anchor`, `period`, `parent`, `mode`, `prompt`, `layer`, `consent`, `audio`, `durationMs`, `language`, `transcript`, `words` and `pose`, so a set can be reviewed, filtered by period or mapped to another schema without the viewer. Erasing a clip removes the row, the audio file and the derived data, and the export no longer contains it.
+`GET /api/projects/:id/export` returns the project and its contributions; `GET /api/export` returns every project the same way. Each contribution carries `attribution`, `timestamp`, `anchor`, `period`, `parent`, `mode`, `prompt`, `layer`, `consent`, `audio`, `durationMs`, `language`, `transcript`, `words`, `pose` and `poseSource`, so a set can be reviewed, filtered by period or mapped to another schema without the viewer. Erasing a clip removes the row, the audio file and the derived data, and the export no longer contains it.
 
 ## Interview mode and replies
 

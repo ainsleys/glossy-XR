@@ -39,12 +39,16 @@ test('enters VR through VRButton and records with the controller trigger', async
   await expect.poll(() => status(page)).toMatch(/recording/);
   await page.waitForTimeout(1000);
   await page.evaluate(() => window.__xr.controllers.right.updateButtonValue('trigger', 0));
-  await expect.poll(() => status(page), { timeout: 10_000 }).toMatch(/^saved/);
-  expect(await markerCount(page)).toBe(1);
+  await expect.poll(() => markerCount(page), { timeout: 10_000 }).toBe(1);
+  // the new marker often sits under the controller ray, so the "saved" status gives way to its hover text at once
+  await expect.poll(() => status(page)).toMatch(/^saved|click to play/);
   const list = await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json();
   expect(list).toHaveLength(1);
   expect(list[0].author).toBe('HeadsetTester');
   expect(list[0].durationMs).toBeGreaterThanOrEqual(900);
+  expect(list[0].poseSource).toBe('xr');                 // headset pose, sampled over the clip
+  expect(list[0].pose.length).toBeGreaterThanOrEqual(8);
+  expect(list[0].pose[0].p[1]).toBeCloseTo(1.6, 0);       // emulated Quest at eye height
   await page.screenshot({ path: 'test-results/xr-presenting.png' });
 
   // squeeze cycles the layer

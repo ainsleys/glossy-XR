@@ -124,7 +124,8 @@ function validateAnnotation(body, projectId) {
   const prompt = body.prompt ? String(body.prompt).trim().slice(0, 500) : null;
   const mode = body.mode === 'interview' ? 'interview' : 'walk';
   const language = body.language && LANG_RE.test(String(body.language)) ? String(body.language) : null;
-  return { errors, x, y, z, author, layer, objectId, consent, parent, period, pose, prompt, mode, language };
+  const poseSource = body.poseSource === 'xr' ? 'xr' : 'desktop';
+  return { errors, x, y, z, author, layer, objectId, consent, parent, period, pose, poseSource, prompt, mode, language };
 }
 
 // ---- http ------------------------------------------------------------------
@@ -295,7 +296,7 @@ app.post('/api/projects/:id/annotations', projectOr404, audioUpload.single('audi
     author: v.author, x: v.x, y: v.y, z: v.z, objectId: v.objectId, layer: v.layer,
     audioUrl: `/audio/${req.file.filename}`, durationMs: Number(req.body.durationMs) || null, consent: true,
     transcriptStatus: transcriber.enabled ? 'pending' : 'skipped',
-    parent: v.parent, period: v.period, pose: v.pose, prompt: v.prompt, mode: v.mode, language: v.language,
+    parent: v.parent, period: v.period, pose: v.pose, poseSource: v.poseSource, prompt: v.prompt, mode: v.mode, language: v.language,
   });
   io.to(req.params.id).emit('annotation:new', record);     // the record we just saved, to everyone in the project
   res.status(201).json(record);
@@ -338,7 +339,8 @@ app.delete('/api/projects/:id/annotations/:aid', projectOr404, async (req, res) 
 // Export. Every contribution carries attribution (author), timestamp
 // (createdAt), spatial anchor (anchor, in the project's scene coordinates) and
 // temporal reference (period, null when unspecified), plus transcript, word
-// timestamps, head pose, parent (for replies), prompt and mode.
+// timestamps, the author's viewpoint over the clip with its source (headset
+// pose or desktop camera), parent (for replies), prompt and mode.
 function exportProject(p) {
   const annotations = db.annotations.list(p.id);
   return {
@@ -347,7 +349,7 @@ function exportProject(p) {
       id: a.id, attribution: a.author, timestamp: a.createdAt, anchor: a.anchor, period: a.period,
       parent: a.parent, mode: a.mode, prompt: a.prompt, layer: a.layer, consent: a.consent,
       audio: a.audioUrl, durationMs: a.durationMs, language: a.transcription?.language || a.language || null,
-      transcript: a.transcript, words: a.transcription?.words || [], pose: a.pose,
+      transcript: a.transcript, words: a.transcription?.words || [], pose: a.pose, poseSource: a.poseSource,
     })),
   };
 }

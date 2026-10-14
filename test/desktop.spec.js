@@ -63,6 +63,7 @@ test('records, saves, plays back, and deletes an annotation', async ({ page, req
   expect(a.pose[0].p[0]).toBeCloseTo(0.4, 1);
   expect(a.pose[0].p[1]).toBeCloseTo(1.6, 1);
   expect(a.pose[0].q).toHaveLength(4);
+  expect(a.poseSource).toBe('desktop');
   // the mark was placed at release, before the clip was encoded or uploaded
   const placement = await page.evaluate(() => window.__glossy.lastPlacementMs);
   console.log('placement latency ms', placement);

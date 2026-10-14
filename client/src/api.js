@@ -38,7 +38,7 @@ export const annotations = {
   transcribe: (project, id) => fetch(`/api/projects/${project}/annotations/${id}/transcribe`, { method: 'POST' }).then(json),
   update: (project, id, patch) => fetch(`/api/projects/${project}/annotations/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then(json),
   /** parent: id of the annotation this one replies to; pose: head samples over the clip; prompt/mode: interview question answered */
-  create: async ({ project, blob, durationMs, anchor, author, layer, consent, objectId, parent, period, pose, prompt, mode, language }) => {
+  create: async ({ project, blob, durationMs, anchor, author, layer, consent, objectId, parent, period, pose, poseSource, prompt, mode, language }) => {
     const fd = new FormData();
     fd.append('audio', blob, 'clip');
     fd.append('x', anchor.x); fd.append('y', anchor.y); fd.append('z', anchor.z);
@@ -49,7 +49,7 @@ export const annotations = {
     fd.append('durationMs', durationMs);
     if (parent) fd.append('parent', parent);
     if (period) fd.append('period', JSON.stringify(period));
-    if (pose?.length) fd.append('pose', JSON.stringify(pose));
+    if (pose?.length) { fd.append('pose', JSON.stringify(pose)); fd.append('poseSource', poseSource || 'desktop'); }
     if (prompt) fd.append('prompt', prompt);
     if (mode) fd.append('mode', mode);
     if (language) fd.append('language', language);
