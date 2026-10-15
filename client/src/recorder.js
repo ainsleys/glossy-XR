@@ -32,6 +32,7 @@ export class VoiceRecorder {
     this.rec.ondataavailable = (e) => e.data.size && this.chunks.push(e.data);
     this.rec.start(250);
     this.startedAt = performance.now();
+    this.onstart?.(this.stream);
   }
 
   /** @returns {Promise<{blob: Blob, durationMs: number} | null>} */

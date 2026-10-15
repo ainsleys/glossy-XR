@@ -367,3 +367,27 @@ test('visitor mode hides the operator controls, asks the script without a toggle
   expect(await markerCount(page)).toBe(1);
   expect(await listAnnotations(request, project.id)).toHaveLength(1);
 });
+
+test('recording shows a timer and a microphone level, and the selector count keeps up', async ({ page, request }) => {
+  const project = await openProject(page, request, 'level');
+  await prepareRecording(page, 'Tester');
+  await lockPointer(page);
+  await expect(page.locator('#hint')).toHaveText(/hold the mouse button: record here/);
+  await aimCamera(page, [0.4, 1.6, 0.6], [0.4, 0.79, -1.2]);
+  await page.mouse.move(640, 400);
+  await page.mouse.down();
+  await expect.poll(() => status(page), { timeout: 10_000 }).toMatch(/recording… \(default\) 0s/);
+  await expect(page.locator('#hint')).toHaveText(/release to save/);
+  await expect(page.locator('#level')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__glossy.level), { timeout: 5000 }).toBeGreaterThan(0.05);   // the fake microphone is not silent
+  await expect.poll(() => status(page), { timeout: 5000 }).toMatch(/recording… \(default\) [12]s/);
+  await page.mouse.up();
+  await expect.poll(() => markerCount(page), { timeout: 10_000 }).toBe(1);
+  await expect(page.locator('#level')).toBeHidden();
+  await expect(page.locator('#project option:checked')).toHaveText(/^level \(1\)/);   // not the stale server count
+  await expect(page.locator('#hint')).toHaveText(/click: play · hold R: reply · Delete ×2: erase/);   // the new marker is under the crosshair
+  // full markers carry a ring; the distance limit follows the room
+  expect(await page.evaluate(() => { const m = [...window.__glossy.markers.values()][0]; return m.mesh.userData.ring.visible; })).toBe(true);
+  expect(await page.evaluate(() => window.__glossy.fullDistance)).toBeCloseTo(4.5, 1);
+  expect(await listAnnotations(request, project.id)).toHaveLength(1);
+});

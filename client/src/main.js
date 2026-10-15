@@ -39,7 +39,8 @@ const DELETE_ARM_MS = 2500;                       // erase asks twice; the secon
 // A crowded room stays readable: only the nearest MAX_FULL markers within
 // FULL_DISTANCE draw at full size; the rest are abstracted to small faint
 // dots until approached. Nothing is hidden by this rule.
-const MAX_FULL = 40, FULL_DISTANCE = 8;
+const MAX_FULL = 40;
+let fullDistance = 4.5;                           // set from the scene's size in updateFullDistance()
 const OLD_AFTER_DAYS = 180;                       // clips older than this are drawn a little dimmer
 const DEFAULT_TRANSFORM = { scale: 1, rotX: 0, rotY: 0, rotZ: 0, x: 0, y: 0, z: 0, pointSize: 0.01 };
 
@@ -59,7 +60,7 @@ const hud = {
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
   walk: $('walk'), autoplay: $('autoplay'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
-  interview: $('interview'), visitorLink: $('visitorLink'), question: $('question'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
+  interview: $('interview'), visitorLink: $('visitorLink'), question: $('question'), level: $('level'), levelBar: $('levelBar'), hint: $('hint'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
 };
 const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 hud.author.value = ls.get('glossy.author', '');
@@ -129,8 +130,8 @@ const xrPanel = (() => {
   camera.add(mesh);
   let shown = '';
   const wrap = (text, max) => { const lines = []; let cur = ''; for (const w of String(text).split(/\s+/)) { const t = cur ? cur + ' ' + w : w; if (cur && ctx.measureText(t).width > max) { lines.push(cur); cur = w; } else cur = t; } if (cur) lines.push(cur); return lines; };
-  function draw(question, statusText, hint, recording) {
-    const key = [question, statusText, hint, recording ? 'R' : ''].join('\n');
+  function draw(question, statusText, hint, recording, level = 0) {
+    const key = [question, statusText, hint, recording ? 'R' : '', recording ? Math.round(level * 10) : ''].join('\n');
     if (key === shown) return;
     shown = key;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -141,6 +142,7 @@ const xrPanel = (() => {
     if (question) { ctx.fillStyle = '#fff'; ctx.font = '600 46px system-ui, sans-serif'; for (const l of wrap(question, canvas.width - 80).slice(0, 3)) { ctx.fillText(l, 40, y); y += 56; } y += 8; }
     if (statusText) { ctx.fillStyle = recording ? '#ff6b6b' : '#9f9'; ctx.font = '40px system-ui, sans-serif'; for (const l of wrap(statusText, canvas.width - 80).slice(0, 2)) { ctx.fillText(l, 40, y); y += 50; } }
     if (hint) { ctx.fillStyle = '#9ab'; ctx.font = '30px system-ui, sans-serif'; ctx.fillText(hint, 40, canvas.height - 34); }
+    if (recording) { ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(40, canvas.height - 14, canvas.width - 80, 6); ctx.fillStyle = '#ff6b6b'; ctx.fillRect(40, canvas.height - 14, (canvas.width - 80) * Math.min(1, level), 6); }
     tex.needsUpdate = true; mesh.visible = true;
   }
   return { mesh, draw, get text() { return shown; } };
@@ -150,7 +152,37 @@ function updateXrPanel() {
   const qs = questions(), q = currentQuestion();
   const question = q ? `${qIndex + 1}/${qs.length} · ${q.text}` : qs.length && qIndex >= qs.length ? 'all questions answered' : '';
   const hint = q ? (VISITOR ? 'squeeze: hear the question · hold the trigger to answer' : 'hold the trigger to answer') : '';
-  xrPanel.draw(question, hud.status.textContent, hint, hud.rec.classList.contains('on'));
+  xrPanel.draw(question, hud.status.textContent, hint, hud.rec.classList.contains('on'), level);
+}
+
+// The one-line key hint under the status, changing with state. Empty in the
+// headset, where the panel carries its own hints.
+let shownHint = null;
+function renderHint() {
+  let h = '';
+  if (renderer.xr.isPresenting) h = '';
+  else if (recorder.isRecording || starting) h = 'release to save · Esc also saves';
+  else if (!captured()) h = 'click the scene to take the mouse';
+  else if (hoverId) h = `click: play · hold R: reply${VISITOR ? '' : ' · Delete ×2: erase'}`;
+  else h = 'hold the mouse button: record here · walk up to a marker to read it · W A S D: move';
+  if (h !== shownHint) { shownHint = h; hud.hint.textContent = h; }
+}
+
+// Microphone level while recording, from an analyser on the capture stream,
+// shown as a bar in the HUD and on the headset panel. The timer is in the
+// status text ("recording… 3s").
+let level = 0, levelNode = null, levelData = null, levelSrc = null, recStatusBase = '', recSecs = -1;
+function updateLevel() {
+  if (!recorder.isRecording) { if (level) { level = 0; hud.levelBar.style.width = '0%'; } hud.level.classList.remove('on'); return; }
+  if (levelNode) {
+    levelNode.getByteTimeDomainData(levelData);
+    let s = 0; for (let i = 0; i < levelData.length; i++) { const v = (levelData[i] - 128) / 128; s += v * v; }
+    level = Math.min(1, Math.sqrt(s / levelData.length) * 4);
+  }
+  hud.level.classList.add('on');
+  hud.levelBar.style.width = `${Math.round(level * 100)}%`;
+  const secs = Math.floor((performance.now() - recorder.startedAt) / 1000);
+  if (secs !== recSecs) { recSecs = secs; setStatus(`${recStatusBase} ${secs}s`); }
 }
 
 // player rig so desktop movement and XR share one transform
@@ -207,6 +239,7 @@ async function showAssets(p) {
   renderAssets();
   await Promise.all(list.map((a, i) => loadAsset(a, i)));
   frameAll();
+  updateFullDistance();
   renderAssets();
 }
 
@@ -439,7 +472,8 @@ async function refreshProjectList() {
   hud.project.innerHTML = '';
   for (const p of list) {
     const o = document.createElement('option');
-    o.value = p.id; o.textContent = `${p.name} (${p.annotationCount})${p.assets?.length ? ' · ' + p.assets.length + ' asset' + (p.assets.length === 1 ? '' : 's') : ''}`;
+    o.value = p.id; o.dataset.name = p.name; o.dataset.suffix = p.assets?.length ? ' · ' + p.assets.length + ' asset' + (p.assets.length === 1 ? '' : 's') : '';
+    o.textContent = `${p.name} (${p.id === project?.id ? markers.size : p.annotationCount})${o.dataset.suffix}`;
     hud.project.appendChild(o);
   }
   if (project) hud.project.value = project.id;
@@ -566,6 +600,16 @@ function markerColor(record) {
   return new THREE.Color().setHSL(0.08 + 0.52 * t, old ? 0.3 : 0.75, old ? 0.45 : 0.55);
 }
 function recolour(m) { const c = markerColor(m.record); m.mesh.material.color.copy(c); m.mesh.material.emissive.copy(c); }
+const RING_GEO = new THREE.RingGeometry(MARKER_RADIUS * 1.5, MARKER_RADIUS * 1.8, 28);
+const RING_MAT = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false });
+// How far a marker may be and still draw in full: half the scene's diagonal,
+// so a 6 m room and a 40 m courtyard both thin by distance.
+function updateFullDistance() {
+  const box = new THREE.Box3();
+  for (const e of loaded.values()) if (e.model && e.group.visible && e.model.imageMode !== 'sphere') box.union(e.model.box.clone().applyMatrix4(e.group.matrixWorld));
+  if (box.isEmpty()) box.set(new THREE.Vector3(-3, 0, -3), new THREE.Vector3(3, 3, 3));   // the default room
+  fullDistance = Math.max(3, 0.5 * box.getSize(new THREE.Vector3()).length());
+}
 
 function addMarker(record) {
   if (markers.has(record.id)) return;
@@ -582,12 +626,16 @@ function addMarker(record) {
   mesh.userData.id = record.id;
   markerGroup.add(mesh);
   mesh.userData.reply = isReply;
+  const ring = new THREE.Mesh(RING_GEO, RING_MAT);        // the "full" state: a sphere with a ring; abstracted markers are bare dots
+  ring.visible = false; ring.raycast = () => {};
+  mesh.add(ring); mesh.userData.ring = ring;
   const sound = new THREE.PositionalAudio(listener);
   sound.setRefDistance(0.4);
   sound.setRolloffFactor(2);
   mesh.add(sound);
   audioLoader.load(record.audioUrl, (buffer) => sound.setBuffer(buffer));
   markers.set(record.id, { mesh, sound, record, dist: Infinity });
+  frameNo = 0;                                              // re-rank on the next frame rather than up to ten frames later
   updateCount();
   applyLayerFilter();
   renderList();
@@ -603,7 +651,11 @@ function removeMarker({ id }) {
   renderList();
 }
 function clearMarkers() { for (const id of [...markers.keys()]) removeMarker({ id }); }
-function updateCount() { hud.count.textContent = `${markers.size} annotation${markers.size === 1 ? '' : 's'}`; }
+function updateCount() {
+  hud.count.textContent = `${markers.size} annotation${markers.size === 1 ? '' : 's'}`;
+  const o = project && [...hud.project.options].find((o) => o.value === project.id);   // keep the selector's count in step
+  if (o) o.textContent = `${o.dataset.name} (${markers.size})${o.dataset.suffix || ''}`;
+}
 
 function applyLayerFilter() {
   for (const { mesh, record } of markers.values()) {
@@ -710,7 +762,7 @@ hud.year.addEventListener('input', applyTime);
 // Markers keep a readable size on screen: bigger when far, smaller when close.
 // In a crowded room only the nearest MAX_FULL within FULL_DISTANCE are drawn in
 // full; the others become small faint dots (still there, still hoverable).
-const tmpV = new THREE.Vector3();
+const tmpV = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
 const fullSet = new Set();
 let frameNo = 0;
 function scaleMarkers() {
@@ -720,7 +772,7 @@ function scaleMarkers() {
     for (const m of markers.values()) if (m.mesh.visible) { m.dist = m.mesh.position.distanceTo(tmpV); ranked.push(m); }
     ranked.sort((a, b) => a.dist - b.dist);
     fullSet.clear();
-    for (const m of ranked) { if (fullSet.size >= MAX_FULL || m.dist > FULL_DISTANCE) break; fullSet.add(m.record.id); }
+    for (const m of ranked) { if (fullSet.size >= MAX_FULL || m.dist > fullDistance) break; fullSet.add(m.record.id); }
     const cutoff = Date.now() - OLD_AFTER_DAYS * 86400e3;
     for (const m of markers.values()) {
       const full = fullSet.has(m.record.id) || m.mesh.userData.playing || m.mesh.userData.hover || m.dist < PLAY_DISTANCE * 1.5;
@@ -731,10 +783,14 @@ function scaleMarkers() {
     }
   }
   const now = performance.now();
+  camera.getWorldQuaternion(tmpQ);
   for (const { mesh } of markers.values()) {
     const d = mesh.position.distanceTo(tmpV);
     const r = THREE.MathUtils.clamp(0.012 * d, 0.02, 0.15);              // world radius, ~0.7° of view
-    mesh.scale.setScalar((mesh.userData.baseScale ?? 1) * (mesh.userData.playing ? 1.3 : mesh.userData.hover ? 1.3 : mesh.userData.full === false ? 0.5 : 1) * r / MARKER_RADIUS);
+    const full = mesh.userData.full !== false;
+    mesh.scale.setScalar((mesh.userData.baseScale ?? 1) * (mesh.userData.playing ? 1.3 : mesh.userData.hover ? 1.3 : full ? 1 : 0.35) * r / MARKER_RADIUS);
+    const ring = mesh.userData.ring;
+    if (ring) { ring.visible = full && mesh.visible; if (ring.visible) ring.quaternion.copy(tmpQ); }
     if (mesh.userData.reply) mesh.scale.multiplyScalar(0.75);
     if (mesh.userData.bloomUntil) {                                        // commit cue: swell and settle
       const left = (mesh.userData.bloomUntil - now) / BLOOM_MS;
@@ -871,6 +927,7 @@ function renderList() {
     const text = record.transcript ? `<div class="text">${esc(record.transcript)}</div>`
       : tr.status === 'pending' ? `<div class="text pending">transcribing…</div>`
       : tr.status === 'failed' ? `<div class="text failed" title="${esc(tr.error || '')}">transcription failed <button class="retry">retry</button></div>`
+      : tr.status === 'done' && tr.unclear ? `<div class="text pending" title="${esc(tr.raw || '')}">(unclear: the model repeated itself; try again closer to the microphone)</div>`
       : tr.status === 'done' ? `<div class="text pending">(no speech detected)</div>` : '';
     const periodLabel = record.period ? (record.period.label || [record.period.from, record.period.to].filter(Boolean).join('–')) : '';
     const badges = (record.replies ? `<span class="badge" title="replies">↩ ${record.replies}</span>` : '') + (periodLabel ? `<span class="period" title="period">${esc(periodLabel)}</span>` : '');
@@ -890,6 +947,19 @@ function renderList() {
 // ---- recording -------------------------------------------------------------
 
 const recorder = new VoiceRecorder();
+recorder.onstart = (stream) => {
+  try {
+    const ctx = listener.context;
+    if (ctx.state === 'suspended') ctx.resume();
+    if (!levelSrc || levelSrc.mediaStream !== stream) {
+      levelSrc?.disconnect();
+      levelSrc = ctx.createMediaStreamSource(stream);
+      levelNode = ctx.createAnalyser(); levelNode.fftSize = 512;
+      levelSrc.connect(levelNode);                         // analyser only; never to the destination (that would be feedback)
+      levelData = new Uint8Array(levelNode.fftSize);
+    }
+  } catch {}
+};
 const cursor = new THREE.Mesh(new THREE.SphereGeometry(MARKER_RADIUS * 1.2, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff3333, wireframe: true }));
 cursor.visible = false;
 scene.add(cursor);
@@ -934,7 +1004,9 @@ async function beginRecording(source, opts = {}) {
   cursor.visible = !opts.parent;
   hud.rec.classList.add('on'); crosshair.classList.add('rec');
   const q = currentQuestion();
-  setStatus(opts.parent ? 'recording a reply…' : q ? `recording answer ${qIndex + 1}…` : 'recording… (' + hud.layer.value + ')');
+  recStatusBase = opts.parent ? 'recording a reply…' : q ? `recording answer ${qIndex + 1}…` : VISITOR ? 'recording…' : 'recording… (' + hud.layer.value + ')';
+  recSecs = -1;
+  setStatus(recStatusBase + ' 0s');
   if (releasedEarly) endRecording();  // the first press on a cold mic: honour the release that already happened
 }
 
@@ -1174,7 +1246,7 @@ const net = connect({
 if (import.meta.env.DEV) window.__glossy = {
   scene, renderer, camera, rig, room, assetsRoot, loaded, markers, recorder, hud, keys, lock,
   get project() { return project; }, get selected() { return selected(); }, get playingId() { return playingId; }, get nearId() { return nearId; },
-  visitor: VISITOR, get lastAsked() { return lastAsked; }, xrPanel,
+  visitor: VISITOR, get lastAsked() { return lastAsked; }, xrPanel, get level() { return level; }, get fullDistance() { return fullDistance; },
   get status() { return hud.status.textContent; },
   get captured() { return captured(); },
   get lastPlacementMs() { return lastPlacementMs; },
@@ -1232,7 +1304,9 @@ renderer.setAnimationLoop(() => {
   else if (anchorSource && !starting && !recorder.isRecording) { resetRecordingUi(); setStatus('microphone stopped; nothing saved'); }   // the track ended under us
   updateHover();
   scaleMarkers();
+  updateLevel();
   updateXrPanel();
+  renderHint();
 
   // approach: the nearest visible marker within PLAY_DISTANCE is previewed; it
   // plays only with autoplay on (once per approach, active layer only)

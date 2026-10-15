@@ -22,7 +22,8 @@ test('a crowded room thins to the nearest markers and filters by year', async ({
 
   // thinning: nothing hidden, at most MAX_FULL drawn in full, and the nearest one is among them
   await aimCamera(page, [0, 1.6, 0], [0, 1.6, -3]);
-  await page.waitForTimeout(400);                               // a few frames so the ranking runs
+  // wait for a ranking taken from this camera position: it holds the nearest marker and at most MAX_FULL plus allowances
+  await expect.poll(() => page.evaluate(() => { const g = window.__glossy, f = g.fullIds(); return f.length <= 45 && f.includes(g.nearestId()); }), { timeout: 5000 }).toBe(true);
   const full = await page.evaluate(() => window.__glossy.fullIds());
   const visible = await page.evaluate(() => window.__glossy.visibleIds());
   expect(visible).toHaveLength(200);

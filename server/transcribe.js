@@ -22,6 +22,7 @@
 //   OPENAI_API_KEY         for the openai backend
 
 import { execFile } from 'node:child_process';
+import zlib from 'node:zlib';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -43,6 +44,22 @@ function run(cmd, args, opts = {}) {
 }
 
 /** Decode any container/codec ffmpeg knows to 16 kHz mono float32 samples. */
+/**
+ * Whisper's failure mode on short or noisy clips is a loop ("çabukla çabukla
+ * çabukla …"). Flags text where one token repeats four or more times in a row,
+ * where fewer than 40% of eight or more words are distinct, or (on longer
+ * text) where the gzip ratio passes 2.4, Whisper's own compression threshold.
+ */
+export function looksRepetitive(text) {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  if (/(\S+)(?:\s+\1){3,}(?!\S)/iu.test(t)) return true;
+  const words = t.toLowerCase().split(/\s+/);
+  if (words.length >= 8 && new Set(words).size / words.length < 0.4) return true;
+  if (t.length >= 200) { const z = zlib.gzipSync(Buffer.from(t)); if (t.length / z.length > 2.4) return true; }
+  return false;
+}
+
 export async function decodeToPcm(file) {
   const buf = await run(FFMPEG, ['-v', 'error', '-i', file, '-f', 'f32le', '-ac', '1', '-ar', '16000', '-']);
   return new Float32Array(buf.buffer, buf.byteOffset, Math.floor(buf.byteLength / 4));
@@ -108,8 +125,13 @@ function localBackend(log) {
         detected = !!language;
         if (!language) { language = 'en'; fallback = true; }       // no language tokens to score against
       }
-      const out = await asr(audio, { return_timestamps: 'word', chunk_length_s: 30, language, task: 'transcribe' });
-      return { text: out.text.trim(), words: wordsOf(out), language, detected, fallback };
+      let out = await asr(audio, { return_timestamps: 'word', chunk_length_s: 30, language, task: 'transcribe' });
+      let retried = false;
+      if (looksRepetitive(out.text)) {                            // decode once more with repeated trigrams forbidden
+        retried = true;
+        try { out = await asr(audio, { return_timestamps: 'word', chunk_length_s: 30, language, task: 'transcribe', no_repeat_ngram_size: 3 }); } catch {}
+      }
+      return { text: out.text.trim(), words: wordsOf(out), language, detected, fallback, retried };
     },
   };
 }

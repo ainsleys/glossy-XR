@@ -25,6 +25,10 @@
       #status { margin-top: 8px; font-size: 12px; color: #9f9; min-height: 1.2em; }
       #rec { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #444; margin-right: 6px; vertical-align: middle; }
       #rec.on { background: #f33; box-shadow: 0 0 8px #f33; }
+      #level { height: 3px; background: #222; margin-top: 3px; border-radius: 2px; overflow: hidden; display: none; }
+      #level.on { display: block; }
+      #levelBar { height: 100%; width: 0; background: #f33; transition: width 60ms linear; }
+      #hint { font-size: 11px; color: #789; margin-top: 3px; min-height: 1.2em; }
       #help { font-size: 11px; color: #888; margin-top: 8px; }
       #hud a { color: #8cf; }
       kbd { background: #222; border: 1px solid #555; border-radius: 3px; padding: 0 4px; font-size: 10px; }
@@ -120,6 +124,8 @@
         <div id="timeLegend">Marker colour is the period: amber earliest, blue latest, grey timeless; faded means recorded over six months ago.</div>
       </div>
       <div id="status"><span id="rec"></span><span id="statusText">connecting…</span></div>
+      <div id="level"><div id="levelBar"></div></div>
+      <div id="hint"></div>
 
       <details id="interviewPanel">
         <summary>Interview</summary>

@@ -24,7 +24,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { openDb } from './db.js';
-import { createTranscriber } from './transcribe.js';
+import { createTranscriber, looksRepetitive } from './transcribe.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -55,7 +55,9 @@ function queueTranscription(record) {
     if (!cur) return;                                        // deleted while queued
     const updated = err
       ? db.annotations.setTranscript(record.project, record.id, { transcript: cur.transcript, status: 'failed', meta: { error: err.message } })
-      : db.annotations.setTranscript(record.project, record.id, { transcript: result.text, status: 'done', meta: { words: result.words, language: result.language, detected: !!result.detected, backend: result.backend, model: result.model, ms: result.ms } });
+      : looksRepetitive(result.text)                            // the model looped: keep the raw text in meta, store no transcript
+        ? db.annotations.setTranscript(record.project, record.id, { transcript: '', status: 'done', meta: { words: [], language: result.language, detected: !!result.detected, backend: result.backend, model: result.model, ms: result.ms, unclear: 'repetition', raw: result.text } })
+        : db.annotations.setTranscript(record.project, record.id, { transcript: result.text, status: 'done', meta: { words: result.words, language: result.language, detected: !!result.detected, backend: result.backend, model: result.model, ms: result.ms } });
     io.to(record.project).emit('annotation:updated', updated);
   });
 }
