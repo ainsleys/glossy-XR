@@ -58,6 +58,13 @@
       #annList .period { color: #d9b36c; font-size: 11px; white-space: nowrap; }
       #annList .prompt { flex: 1 0 100%; padding: 0 0 0 30px; color: #8a9bb0; font-size: 11px; font-style: italic; }
       #interviewPanel #question { font-size: 13px; color: #fff; margin: 6px 0; min-height: 1.4em; }
+      /* visitor mode: operator controls (.op) go, visitor text (.vis) appears, the question is large */
+      body.visitor .op { display: none !important; }
+      body:not(.visitor) .vis { display: none !important; }
+      body.visitor #interviewPanel summary { display: none; }
+      body.visitor #interviewPanel #question { font-size: 17px; line-height: 1.35; }
+      body.visitor #annList .del, body.visitor #annList .retry { display: none; }
+      #visitorHelp { font-size: 12px; color: #aaa; margin-top: 8px; }
       #interviewPanel .row button { flex: 1 1 0; }
       #crosshair { position: fixed; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; pointer-events: none; z-index: 5; }
       #crosshair::before, #crosshair::after { content: ''; position: absolute; background: rgba(255,255,255,.8); }
@@ -71,24 +78,24 @@
     <div id="hud">
       <h1>Glossy XR <span id="count"></span></h1>
 
-      <label for="project">Project</label>
-      <div class="row">
+      <label for="project" class="op">Project</label>
+      <div class="row op">
         <select id="project"></select>
         <button id="newProject" style="flex:0 0 auto">+ New</button>
       </div>
-      <div id="modelInfo">no model</div>
+      <div id="modelInfo" class="op">no model</div>
 
       <label for="author">Your name</label>
       <input id="author" placeholder="e.g. Ainsley" autocomplete="off" />
-      <label for="layer">Layer</label>
-      <select id="layer">
+      <label for="layer" class="op">Layer</label>
+      <select id="layer" class="op">
         <option value="default">default</option>
         <option value="draft">draft</option>
         <option value="review">review</option>
         <option value="final">final</option>
       </select>
-      <label for="language">Transcription language (project)</label>
-      <select id="language">
+      <label for="language" class="op">Transcription language (project)</label>
+      <select id="language" class="op">
         <option value="">detect automatically</option>
         <option value="tr">Türkçe (tr)</option>
         <option value="en">English (en)</option>
@@ -101,8 +108,8 @@
         <option value="pl">polski (pl)</option>
       </select>
       <div class="row" style="margin-top:6px"><input type="checkbox" id="consent" /><label for="consent" style="margin:0">I consent to my recording being stored and shared</label></div>
-      <div class="row" style="margin-top:4px"><input type="checkbox" id="walk" checked /><label for="walk" style="margin:0" title="Floor-following and wall collision on desktop; untick to fly with Q/E">Walk mode (collide with the scene)</label></div>
-      <div class="row" style="margin-top:4px"><input type="checkbox" id="autoplay" /><label for="autoplay" style="margin:0" title="Off: walking up to a clip previews it (who, when, first words) and lights it; play with a click or the trigger. On: clips on the active layer play as you approach, for guided walks">Autoplay clips on approach</label></div>
+      <div class="row op" style="margin-top:4px"><input type="checkbox" id="walk" checked /><label for="walk" style="margin:0" title="Floor-following and wall collision on desktop; untick to fly with Q/E">Walk mode (collide with the scene)</label></div>
+      <div class="row op" style="margin-top:4px"><input type="checkbox" id="autoplay" /><label for="autoplay" style="margin:0" title="Off: walking up to a clip previews it (who, when, first words) and lights it; play with a click or the trigger. On: clips on the active layer play as you approach, for guided walks">Autoplay clips on approach</label></div>
       <div id="timeRow">
         <div class="row" style="margin-top:6px"><input type="checkbox" id="timeAll" checked /><label for="timeAll" style="margin:0" title="Untick to move through time: only clips whose period includes the year stay, plus timeless ones">All periods</label><span id="yearLabel" style="flex:0 0 auto;color:#d9b36c;font-variant-numeric:tabular-nums"></span></div>
         <input type="range" id="year" min="1900" max="2026" step="1" value="2026" disabled style="padding:0;margin-top:4px" />
@@ -111,16 +118,16 @@
 
       <details id="interviewPanel">
         <summary>Interview</summary>
-        <div class="row" style="margin-top:4px"><input type="checkbox" id="interview" /><label for="interview" style="margin:0" title="Ask the project's questions one at a time; each clip you record answers the current question">Interview mode</label></div>
+        <div class="row op" style="margin-top:4px"><input type="checkbox" id="interview" /><label for="interview" style="margin:0" title="Ask the project's questions one at a time; each clip you record answers the current question">Interview mode</label></div>
         <div id="question">no script: add questions below</div>
         <div class="row">
           <button id="prevQ" title="previous question">‹</button>
           <button id="askQ" title="read the question aloud">Ask</button>
           <button id="nextQ" title="next question">›</button>
         </div>
-        <label for="scriptText">Questions, one per line (saved to the project)</label>
-        <textarea id="scriptText" rows="4" style="width:100%;box-sizing:border-box;font:inherit;background:#111;color:#eee;border:1px solid #444;border-radius:4px;padding:5px 6px"></textarea>
-        <button id="saveScript" style="margin-top:4px">Save questions</button>
+        <label for="scriptText" class="op">Questions, one per line (saved to the project)</label>
+        <textarea id="scriptText" class="op" rows="4" style="width:100%;box-sizing:border-box;font:inherit;background:#111;color:#eee;border:1px solid #444;border-radius:4px;padding:5px 6px"></textarea>
+        <button id="saveScript" class="op" style="margin-top:4px">Save questions</button>
       </details>
 
       <details id="annPanel" open>
@@ -128,7 +135,7 @@
         <ul id="annList"></ul>
       </details>
 
-      <details id="assetPanel" open>
+      <details id="assetPanel" class="op" open>
         <summary>Assets</summary>
         <ul id="assetList"></ul>
         <label for="assetFile">Add: glb, gltf, ply, pcd, obj, splat, ksplat, spz, sog, png, jpg, webp, mp4, webm. Select sidecars (.bin, textures, .mtl) together with the main file.</label>
@@ -154,11 +161,14 @@
         </div>
       </details>
 
-      <div id="help">
-        Headset: trigger = record (release to save) or play the marker you point at; squeeze = cycle layer.<br />
+      <div id="visitorHelp" class="vis">
+        Hold the trigger (or the mouse button) and speak; let go to save. Point at a mark and pull the trigger to hear it. Squeeze to hear the question again. Nothing here can be erased by mistake: ask at the desk to have a recording removed.
+      </div>
+      <div id="help" class="op">
+        Headset: trigger = record (release to save) or play the marker you point at; squeeze = cycle layer (in visitor view: hear the question again).<br />
         Desktop: click once to capture the mouse, then <b>hold the mouse button to record</b> at the crosshair and release to save; walk up to a marker to read who left it and when, click it to play (again to stop), hold <kbd>R</kbd> while aiming at a marker to record a reply to it, <kbd>Delete</kbd> twice (or ✕ twice in the list) erases the marker you aim at. <kbd>W A S D</kbd> move, <kbd>Q</kbd>/<kbd>E</kbd> down/up when not walking, <kbd>Esc</kbd> releases the mouse. (<kbd>K</kbd>/<kbd>L</kbd>/<kbd>Space</kbd> still work.)
         Annotations anchor to the surface you point at.
-        <a id="exportLink" href="/api/export" target="_blank">Export JSON</a>
+        <a id="exportLink" href="/api/export" target="_blank">Export JSON</a> · <a id="visitorLink" href="?mode=visitor" title="The page a guest sees: no operator controls, the script asked without a toggle, nothing erasable">Visitor view</a>
       </div>
     </div>
     <div id="crosshair" hidden></div>

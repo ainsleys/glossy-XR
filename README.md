@@ -81,6 +81,8 @@ A project can hold a script: an ordered list of questions, edited in the HUD's I
 
 To reply to a clip on desktop, aim at its marker and hold `R`; release to save. The reply records like any other clip, but with `parent` set and the parent's anchor. The HUD list nests replies under their parent and shows a reply count on it.
 
+**Visitor mode.** Open the page with `?mode=visitor` (the HUD's *Visitor view* link does this for the current project) for the page an exhibition guest sees: the project selector, assets, layers, transcription language, the script editor and every erase control are hidden, the project's script is asked without a toggle, and Delete and the list's ✕ do nothing on that page. In the headset a small panel below the line of sight carries the current question, the status line (recording, saved, the near clip's preview) and the controller hints; a visitor's squeeze reads the question aloud instead of cycling layers. Visitor mode is a presentation setting, not access control: the API is unchanged.
+
 On release of the button or trigger, a provisional marker is placed in the scene before the clip is encoded or uploaded, so the mark lands where the speaker was still looking (the suite measures this at about 1 ms); the saved marker replaces it.
 
 ## Time and crowding

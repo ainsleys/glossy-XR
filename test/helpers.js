@@ -3,13 +3,13 @@ import { expect } from '@playwright/test';
 export const API = 'http://localhost:3100';
 
 /** Create a fresh project through the API and open it in the page. Resolves once the scene is ready. */
-export async function openProject(page, request, name = 'test') {
+export async function openProject(page, request, name = 'test', query = '') {
   const res = await request.post(`${API}/api/projects`, { data: { name } });
   expect(res.ok()).toBeTruthy();
   const project = await res.json();
   page.on('pageerror', (e) => console.log('PAGE ERROR', e.message));
   page.on('console', (m) => m.type() === 'error' && !/Pointer Lock/.test(m.text()) && console.log('PAGE console.error', m.text()));
-  await page.goto(`/?project=${project.id}`);
+  await page.goto(`/?project=${project.id}${query}`);
   await page.waitForFunction((id) => window.__glossy?.project?.id === id, project.id);
   await expect.poll(() => page.evaluate(() => window.__glossy.status)).not.toMatch(/connecting/);
   return project;
@@ -74,9 +74,14 @@ export async function recordWithMouse(page, ms = 1200) {
   await expect.poll(() => markerCount(page), { timeout: 10_000 }).toBe(before + 1);   // status flips to hover text as soon as the new marker sits under the crosshair
 }
 
+/** GET through the request context, retrying once if a reused keep-alive socket was reset under us. */
+async function getJson(request, url) {
+  try { return await (await request.get(url)).json(); }
+  catch (e) { if (!/ECONNRESET|socket hang up/.test(e.message)) throw e; return (await request.get(url)).json(); }
+}
 /** The project's export document. */
-export const exportProject = async (request, projectId) => (await request.get(`${API}/api/projects/${projectId}/export`)).json();
-export const listAnnotations = async (request, projectId) => (await request.get(`${API}/api/projects/${projectId}/annotations`)).json();
+export const exportProject = (request, projectId) => getJson(request, `${API}/api/projects/${projectId}/export`);
+export const listAnnotations = (request, projectId) => getJson(request, `${API}/api/projects/${projectId}/annotations`);
 /** Aim the camera at a marker and wait until the crosshair reports it. */
 export async function aimAtMarker(page, id) {
   await page.evaluate((id) => { const g = window.__glossy; g.camera.lookAt(g.markers.get(id).mesh.position); g.camera.updateMatrixWorld(true); }, id);

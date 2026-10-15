@@ -137,6 +137,12 @@ function validateAnnotation(body, projectId) {
 
 const app = express();
 const server = http.createServer(app);
+// Idle keep-alive sockets are closed after 65 s rather than Node's 5 s, so a
+// client that reuses a connection a few seconds after its last request (the
+// Playwright request context, a browser between polls) does not hit a socket
+// the server has just closed and see ECONNRESET.
+server.keepAliveTimeout = 65_000;
+server.headersTimeout = 66_000;
 const io = new SocketServer(server, { cors: { origin: true }, maxHttpBufferSize: 1e6 });
 
 app.use('/audio', express.static(AUDIO_DIR, { maxAge: '1h' }));

@@ -46,6 +46,12 @@ const DEFAULT_TRANSFORM = { scale: 1, rotX: 0, rotY: 0, rotZ: 0, x: 0, y: 0, z: 
 // ---- HUD -------------------------------------------------------------------
 
 const $ = (id) => document.getElementById(id);
+// Visitor mode (?mode=visitor): the page an exhibition guest sees. Operator
+// controls (projects, assets, layers, language, the script editor, erase) are
+// hidden, the project's script is asked without a toggle, and nothing can be
+// erased from this page. It is a presentation setting, not access control.
+const VISITOR = new URLSearchParams(location.search).get('mode') === 'visitor';
+document.body.classList.toggle('visitor', VISITOR);
 const hud = {
   project: $('project'), newProject: $('newProject'), modelInfo: $('modelInfo'),
   author: $('author'), layer: $('layer'), consent: $('consent'), status: $('statusText'), rec: $('rec'), count: $('count'),
@@ -53,7 +59,7 @@ const hud = {
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
   walk: $('walk'), autoplay: $('autoplay'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'),
-  interview: $('interview'), question: $('question'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
+  interview: $('interview'), visitorLink: $('visitorLink'), question: $('question'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
 };
 const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 hud.author.value = ls.get('glossy.author', '');
@@ -108,6 +114,44 @@ camera.position.set(0, 1.6, 2);
 camera.lookAt(0, 0.9, -1.2);          // frame the table on first load
 const listener = new THREE.AudioListener();
 camera.add(listener);
+
+// ---- in-headset panel --------------------------------------------------------
+// The HUD does not exist in the headset. A small canvas panel fixed below the
+// line of sight carries the current question and the status line (recording,
+// saved, the near clip's preview) so a guest in a Quest has the same cues as a
+// desktop user. It is redrawn only when its text changes and hidden when empty.
+const xrPanel = (() => {
+  const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 384;
+  const ctx = canvas.getContext('2d');
+  const tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.1875), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false }));
+  mesh.position.set(0, -0.22, -0.9); mesh.rotation.x = -0.25; mesh.renderOrder = 999; mesh.visible = false;
+  camera.add(mesh);
+  let shown = '';
+  const wrap = (text, max) => { const lines = []; let cur = ''; for (const w of String(text).split(/\s+/)) { const t = cur ? cur + ' ' + w : w; if (cur && ctx.measureText(t).width > max) { lines.push(cur); cur = w; } else cur = t; } if (cur) lines.push(cur); return lines; };
+  function draw(question, statusText, hint, recording) {
+    const key = [question, statusText, hint, recording ? 'R' : ''].join('\n');
+    if (key === shown) return;
+    shown = key;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!question && !statusText && !hint) { mesh.visible = false; tex.needsUpdate = true; return; }
+    ctx.fillStyle = recording ? 'rgba(70,0,0,0.7)' : 'rgba(0,0,0,0.62)';
+    ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(0, 0, canvas.width, canvas.height, 28); else ctx.rect(0, 0, canvas.width, canvas.height); ctx.fill();
+    let y = 72;
+    if (question) { ctx.fillStyle = '#fff'; ctx.font = '600 46px system-ui, sans-serif'; for (const l of wrap(question, canvas.width - 80).slice(0, 3)) { ctx.fillText(l, 40, y); y += 56; } y += 8; }
+    if (statusText) { ctx.fillStyle = recording ? '#ff6b6b' : '#9f9'; ctx.font = '40px system-ui, sans-serif'; for (const l of wrap(statusText, canvas.width - 80).slice(0, 2)) { ctx.fillText(l, 40, y); y += 50; } }
+    if (hint) { ctx.fillStyle = '#9ab'; ctx.font = '30px system-ui, sans-serif'; ctx.fillText(hint, 40, canvas.height - 34); }
+    tex.needsUpdate = true; mesh.visible = true;
+  }
+  return { mesh, draw, get text() { return shown; } };
+})();
+function updateXrPanel() {
+  if (!renderer.xr.isPresenting) { if (xrPanel.mesh.visible) xrPanel.draw('', '', '', false); return; }
+  const qs = questions(), q = currentQuestion();
+  const question = q ? `${qIndex + 1}/${qs.length} · ${q.text}` : qs.length && qIndex >= qs.length ? 'all questions answered' : '';
+  const hint = q ? (VISITOR ? 'squeeze: hear the question · hold the trigger to answer' : 'hold the trigger to answer') : '';
+  xrPanel.draw(question, hud.status.textContent, hint, hud.rec.classList.contains('on'));
+}
 
 // player rig so desktop movement and XR share one transform
 const rig = new THREE.Group();
@@ -406,7 +450,8 @@ async function openProject(id) {
   project = await projectsApi.get(id);
   hud.project.value = id;
   hud.exportLink.href = `/api/projects/${id}/export`;
-  history.replaceState(null, '', `?project=${id}`);
+  history.replaceState(null, '', `?project=${id}${VISITOR ? '&mode=visitor' : ''}`);
+  hud.visitorLink.href = `?project=${id}&mode=visitor`;
   selectedId = null;
   clearMarkers();
   net.join(id);
@@ -426,7 +471,7 @@ function projectToHud({ fresh = false } = {}) {
     if (document.activeElement !== hud.scriptText) hud.scriptText.value = (project?.script?.questions || []).map((q) => q.text).join('\n');
     qIndex = 0;
     shownScript = scriptKey;
-    if (project?.script?.questions?.length) $('interviewPanel').open = true;   // a script arriving, or a scripted project opening, shows its questions
+    if (project?.script?.questions?.length || VISITOR) $('interviewPanel').open = true;   // a script arriving, or a scripted project opening, shows its questions
   }
   renderInterview();
 }
@@ -452,13 +497,14 @@ hud.saveScript.addEventListener('click', async () => {
 // advances to the next question.
 
 let qIndex = 0;
-const questions = () => (hud.interview.checked && project?.script?.questions) || [];
+const interviewOn = () => VISITOR || hud.interview.checked;     // a visitor is asked the script without a toggle
+const questions = () => (interviewOn() && project?.script?.questions) || [];
 const currentQuestion = () => questions()[qIndex] || null;
 function renderInterview() {
   const qs = questions();
   const q = currentQuestion();
-  hud.question.textContent = !project?.script?.questions?.length ? 'no script: add questions below'
-    : !hud.interview.checked ? `${project.script.questions.length} question${project.script.questions.length === 1 ? '' : 's'} (tick to start)`
+  hud.question.textContent = !project?.script?.questions?.length ? (VISITOR ? '' : 'no script: add questions below')
+    : !interviewOn() ? `${project.script.questions.length} question${project.script.questions.length === 1 ? '' : 's'} (tick to start)`
     : q ? `${qIndex + 1}/${qs.length} · ${q.text}` : 'all questions answered';
   hud.prevQ.disabled = !qs.length || qIndex === 0;
   hud.nextQ.disabled = !qs.length || qIndex >= qs.length;
@@ -479,12 +525,15 @@ function speak(text) {
   speechSynthesis.speak(u);
   return 'ok';
 }
-hud.askQ.addEventListener('click', () => {
+let lastAsked = null;
+function askCurrent() {
   const q = currentQuestion(); if (!q) return;
+  lastAsked = q.text;
   const r = speak(q.text);
   if (r === 'muted') setStatus('finish recording first; the question is not read while the microphone is open');
   else if (r === 'unavailable') setStatus('speech synthesis unavailable here; read the question from the panel');
-});
+}
+hud.askQ.addEventListener('click', askCurrent);
 
 hud.project.addEventListener('change', () => openProject(hud.project.value));
 hud.newProject.addEventListener('click', async () => {
@@ -676,6 +725,7 @@ function play(id) {
 let armedDelete = null;   // { id, timer }
 function armDelete(id, message) {
   if (!markers.has(id)) return;
+  if (VISITOR) return setStatus('erasing is done at the desk; ask and your recording will be removed');
   if (armedDelete?.id === id) { clearTimeout(armedDelete.timer); armedDelete = null; return deleteAnnotation(id); }
   if (armedDelete) clearTimeout(armedDelete.timer);
   armedDelete = { id, timer: setTimeout(() => { if (armedDelete?.id === id) { armedDelete = null; renderList(); } }, DELETE_ARM_MS) };
@@ -727,11 +777,12 @@ function setNear(id) {
 // clip, else nothing while a clip plays, else the near clip, else blank.
 function refreshIdleStatus() {
   if (recorder.isRecording || starting) return;
+  const press = renderer.xr.isPresenting ? 'trigger' : 'click';          // the same line reads on the headset panel
   const cur = markers.get(hoverId);
-  if (cur) return setStatus(`${describeRecord(cur.record)} — click to ${cur.record.id === playingId ? 'stop' : 'play'}`, { idle: true });
+  if (cur) return setStatus(`${describeRecord(cur.record)} — ${press} to ${cur.record.id === playingId ? 'stop' : 'play'}`, { idle: true });
   if (playingId) return;
   const n = markers.get(nearId);
-  if (n) return setStatus(`near: ${describeRecord(n.record)} — click it to play`, { idle: true });
+  if (n) return setStatus(`near: ${describeRecord(n.record)} — ${renderer.xr.isPresenting ? 'point and pull the trigger' : 'click it'} to play`, { idle: true });
   setStatus('', { idle: true });
 }
 
@@ -951,6 +1002,7 @@ for (let i = 0; i < 2; i++) {
   });
   ctrl.addEventListener('selectend', () => releaseRecording(ctrl));
   ctrl.addEventListener('squeezestart', () => {
+    if (VISITOR) return askCurrent();                        // a guest hears the question again; layers are an operator concern
     const next = LAYERS[(LAYERS.indexOf(hud.layer.value) + 1) % LAYERS.length];
     hud.layer.value = next; hud.layer.dispatchEvent(new Event('change'));
     setStatus('layer: ' + next);
@@ -1055,6 +1107,7 @@ const net = connect({
 if (import.meta.env.DEV) window.__glossy = {
   scene, renderer, camera, rig, room, assetsRoot, loaded, markers, recorder, hud, keys, lock,
   get project() { return project; }, get selected() { return selected(); }, get playingId() { return playingId; }, get nearId() { return nearId; },
+  visitor: VISITOR, get lastAsked() { return lastAsked; }, xrPanel,
   get status() { return hud.status.textContent; },
   get captured() { return captured(); },
   get lastPlacementMs() { return lastPlacementMs; },
@@ -1112,6 +1165,7 @@ renderer.setAnimationLoop(() => {
   else if (anchorSource && !starting && !recorder.isRecording) { resetRecordingUi(); setStatus('microphone stopped; nothing saved'); }   // the track ended under us
   updateHover();
   scaleMarkers();
+  updateXrPanel();
 
   // approach: the nearest visible marker within PLAY_DISTANCE is previewed; it
   // plays only with autoplay on (once per approach, active layer only)

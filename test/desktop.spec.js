@@ -337,3 +337,33 @@ test('an armed erase in the list lapses after a pause', async ({ page, request }
   expect(await markerCount(page)).toBe(1);
   expect(await listAnnotations(request, project.id)).toHaveLength(1);
 });
+
+test('visitor mode hides the operator controls, asks the script without a toggle, and cannot erase', async ({ page, request }) => {
+  const project = await openProject(page, request, 'visitor', '&mode=visitor');
+  await request.patch(`${API}/api/projects/${project.id}`, { data: { script: { questions: [{ text: 'Where did the family eat in summer?' }, { text: 'What grew in the orchard?' }] } } });
+  await expect(page.locator('#question')).toHaveText(/1\/2 · Where did the family eat/);   // arrives over the socket, no checkbox needed
+  for (const sel of ['#project', '#newProject', '#layer', '#language', '#assetPanel', '#scriptText', '#saveScript', '#interview', '#help', '#walk', '#autoplay']) await expect(page.locator(sel)).toBeHidden();
+  for (const sel of ['#author', '#consent', '#timeAll', '#statusText', '#visitorHelp', '#askQ']) await expect(page.locator(sel)).toBeVisible();
+  expect(page.url()).toContain('mode=visitor');
+
+  await prepareRecording(page, 'Guest');
+  await lockPointer(page);
+  await aimCamera(page, [0.4, 1.6, 0.6], [0.4, 0.79, -1.2]);
+  await recordWithMouse(page, 1200);
+  const [a] = await listAnnotations(request, project.id);
+  expect(a.mode).toBe('interview');
+  expect(a.prompt).toBe('Where did the family eat in summer?');
+  await expect(page.locator('#question')).toHaveText(/2\/2 · What grew/);
+
+  // nothing erasable from this page: no ✕ in the list, Delete at the crosshair is refused
+  await expect(page.locator('#annList li')).toHaveCount(1);
+  await expect(page.locator('#annList li .del')).toBeHidden();
+  await page.evaluate(() => document.activeElement?.blur());
+  await aimAtMarker(page, a.id);
+  await page.keyboard.press('Delete');
+  await page.keyboard.press('Delete');
+  await expect.poll(() => status(page)).toMatch(/desk/);
+  await page.waitForTimeout(300);
+  expect(await markerCount(page)).toBe(1);
+  expect(await listAnnotations(request, project.id)).toHaveLength(1);
+});

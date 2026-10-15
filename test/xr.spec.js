@@ -17,11 +17,17 @@ test.beforeEach(async ({ page }) => {
 test('enters VR through VRButton and records with the controller trigger', async ({ page, request }) => {
   const project = await openProject(page, request, 'xr');
   await prepareRecording(page, 'HeadsetTester');
+  await request.patch(`${API}/api/projects/${project.id}`, { data: { script: { questions: [{ text: 'Where did the family eat in summer?' }] } } });
+  await expect(page.locator('#question')).toHaveText(/1 question/);
+  await page.check('#interview');
   const btn = page.locator('#VRButton');
   await expect(btn).toHaveText(/ENTER VR/i);
   await btn.click();
   await page.waitForFunction(() => window.__glossy.renderer.xr.isPresenting, null, { timeout: 15_000 });
   await expect(btn).toHaveText(/EXIT VR/i);
+  // the in-headset panel carries the question
+  await expect.poll(() => page.evaluate(() => window.__glossy.xrPanel.text)).toMatch(/1\/1 · Where did the family eat in summer\?/);
+  expect(await page.evaluate(() => window.__glossy.xrPanel.mesh.visible)).toBe(true);
 
   // point the right controller down at the table and pull the trigger
   await page.evaluate(() => {
@@ -42,9 +48,11 @@ test('enters VR through VRButton and records with the controller trigger', async
   await expect.poll(() => markerCount(page), { timeout: 10_000 }).toBe(1);
   // "saved" is held for two seconds even though the new marker sits under the controller ray
   await expect.poll(() => status(page)).toMatch(/^saved/);
+  await expect.poll(() => page.evaluate(() => window.__glossy.xrPanel.text)).toMatch(/all questions answered[\s\S]*saved/);
   const list = await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json();
   expect(list).toHaveLength(1);
   expect(list[0].author).toBe('HeadsetTester');
+  expect(list[0].prompt).toBe('Where did the family eat in summer?');
   expect(list[0].durationMs).toBeGreaterThanOrEqual(900);
   expect(list[0].poseSource).toBe('xr');                 // headset pose, sampled over the clip
   expect(list[0].pose.length).toBeGreaterThanOrEqual(8);
@@ -56,4 +64,18 @@ test('enters VR through VRButton and records with the controller trigger', async
   await page.evaluate(() => { const c = window.__xr.controllers.right; c.updateButtonValue('squeeze', 1); });
   await expect.poll(() => page.inputValue('#layer')).not.toBe(before);
   await page.evaluate(() => window.__xr.controllers.right.updateButtonValue('squeeze', 0));
+});
+
+test('a visitor in the headset sees the question and squeeze reads it aloud', async ({ page, request }) => {
+  const project = await openProject(page, request, 'xr-visitor', '&mode=visitor');
+  await request.patch(`${API}/api/projects/${project.id}`, { data: { script: { questions: [{ text: 'Where did the family eat in summer?' }, { text: 'What grew in the orchard?' }] } } });
+  await expect(page.locator('#question')).toHaveText(/1\/2 · Where did the family eat/);   // asked without a toggle
+  await prepareRecording(page, 'Guest');
+  await page.locator('#VRButton').click();
+  await page.waitForFunction(() => window.__glossy.renderer.xr.isPresenting, null, { timeout: 15_000 });
+  await expect.poll(() => page.evaluate(() => window.__glossy.xrPanel.text)).toMatch(/1\/2 · Where did the family eat in summer\?[\s\S]*squeeze: hear the question/);
+  await page.evaluate(() => window.__xr.controllers.right.updateButtonValue('squeeze', 1));
+  await expect.poll(() => page.evaluate(() => window.__glossy.lastAsked)).toBe('Where did the family eat in summer?');
+  await page.evaluate(() => window.__xr.controllers.right.updateButtonValue('squeeze', 0));
+  expect(await page.inputValue('#layer')).toBe('default');   // squeeze did not cycle the layer
 });
