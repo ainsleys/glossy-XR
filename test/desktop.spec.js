@@ -281,3 +281,59 @@ test('a second client sees the annotation live', async ({ page, request, browser
   await expect(other.locator('#annList li')).toHaveCount(1);
   await other.close();
 });
+
+test('approach previews a clip instead of playing it, autoplay is opt-in, the list erases on the second click', async ({ page, request }) => {
+  const project = await openProject(page, request, 'approach');
+  await prepareRecording(page, 'Tester');
+  await lockPointer(page);
+  await aimCamera(page, [0.4, 1.6, 0.6], [0.4, 0.79, -1.2]);
+  await recordWithMouse(page, 1500);
+  const [a] = await listAnnotations(request, project.id);
+  // the commit is announced and held, even though the new marker sits under the crosshair
+  await expect.poll(() => status(page)).toMatch(/^saved/);
+  expect(await page.evaluate(() => window.__glossy.playingId)).toBeNull();
+
+  // stand 2.5 m from the marker looking away: not near, nothing said
+  const at = async (dy, dz, look) => page.evaluate(([dy, dz, look]) => {
+    const g = window.__glossy, m = [...g.markers.values()][0].mesh.position;
+    g.camera.position.set(m.x, m.y + dy, m.z + dz); g.camera.lookAt(m.x, m.y + dy, m.z + dz + look); g.camera.updateMatrixWorld(true);
+  }, [dy, dz, look]);
+  await at(0.8, 2.5, 5);
+  await expect.poll(() => page.evaluate(() => window.__glossy.nearId)).toBeNull();
+  await expect.poll(() => status(page), { timeout: 4000 }).toBe('');
+  // walk within a metre, still looking away: previewed and lit, not played
+  await at(0.6, 0.7, 5);
+  await expect.poll(() => page.evaluate(() => window.__glossy.nearId)).toBe(a.id);
+  await expect.poll(() => status(page)).toMatch(/^near: Tester · today · 1\.\ds.*click it to play$/);
+  await page.waitForTimeout(600);
+  expect(await page.evaluate(() => window.__glossy.playingId)).toBeNull();
+  expect(await page.evaluate(() => [...window.__glossy.markers.values()][0].mesh.material.emissiveIntensity)).toBeGreaterThan(0.5);
+  // autoplay on: the same approach plays the clip
+  await page.check('#autoplay');
+  await expect.poll(() => page.evaluate(() => window.__glossy.playingId), { timeout: 10_000 }).toBe(a.id);
+  await page.uncheck('#autoplay');
+
+  // the list's ✕ asks twice: the first click arms it, the second erases
+  await page.click('#annList li .del');
+  await expect(page.locator('#annList li .del')).toHaveText('erase?');
+  await expect(page.locator('#annList li .del')).toHaveClass(/armed/);
+  expect(await markerCount(page)).toBe(1);
+  await page.click('#annList li .del');
+  await expect.poll(() => markerCount(page)).toBe(0);
+  expect(await listAnnotations(request, project.id)).toHaveLength(0);
+});
+
+test('an armed erase in the list lapses after a pause', async ({ page, request }) => {
+  const project = await openProject(page, request, 'arm-lapse');
+  await prepareRecording(page, 'Tester');
+  await lockPointer(page);
+  await aimCamera(page, [0.4, 1.6, 0.6], [0.4, 0.79, -1.2]);
+  await recordWithMouse(page, 1200);
+  await page.click('#annList li .del');
+  await expect(page.locator('#annList li .del')).toHaveText('erase?');
+  await expect(page.locator('#annList li .del')).toHaveText('✕', { timeout: 5000 });   // the arm lapses on its own
+  await page.click('#annList li .del');                                                   // so this is a first click again
+  await page.waitForTimeout(300);
+  expect(await markerCount(page)).toBe(1);
+  expect(await listAnnotations(request, project.id)).toHaveLength(1);
+});

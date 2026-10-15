@@ -52,6 +52,7 @@
       #annList .meta { color: #9ab; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       #annList button { width: auto; padding: 1px 6px; font-size: 11px; }
       #annList .del { color: #f88; }
+      #annList .del.armed { background: #a33; color: #fff; }
       #annList li.reply { margin-left: 18px; border-left: 2px solid #345; }
       #annList .badge { color: #6cf; font-size: 11px; white-space: nowrap; }
       #annList .period { color: #d9b36c; font-size: 11px; white-space: nowrap; }
@@ -101,6 +102,7 @@
       </select>
       <div class="row" style="margin-top:6px"><input type="checkbox" id="consent" /><label for="consent" style="margin:0">I consent to my recording being stored and shared</label></div>
       <div class="row" style="margin-top:4px"><input type="checkbox" id="walk" checked /><label for="walk" style="margin:0" title="Floor-following and wall collision on desktop; untick to fly with Q/E">Walk mode (collide with the scene)</label></div>
+      <div class="row" style="margin-top:4px"><input type="checkbox" id="autoplay" /><label for="autoplay" style="margin:0" title="Off: walking up to a clip previews it (who, when, first words) and lights it; play with a click or the trigger. On: clips on the active layer play as you approach, for guided walks">Autoplay clips on approach</label></div>
       <div id="timeRow">
         <div class="row" style="margin-top:6px"><input type="checkbox" id="timeAll" checked /><label for="timeAll" style="margin:0" title="Untick to move through time: only clips whose period includes the year stay, plus timeless ones">All periods</label><span id="yearLabel" style="flex:0 0 auto;color:#d9b36c;font-variant-numeric:tabular-nums"></span></div>
         <input type="range" id="year" min="1900" max="2026" step="1" value="2026" disabled style="padding:0;margin-top:4px" />
@@ -154,7 +156,7 @@
 
       <div id="help">
         Headset: trigger = record (release to save) or play the marker you point at; squeeze = cycle layer.<br />
-        Desktop: click once to capture the mouse, then <b>hold the mouse button to record</b> at the crosshair and release to save; click a marker to play it (again to stop), hold <kbd>R</kbd> while aiming at a marker to record a reply to it, <kbd>Delete</kbd> twice removes the marker you aim at. <kbd>W A S D</kbd> move, <kbd>Q</kbd>/<kbd>E</kbd> down/up when not walking, <kbd>Esc</kbd> releases the mouse. (<kbd>K</kbd>/<kbd>L</kbd>/<kbd>Space</kbd> still work.)
+        Desktop: click once to capture the mouse, then <b>hold the mouse button to record</b> at the crosshair and release to save; walk up to a marker to read who left it and when, click it to play (again to stop), hold <kbd>R</kbd> while aiming at a marker to record a reply to it, <kbd>Delete</kbd> twice (or ✕ twice in the list) erases the marker you aim at. <kbd>W A S D</kbd> move, <kbd>Q</kbd>/<kbd>E</kbd> down/up when not walking, <kbd>Esc</kbd> releases the mouse. (<kbd>K</kbd>/<kbd>L</kbd>/<kbd>Space</kbd> still work.)
         Annotations anchor to the surface you point at.
         <a id="exportLink" href="/api/export" target="_blank">Export JSON</a>
       </div>

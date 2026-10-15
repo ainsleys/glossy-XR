@@ -33,7 +33,9 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
 const LAYERS = ['default', 'draft', 'review', 'final'];
 const MARKER_RADIUS = 0.06;
-const PLAY_DISTANCE = 1.2;                        // metres; walk near a marker and it plays
+const PLAY_DISTANCE = 1.2;                        // metres; within this a marker is "near": previewed and lit, played on click (or on approach with autoplay on)
+const BLOOM_MS = 450;                             // the commit cue: a saved marker swells and glows for this long
+const DELETE_ARM_MS = 2500;                       // erase asks twice; the second press must come within this window
 // A crowded room stays readable: only the nearest MAX_FULL markers within
 // FULL_DISTANCE draw at full size; the rest are abstracted to small faint
 // dots until approached. Nothing is hidden by this rule.
@@ -50,7 +52,7 @@ const hud = {
   assetList: $('assetList'), assetFile: $('assetFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), annList: $('annList'),
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
-  walk: $('walk'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'),
+  walk: $('walk'), autoplay: $('autoplay'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'),
   interview: $('interview'), question: $('question'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
 };
 const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
@@ -62,12 +64,32 @@ hud.layer.addEventListener('change', () => ls.set('glossy.layer', hud.layer.valu
 hud.consent.addEventListener('change', () => ls.set('glossy.consent', hud.consent.checked ? '1' : '0'));
 hud.walk.checked = ls.get('glossy.walk', '1') === '1';
 hud.walk.addEventListener('change', () => ls.set('glossy.walk', hud.walk.checked ? '1' : '0'));
+hud.autoplay.checked = ls.get('glossy.autoplay', '0') === '1';
+hud.autoplay.addEventListener('change', () => ls.set('glossy.autoplay', hud.autoplay.checked ? '1' : '0'));
 hud.interview.checked = ls.get('glossy.interview', '0') === '1';
 hud.interview.addEventListener('change', () => { ls.set('glossy.interview', hud.interview.checked ? '1' : '0'); renderInterview(); });
-const setStatus = (t) => { hud.status.textContent = t; };
+// Status line. A message with `hold` stays on screen for that long against
+// idle refreshes (hover and approach text), so "saved" is actually seen even
+// when the new marker sits under the crosshair. Explicit messages always win.
+let statusHeldUntil = 0;
+const setStatus = (t, { hold = 0, idle = false } = {}) => {
+  if (idle && performance.now() < statusHeldUntil) return;
+  hud.status.textContent = t;
+  statusHeldUntil = hold ? performance.now() + hold : 0;
+  if (hold) setTimeout(refreshIdleStatus, hold + 20);   // then let hover or approach text take over
+};
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmtDur = (ms) => (ms ? (ms / 1000).toFixed(1) + 's' : '');
 const snippet = (t, n = 70) => (t.length > n ? t.slice(0, n - 1).trimEnd() + '…' : t);
+// When a clip is from: its period label if it has one, otherwise how long ago it was recorded.
+const whenOf = (r) => {
+  if (r.period) return r.period.label || [r.period.from, r.period.to].filter(Boolean).join('–');
+  const days = Math.floor((Date.now() - Date.parse(r.createdAt)) / 86400e3);
+  if (!(days >= 0)) return '';
+  return days < 1 ? 'today' : days < 30 ? `${days} day${days === 1 ? '' : 's'} ago` : days < 365 ? `${Math.max(1, Math.floor(days / 30))} months ago` : `${Math.floor(days / 365)} year${days < 730 ? '' : 's'} ago`;
+};
+// One line about a clip for the status row: author · when · layer (unless default) · length · first words.
+const describeRecord = (r) => [r.author, whenOf(r), r.layer !== 'default' ? r.layer : '', fmtDur(r.durationMs), r.transcript ? '“' + snippet(r.transcript) + '”' : ''].filter(Boolean).join(' · ');
 
 // ---- renderer / scene ------------------------------------------------------
 
@@ -589,15 +611,38 @@ function scaleMarkers() {
       m.mesh.userData.full = full;
       const old = Date.parse(m.record.createdAt) < cutoff;
       m.mesh.material.opacity = (m.mesh.userData.layerActive === false ? 0.25 : full ? 1 : 0.35) * (old ? 0.8 : 1);
-      if (!m.mesh.userData.playing && !m.mesh.userData.hover) m.mesh.material.emissiveIntensity = old ? 0.2 : 0.35;
+      if (!m.mesh.userData.playing && !m.mesh.userData.hover && !m.mesh.userData.near && !m.mesh.userData.bloomUntil) m.mesh.material.emissiveIntensity = old ? 0.2 : 0.35;
     }
   }
+  const now = performance.now();
   for (const { mesh } of markers.values()) {
     const d = mesh.position.distanceTo(tmpV);
     const r = THREE.MathUtils.clamp(0.012 * d, 0.02, 0.15);              // world radius, ~0.7° of view
     mesh.scale.setScalar((mesh.userData.baseScale ?? 1) * (mesh.userData.playing ? 1.3 : mesh.userData.hover ? 1.15 : mesh.userData.full === false ? 0.5 : 1) * r / MARKER_RADIUS);
     if (mesh.userData.reply) mesh.scale.multiplyScalar(0.75);
+    if (mesh.userData.bloomUntil) {                                        // commit cue: swell and settle
+      const left = (mesh.userData.bloomUntil - now) / BLOOM_MS;
+      if (left <= 0) { delete mesh.userData.bloomUntil; if (!mesh.userData.playing && !mesh.userData.hover) mesh.material.emissiveIntensity = mesh.userData.near ? 0.6 : 0.35; }
+      else mesh.scale.multiplyScalar(1 + 1.2 * Math.sin((1 - left) * Math.PI));
+    }
   }
+}
+
+// The commit cue for a clip that was just saved: the marker blooms and a short
+// two-note chime plays through the scene's audio context (the headset speakers in XR).
+function bloom(id) {
+  const m = markers.get(id);
+  if (!m) return;
+  m.mesh.userData.bloomUntil = performance.now() + BLOOM_MS;
+  m.mesh.material.emissiveIntensity = 1.0;
+  try {
+    const ctx = listener.context;
+    if (ctx.state === 'suspended') ctx.resume();
+    const t = ctx.currentTime, g = ctx.createGain(), o = ctx.createOscillator();
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.1, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+    o.type = 'sine'; o.frequency.setValueAtTime(660, t); o.frequency.setValueAtTime(990, t + 0.09);
+    o.connect(g); g.connect(ctx.destination); o.start(t); o.stop(t + 0.25);
+  } catch {}
 }
 
 let playingId = null;
@@ -622,11 +667,24 @@ function play(id) {
   m.mesh.userData.playing = true;
   m.mesh.material.emissiveIntensity = 1.0;
   renderList();
-  setStatus(`▶ ${m.record.author} · ${m.record.layer}${m.record.anchor.objectId ? ' · ' + m.record.anchor.objectId : ''} · ${fmtDur(m.record.durationMs)}`);
+  setStatus(`▶ ${describeRecord(m.record)}${m.record.anchor.objectId ? ' · ' + m.record.anchor.objectId : ''}`);
 }
 
+// Erase asks twice everywhere: the first press (Delete at the crosshair, or ✕
+// in the list) arms it and the list's ✕ turns into "erase?"; a second press
+// within DELETE_ARM_MS erases. A visitor's mis-click removes nothing.
+let armedDelete = null;   // { id, timer }
+function armDelete(id, message) {
+  if (!markers.has(id)) return;
+  if (armedDelete?.id === id) { clearTimeout(armedDelete.timer); armedDelete = null; return deleteAnnotation(id); }
+  if (armedDelete) clearTimeout(armedDelete.timer);
+  armedDelete = { id, timer: setTimeout(() => { if (armedDelete?.id === id) { armedDelete = null; renderList(); } }, DELETE_ARM_MS) };
+  renderList();
+  setStatus(message);
+}
 async function deleteAnnotation(id) {
   if (!project || !markers.has(id)) return;
+  if (armedDelete?.id === id) { clearTimeout(armedDelete.timer); armedDelete = null; }
   try {
     await annotationsApi.remove(project.id, id);   // server broadcasts annotation:deleted, which removes the marker
     removeMarker({ id });
@@ -647,8 +705,34 @@ function updateHover() {
   const cur = markers.get(id);
   if (cur) { cur.mesh.userData.hover = true; if (!cur.mesh.userData.playing) cur.mesh.material.emissiveIntensity = 0.8; }
   crosshair.classList.toggle('hover', !!id);
-  if (cur && !recorder.isRecording) setStatus(`${cur.record.author} · ${cur.record.layer} · ${fmtDur(cur.record.durationMs)}${cur.record.transcript ? ' · “' + snippet(cur.record.transcript) + '”' : ''} — click to ${cur.record.id === playingId ? 'stop' : 'play'}`);
-  else if (!id && !recorder.isRecording && !playingId) setStatus('');
+  refreshIdleStatus();
+}
+
+// Approach: the nearest visible marker within PLAY_DISTANCE is "near". It is
+// lit and previewed in the status row (author, when, first words) so a visitor
+// can read it before deciding to play. Playing takes a click or trigger; the
+// autoplay toggle restores play-on-approach for guided walks.
+let nearId = null;
+function setNear(id) {
+  if (id === nearId) return;
+  const prev = markers.get(nearId);
+  if (prev) { prev.mesh.userData.near = false; if (!prev.mesh.userData.playing && !prev.mesh.userData.hover && !prev.mesh.userData.bloomUntil) prev.mesh.material.emissiveIntensity = 0.35; }
+  nearId = id;
+  const cur = markers.get(id);
+  if (cur) { cur.mesh.userData.near = true; if (!cur.mesh.userData.playing && !cur.mesh.userData.hover && !cur.mesh.userData.bloomUntil) cur.mesh.material.emissiveIntensity = 0.6; }
+  refreshIdleStatus();
+}
+
+// What the status row shows when nothing explicit is being said: the hovered
+// clip, else nothing while a clip plays, else the near clip, else blank.
+function refreshIdleStatus() {
+  if (recorder.isRecording || starting) return;
+  const cur = markers.get(hoverId);
+  if (cur) return setStatus(`${describeRecord(cur.record)} — click to ${cur.record.id === playingId ? 'stop' : 'play'}`, { idle: true });
+  if (playingId) return;
+  const n = markers.get(nearId);
+  if (n) return setStatus(`near: ${describeRecord(n.record)} — click it to play`, { idle: true });
+  setStatus('', { idle: true });
 }
 
 // HUD list of annotations in the current project
@@ -673,9 +757,11 @@ function renderList() {
     const periodLabel = record.period ? (record.period.label || [record.period.from, record.period.to].filter(Boolean).join('–')) : '';
     const badges = (record.replies ? `<span class="badge" title="replies">↩ ${record.replies}</span>` : '') + (periodLabel ? `<span class="period" title="period">${esc(periodLabel)}</span>` : '');
     const prompt = record.prompt ? `<div class="prompt">Q: ${esc(record.prompt)}</div>` : '';
-    li.innerHTML = `<button class="play" title="play">${record.id === playingId ? '■' : '▶'}</button><span class="who">${esc(record.author)}</span><span class="meta">${esc(record.layer)} · ${fmtDur(record.durationMs)}${record.anchor.objectId ? ' · ' + esc(record.anchor.objectId) : ''}</span>${badges}<button class="del" title="delete">✕</button>${prompt}${text}`;
+    const armed = armedDelete?.id === record.id;
+    const when = whenOf(record);
+    li.innerHTML = `<button class="play" title="play">${record.id === playingId ? '■' : '▶'}</button><span class="who">${esc(record.author)}</span><span class="meta" title="${esc(when)}">${record.layer !== 'default' ? esc(record.layer) + ' · ' : ''}${fmtDur(record.durationMs)}${record.anchor.objectId ? ' · ' + esc(record.anchor.objectId) : ''}</span>${badges}<button class="del${armed ? ' armed' : ''}" title="${armed ? 'click again to erase' : 'erase (asks twice)'}">${armed ? 'erase?' : '✕'}</button>${prompt}${text}`;
     li.querySelector('.play').addEventListener('click', () => play(record.id));
-    li.querySelector('.del').addEventListener('click', () => deleteAnnotation(record.id));
+    li.querySelector('.del').addEventListener('click', () => armDelete(record.id, 'click ✕ again to erase this clip'));
     li.querySelector('.retry')?.addEventListener('click', () => annotationsApi.transcribe(project.id, record.id).catch((e) => setStatus('retry failed: ' + e.message)));
     li.addEventListener('mouseenter', () => { const m = markers.get(record.id); if (m) m.mesh.material.emissiveIntensity = 0.9; });
     li.addEventListener('mouseleave', () => { const m = markers.get(record.id); if (m && !m.mesh.userData.playing) m.mesh.material.emissiveIntensity = 0.35; });
@@ -785,8 +871,9 @@ async function endRecording() {
       prompt: q?.text, mode: q ? 'interview' : 'walk',
     });
     clearProvisional(provisional);
-    setStatus(parentRec ? `saved reply to ${parentRec.author}` : `saved ${fmtDur(clip.durationMs)} at (${anchor.x.toFixed(2)}, ${anchor.y.toFixed(2)}, ${anchor.z.toFixed(2)})${objectId ? ' on ' + objectId : ''}`);
+    setStatus(parentRec ? `saved reply to ${parentRec.author}` : `saved ${fmtDur(clip.durationMs)} at (${anchor.x.toFixed(2)}, ${anchor.y.toFixed(2)}, ${anchor.z.toFixed(2)})${objectId ? ' on ' + objectId : ''}`, { hold: 2000 });
     addMarker(rec);                  // local echo; server broadcast is deduped by id (the parent's reply count arrives as annotation:updated)
+    bloom(rec.id);
     if (q) stepQuestion(1);
   } catch (e) {
     clearProvisional(provisional);
@@ -918,7 +1005,6 @@ document.addEventListener('pointerlockerror', () => {
 });
 window.addEventListener('keydown', (e) => { if (e.code === 'Escape' && softCapture) { softCapture = false; setCaptured(false); } });
 const keys = new Set();
-let pendingDelete = null;
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   keys.add(e.code);
@@ -928,9 +1014,7 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Space') { const hit = aimMarker(camera); if (hit) play(hit); }
   if (e.code === 'Delete' || e.code === 'Backspace') {
     const hit = aimMarker(camera);
-    if (!hit) return;
-    if (pendingDelete === hit) { pendingDelete = null; deleteAnnotation(hit); }
-    else { pendingDelete = hit; setStatus('press Delete again to delete this annotation'); setTimeout(() => { if (pendingDelete === hit) pendingDelete = null; }, 2500); }
+    if (hit) armDelete(hit, 'press Delete again to erase this clip');
   }
 });
 window.addEventListener('keyup', (e) => { keys.delete(e.code); if (e.code === 'KeyR') releaseRecording(camera); });
@@ -970,7 +1054,7 @@ const net = connect({
 // dev-only handle for poking at the scene from the console
 if (import.meta.env.DEV) window.__glossy = {
   scene, renderer, camera, rig, room, assetsRoot, loaded, markers, recorder, hud, keys, lock,
-  get project() { return project; }, get selected() { return selected(); }, get playingId() { return playingId; },
+  get project() { return project; }, get selected() { return selected(); }, get playingId() { return playingId; }, get nearId() { return nearId; },
   get status() { return hud.status.textContent; },
   get captured() { return captured(); },
   get lastPlacementMs() { return lastPlacementMs; },
@@ -1029,14 +1113,20 @@ renderer.setAnimationLoop(() => {
   updateHover();
   scaleMarkers();
 
-  // proximity playback for the active layer: walk up to a marker and it plays
+  // approach: the nearest visible marker within PLAY_DISTANCE is previewed; it
+  // plays only with autoplay on (once per approach, active layer only)
   camera.getWorldPosition(near);
+  let bestId = null, bestD = PLAY_DISTANCE;
   for (const { mesh, sound, record } of markers.values()) {
-    if (record.layer !== hud.layer.value || !sound.buffer || !mesh.visible) continue;
+    if (!mesh.visible) continue;
     const d = mesh.position.distanceTo(near);
-    if (d < PLAY_DISTANCE && !sound.isPlaying && !mesh.userData.played) { mesh.userData.played = true; play(record.id); }
-    if (d > PLAY_DISTANCE * 1.5) mesh.userData.played = false;
+    if (d < bestD) { bestD = d; bestId = record.id; }
+    if (hud.autoplay.checked && record.layer === hud.layer.value && sound.buffer) {
+      if (d < PLAY_DISTANCE && !sound.isPlaying && !mesh.userData.played) { mesh.userData.played = true; play(record.id); }
+      if (d > PLAY_DISTANCE * 1.5) mesh.userData.played = false;
+    }
   }
+  setNear(bestId);
 
   renderer.render(scene, camera);
 });

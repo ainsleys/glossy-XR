@@ -40,8 +40,8 @@ test('enters VR through VRButton and records with the controller trigger', async
   await page.waitForTimeout(1000);
   await page.evaluate(() => window.__xr.controllers.right.updateButtonValue('trigger', 0));
   await expect.poll(() => markerCount(page), { timeout: 10_000 }).toBe(1);
-  // the new marker often sits under the controller ray, so the "saved" status gives way to its hover text at once
-  await expect.poll(() => status(page)).toMatch(/^saved|click to play/);
+  // "saved" is held for two seconds even though the new marker sits under the controller ray
+  await expect.poll(() => status(page)).toMatch(/^saved/);
   const list = await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json();
   expect(list).toHaveLength(1);
   expect(list[0].author).toBe('HeadsetTester');
