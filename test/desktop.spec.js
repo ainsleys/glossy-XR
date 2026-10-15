@@ -106,6 +106,23 @@ test('records, saves, plays back, and deletes an annotation', async ({ page, req
   expect(c).toMatchObject({ id: a.id, attribution: 'Tester', timestamp: a.createdAt, anchor: a.anchor, period: null, mode: 'walk', parent: null });
   expect(c.words.length).toBe(done.transcription.words.length);
   expect(c.pose.length).toBe(a.pose.length);
+  // the same contribution as an EDM record: provided CHO, audio web resource, aggregation
+  const edmRes = await request.get(`${API}/api/projects/${project.id}/export?format=edm`);
+  expect(edmRes.headers()['content-type']).toContain('application/ld+json');
+  const edm = await edmRes.json();
+  expect(edm['@context'].edm).toBe('http://www.europeana.eu/schemas/edm/');
+  const choId = `${API}/api/projects/${project.id}/annotations/${a.id}`;
+  const cho = edm['@graph'].find((n) => n['@id'] === choId);
+  expect(cho).toMatchObject({ '@type': 'edm:ProvidedCHO', 'dc:creator': 'Tester', 'dcterms:created': a.createdAt, 'edm:type': 'SOUND', 'dcterms:isPartOf': `${API}/api/projects/${project.id}` });
+  expect(cho['glossy:anchor']).toMatchObject({ x: a.anchor.x, y: a.anchor.y, z: a.anchor.z });
+  expect(cho['dc:description']['@value']).toBe(done.transcript);
+  const agg = edm['@graph'].find((n) => n['edm:aggregatedCHO'] === choId);
+  expect(agg).toMatchObject({ '@type': 'ore:Aggregation', 'edm:ugc': 'true', 'edm:isShownBy': `${API}${a.audioUrl}`, 'edm:rights': 'http://creativecommons.org/licenses/by/4.0/' });
+  const web = edm['@graph'].find((n) => n['@id'] === `${API}${a.audioUrl}`);
+  expect(web).toMatchObject({ '@type': 'edm:WebResource', 'dc:format': 'audio/webm' });
+  expect(web['dcterms:provenance']).toContain('Transcribed by');
+  const place = edm['@graph'].find((n) => n['@id'] === `${API}/api/projects/${project.id}`);
+  expect(place['dcterms:hasPart']).toEqual([choId]);
 
   // Delete twice removes it everywhere: row, audio file, export
   await page.keyboard.press('Delete');

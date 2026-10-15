@@ -77,6 +77,23 @@ Tested on 12 Oct 2026 with public-domain or permissively licensed files: Khronos
 
 `GET /api/projects/:id/export` returns the project and its contributions; `GET /api/export` returns every project the same way. Each contribution carries `attribution`, `timestamp`, `anchor`, `period`, `parent`, `mode`, `prompt`, `layer`, `consent`, `audio`, `durationMs`, `language`, `transcript`, `words`, `pose`, `poseSource` and `links`, so a set can be reviewed, filtered by period or mapped to another schema without the viewer. Erasing a clip removes the row, the audio file and the derived data, and the export no longer contains it.
 
+### Standard export (Europeana Data Model)
+
+`GET /api/projects/:id/export?format=edm` (the *Export EDM* link on the review page, *EDM* in the HUD) returns the same contributions as Europeana Data Model records in JSON-LD, media type `application/ld+json`. This is the shape in which collected annotations can go back into an institution's asset metadata: EDM reuses Dublin Core, so a Dublin Core pipeline reads the records as they are, and every statement is a triple, so a CIDOC-CRM mapping (contribution as `E73 Information Object` made in an `E7 Activity` by an `E21 Person` at an `E53 Place` about an `E52 Time-Span`) is a transformation of the graph, not a new export. The mapping follows the one-to-one principle as restated in Europeana's *Review of EDM to support 3D* (Isaac ed., 2024): the thing said is one node, the file that carries it another.
+
+| Node | What it stands for | Properties |
+|---|---|---|
+| `edm:ProvidedCHO` (project) | the place | `dc:title`, `edm:type` `3D`, `dcterms:hasPart` → every included contribution, `glossy:contributions`, `glossy:withheldForConsent` |
+| `edm:WebResource` (assets) | each scan, photo or video of the scene | `dc:title`, `dc:format`, `edm:type` (`3D`, `IMAGE`, `VIDEO`), `edm:rights` |
+| `ore:Aggregation` (project) | | `edm:dataProvider`, `edm:provider`, `edm:rights`, `edm:isShownAt` (the room), `edm:isShownBy` (the scene asset), `edm:hasView` (the rest) |
+| `edm:ProvidedCHO` (contribution) | what was said | `dc:creator` (attribution), `dcterms:created` (timestamp), `dcterms:spatial` (place and anchored object) plus `glossy:anchor` (scene coordinates), `dcterms:temporal` → `edm:TimeSpan` (the period), `dc:description` (transcript, language-tagged), `dc:language`, `dc:type` (`voice annotation`, `interview answer`, `reply to a voice annotation`), `edm:type` `SOUND`, `dcterms:isPartOf` → the place, `edm:isRelatedTo` and `glossy:replyTo` → the parent, `glossy:prompt`, `glossy:mode`, `glossy:layer`, `glossy:nativeRecord` → the native export |
+| `edm:WebResource` (audio) | the recording | `dc:format` `audio/webm`, `ebucore:duration`, `dcterms:extent`, `dcterms:created`, `dc:creator`, `edm:rights`, `dcterms:provenance` (paradata: headset or desktop, transcription model and backend, whether the language was detected or set, whether the transcript was rejected) |
+| `edm:WebResource` (photographs) | each file a reviewer linked | `dc:title`, `edm:type` `IMAGE`, `edm:rights` |
+| `ore:Aggregation` (contribution) | | `edm:aggregatedCHO`, `edm:dataProvider`, `edm:provider`, `edm:rights`, `edm:ugc` `true`, `edm:isShownBy` (audio), `edm:isShownAt` (the clip in the room, `/?project=…&focus=…`), `edm:hasView` (photographs) |
+| `edm:TimeSpan` | one per distinct period | `skos:prefLabel`, `edm:begin`, `edm:end` |
+
+Clips whose author withdrew consent are left out, and the project node counts them. What EDM has no place for (the anchor coordinates, the layer, the mode, the question, the pose trace and word timings) stays under the `glossy:` namespace or in the native record the `glossy:nativeRecord` link points at, so nothing is lost, only set aside. Identifiers are URLs on this server (`GLOSSY_BASE_URL` sets the host for a deployment behind a proxy); `GLOSSY_PROVIDER` names the data provider and `GLOSSY_RIGHTS` is the licence URI for the set, one licence for all contributions, because that is what the consent text promises. The suite checks the record for a desktop clip (creator, timestamp, anchor, transcript, audio resource, aggregation, rights) and, on the review page, that a period becomes a TimeSpan, a linked photograph a view, and a withdrawn clip disappears from the set.
+
 ## Interview mode and replies
 
 A project can hold a script: an ordered list of questions, edited in the HUD's Interview panel or set with `PATCH /api/projects/:id {script: {questions: [{text}]}}`. With interview mode ticked, the HUD shows one question at a time, **Ask** reads it aloud through the browser's speech synthesis (never while the microphone is open), and every clip recorded answers the current question: it is saved with `mode: "interview"` and `prompt` set to the question, and the panel advances. The intended use is a guided session with a former resident or an expert during prototyping, on a screen or in the headset, with the record written as they speak. The script is plain data, so a dialogue model can replace the fixed list later without changing what is stored.
@@ -118,6 +135,9 @@ Language is decided per clip: the clip's own `language` if set, else the project
 | `GLOSSY_WHISPER_DTYPE` | `q8` | `fp32`, `fp16`, `q4` |
 | `GLOSSY_LANGUAGE` | unset | ISO code to force for every clip, e.g. `tr`; unset means per project, else detected |
 | `GLOSSY_MODEL_CACHE` | `~/.cache/glossy-xr/models` | |
+| `GLOSSY_BASE_URL` | the request's host | base of the identifiers in the EDM export, e.g. `https://glossy.example.org` behind a proxy |
+| `GLOSSY_PROVIDER` | `Glossy XR` | `edm:dataProvider` and `edm:provider` in the EDM export: the institution or project |
+| `GLOSSY_RIGHTS` | `http://creativecommons.org/licenses/by/4.0/` | `edm:rights` for every contribution and asset in the EDM export |
 
 Word timestamps are kept so later work can jump playback to a word, tag a clip by its content, or make the set of annotations queryable.
 
@@ -164,6 +184,7 @@ Headless Chromium refuses the Pointer Lock API, so the client falls back to a so
 | PATCH / DELETE | `/api/projects/:id/annotations/:aid` | update `{layer, period, consent, links, language}` (a reviewer may withdraw consent after the fact; the clip stays until erased); erase record, audio file and derived data, detaching any replies |
 | POST | `/api/projects/:id/annotations/:aid/transcribe` | re-run speech-to-text for one clip (202); optional `{language}` sets the clip's language first |
 | GET | `/api/projects/:id/export`, `/api/export` | JSON export, schema `glossy-xr/project/0.4`: project plus `contributions[]` |
+| GET | `/api/projects/:id/export?format=edm` | the same contributions as Europeana Data Model records, JSON-LD |
 | GET | `/audio/<id>.webm`, `/models/<project>/<file>` | files |
 | Socket.IO | `join {project}` → `annotation:all`; then `annotation:new`, `annotation:updated` (transcript landed), `annotation:deleted`, `project:updated`, `project:created`, `project:deleted` | live sync |
 
@@ -171,7 +192,7 @@ Validation: anchor must be numeric, author required, consent must be `true`, mod
 
 ## Status
 
-Verified 12 Oct 2026: server round-trip (projects, model upload, annotations, export, delete, restart persistence) with curl; desktop client rendering, project switching, and every format in the table above in Chrome. Verified 13 Oct 2026 by the end-to-end suite: recording through `getUserMedia` and `MediaRecorder`, playback, delete, live sync, and the WebXR session and controller path against an emulated headset. Verified 15 Oct 2026 by the suite: language detection (Turkish and English), per-project language, head pose, provisional placement, export, replies, interview mode, periods, visitor mode, the headset panel, crowd thinning, the transcript guard, the review page and linked photographs. Not yet verified on physical hardware: a real Quest.
+Verified 12 Oct 2026: server round-trip (projects, model upload, annotations, export, delete, restart persistence) with curl; desktop client rendering, project switching, and every format in the table above in Chrome. Verified 13 Oct 2026 by the end-to-end suite: recording through `getUserMedia` and `MediaRecorder`, playback, delete, live sync, and the WebXR session and controller path against an emulated headset. Verified 15 Oct 2026 by the suite: language detection (Turkish and English), per-project language, head pose, provisional placement, export, replies, interview mode, periods, visitor mode, the headset panel, crowd thinning, the transcript guard, the review page and linked photographs, the EDM export. Not yet verified on physical hardware: a real Quest.
 
 ## Known limits
 
@@ -184,7 +205,7 @@ Verified 12 Oct 2026: server round-trip (projects, model upload, annotations, ex
 
 - A phone or tablet form bound to an existing anchor: text, photos and consent added on the spot, no headset needed (the review page covers the desk).
 - Review page: drag a photograph straight from a web page, period by scrubbing the waveform, the pose trace drawn in the room as well as on the plan.
-- Export mapped to standard metadata schemas (the contribution record already carries what Europeana Data Model and CIDOC-CRM mappings need).
+- A CIDOC-CRM serialisation of the EDM export, and an OAI-PMH endpoint if an aggregator asks for one.
 - A time control inside the headset (the HUD slider exists); locking onto one voice while moving through time; replies from the controller in XR; a dialogue model driving the interview script.
 - Accounts, project membership, share links, object storage for files.
 - Production transcription: the local CPU backend is for development; a deployment should either switch to the API backend (`GLOSSY_TRANSCRIBE=openai`) or run a larger Whisper model on a box with the CPU or GPU for it.

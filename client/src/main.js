@@ -58,7 +58,7 @@ document.body.classList.toggle('visitor', VISITOR);
 const hud = {
   project: $('project'), newProject: $('newProject'), modelInfo: $('modelInfo'),
   author: $('author'), layer: $('layer'), consent: $('consent'), status: $('statusText'), rec: $('rec'), count: $('count'),
-  assetList: $('assetList'), assetFile: $('assetFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), annList: $('annList'),
+  assetList: $('assetList'), assetFile: $('assetFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), edmLink: $('edmLink'), annList: $('annList'),
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
   walk: $('walk'), autoplay: $('autoplay'), reviewLink: $('reviewLink'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
@@ -495,6 +495,7 @@ async function openProject(id) {
   project = await projectsApi.get(id);
   hud.project.value = id;
   hud.exportLink.href = `/api/projects/${id}/export`;
+  hud.edmLink.href = `/api/projects/${id}/export?format=edm`;
   history.replaceState(null, '', `?project=${id}${VISITOR ? '&mode=visitor' : ''}`);
   hud.visitorLink.href = `?project=${id}&mode=visitor`;
   hud.reviewLink.href = `/review.html?project=${id}`;

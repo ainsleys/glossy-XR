@@ -9,7 +9,7 @@ import { connect, projects as projectsApi, assets as assetsApi, annotations as a
 import { unclearReason, UNCLEAR_TEXT, langName } from '../../shared/text.js';
 
 const $ = (id) => document.getElementById(id);
-const ui = { project: $('project'), count: $('count'), search: $('search'), filters: $('filters'), roomLink: $('roomLink'), visitorLink: $('visitorLink'), exportLink: $('exportLink'), plan: $('plan'), clips: $('clips'), player: $('player'), audio: $('audio'), time: $('time'), toast: $('toast') };
+const ui = { project: $('project'), count: $('count'), search: $('search'), filters: $('filters'), roomLink: $('roomLink'), edmLink: $('edmLink'), visitorLink: $('visitorLink'), exportLink: $('exportLink'), plan: $('plan'), clips: $('clips'), player: $('player'), audio: $('audio'), time: $('time'), toast: $('toast') };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmtDur = (ms) => (ms ? (ms / 1000).toFixed(1) + ' s' : '');
 const yearOf = (v, d) => { const n = parseInt(String(v ?? ''), 10); return Number.isFinite(n) ? n : d; };
@@ -271,7 +271,7 @@ async function openProject(id) {
   ui.project.value = id;
   document.title = `${project.name} · Review · Glossy XR`;
   history.replaceState(null, '', `?project=${id}`);
-  ui.roomLink.href = `/?project=${id}`; ui.visitorLink.href = `/?project=${id}&mode=visitor`; ui.exportLink.href = `/api/projects/${id}/export`;
+  ui.roomLink.href = `/?project=${id}`; ui.visitorLink.href = `/?project=${id}&mode=visitor`; ui.exportLink.href = `/api/projects/${id}/export`; ui.edmLink.href = `/api/projects/${id}/export?format=edm`;
   records = new Map(); selectedId = null; periodFilter = null; ui.audio.pause(); ui.player.classList.remove('on');
   for (const a of await annotationsApi.list(id)) records.set(a.id, a);
   render();

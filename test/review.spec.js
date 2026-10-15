@@ -74,6 +74,14 @@ test('review page: search, seek by word, period, photo link, consent, erase', as
   expect(asset.transform.y).toBeCloseTo(target.anchor.y + 0.3, 2);          // hung just above the mark
   const exported = await (await request.get(`${API}/api/projects/${project.id}/export`)).json();
   expect(exported.contributions.find((c) => c.id === target.id).links).toHaveLength(1);
+  // in the EDM export the period is a TimeSpan and the photo a view of the clip
+  const edmOf = async () => (await request.get(`${API}/api/projects/${project.id}/export?format=edm`)).json();
+  const choId = `${API}/api/projects/${project.id}/annotations/${target.id}`;
+  let edm = await edmOf();
+  const cho = edm['@graph'].find((n) => n['@id'] === choId);
+  const span = edm['@graph'].find((n) => n['@id'] === cho['dcterms:temporal']);
+  expect(span).toMatchObject({ '@type': 'edm:TimeSpan', 'skos:prefLabel': 'the mill years', 'edm:begin': '1931', 'edm:end': '1939' });
+  expect(edm['@graph'].find((n) => n['edm:aggregatedCHO'] === choId)['edm:hasView']).toEqual([`${API}${linked.links[0].url}`]);
   await card.locator('.unlink').click();
   await expect(card.locator('.links img')).toHaveCount(0);
   expect((await getOne(target.id)).links).toHaveLength(0);
@@ -82,6 +90,9 @@ test('review page: search, seek by word, period, photo link, consent, erase', as
   await card.locator('.consent').uncheck();
   await expect.poll(async () => (await getOne(target.id)).consent).toBe(false);
   await expect(card.locator('.head')).toContainText('consent withdrawn');
+  edm = await edmOf();                                       // a withdrawn clip leaves the EDM export, and the project node says so
+  expect(edm['@graph'].find((n) => n['@id'] === choId)).toBeUndefined();
+  expect(edm['@graph'].find((n) => n['@id'] === `${API}/api/projects/${project.id}`)['glossy:withheldForConsent']).toBe(1);
   await card.locator('.lang').selectOption('en');
   await card.locator('.retranscribe').click();
   await expect.poll(async () => (await getOne(target.id)).language).toBe('en');

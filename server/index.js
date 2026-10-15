@@ -26,6 +26,7 @@ import { randomUUID } from 'node:crypto';
 import { openDb } from './db.js';
 import { createTranscriber } from './transcribe.js';
 import { unclearReason } from '../shared/text.js';
+import { toEdm } from './edm.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -394,6 +395,12 @@ function exportProject(p) {
   };
 }
 app.get('/api/projects/:id/export', projectOr404, (req, res) => {
+  if (req.query.format === 'edm') {                            // the same contributions as EDM records in JSON-LD (server/edm.js)
+    const base = process.env.GLOSSY_BASE_URL || `${req.protocol}://${req.get('host')}`;
+    const doc = toEdm(req.project, db.annotations.list(req.params.id), { base, provider: process.env.GLOSSY_PROVIDER || 'Glossy XR', rights: process.env.GLOSSY_RIGHTS || 'http://creativecommons.org/licenses/by/4.0/' });
+    res.setHeader('Content-Disposition', `attachment; filename="glossy-${req.params.id}.edm.jsonld"`);
+    return res.type('application/ld+json').send(JSON.stringify(doc, null, 2));
+  }
   res.setHeader('Content-Disposition', `attachment; filename="glossy-${req.params.id}.json"`);
   res.json({ exportedAt: new Date().toISOString(), schema: 'glossy-xr/project/0.4', ...exportProject(req.project) });
 });
