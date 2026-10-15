@@ -164,7 +164,8 @@ server.headersTimeout = 66_000;
 const io = new SocketServer(server, { cors: { origin: true }, maxHttpBufferSize: 1e6 });
 
 app.use('/audio', express.static(AUDIO_DIR, { maxAge: '1h' }));
-app.use('/models', express.static(MODEL_DIR, { maxAge: '1d', setHeaders: (res, p) => {
+// max-age 0: a re-uploaded file keeps its name, so browsers must revalidate (the ETag changes) instead of showing yesterday's model for a day
+app.use('/models', express.static(MODEL_DIR, { maxAge: 0, setHeaders: (res, p) => {
   if (p.endsWith('.gltf')) res.setHeader('Content-Type', 'model/gltf+json');
   if (p.endsWith('.glb')) res.setHeader('Content-Type', 'model/gltf-binary');
 } }));
