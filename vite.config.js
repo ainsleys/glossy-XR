@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite';
 import basicSsl from '@vitejs/plugin-basic-ssl';
+import path from 'node:path';
 
 // WebXR and getUserMedia need a secure context. http://localhost already
 // counts as one, so plain HTTP is the default for desktop work. A headset on
@@ -28,5 +29,6 @@ export default defineConfig({
   build: {
     outDir: '../dist',
     emptyOutDir: true,
+    rollupOptions: { input: { room: path.resolve('client/index.html'), review: path.resolve('client/review.html') } },   // the room and the review page
   },
 });

@@ -64,6 +64,7 @@ export function openDb(dataDir) {
     ['prompt', 'TEXT'],             // the question this clip answers (interview mode)
     ['mode', 'TEXT'],               // walk | interview
     ['language', 'TEXT'],           // language requested for transcription; detected language lives in transcript_meta
+    ['links', 'TEXT'],              // attachments a reviewer linked to the clip: JSON [{kind, asset, url, title}]
   ]);
   addCols('projects', [
     ['language', 'TEXT'],           // default transcription language for the project; NULL = detect
@@ -98,7 +99,7 @@ export function openDb(dataDir) {
       INSERT INTO annotations (id, project_id, author, created_at, x, y, z, object_id, layer, audio_url, duration_ms, transcript, transcript_status, consent,
                                parent_id, period, pose, pose_source, prompt, mode, language)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-    updateAnnotation: db.prepare(`UPDATE annotations SET layer = ?, period = ?, consent = ? WHERE id = ? AND project_id = ?`),
+    updateAnnotation: db.prepare(`UPDATE annotations SET layer = ?, period = ?, consent = ?, links = ?, language = ? WHERE id = ? AND project_id = ?`),
     setTranscript: db.prepare(`UPDATE annotations SET transcript = ?, transcript_status = ?, transcript_meta = ? WHERE id = ? AND project_id = ?`),
     listByTranscriptStatus: db.prepare(`${ANN} WHERE a.transcript_status = ? ORDER BY a.created_at`),
     deleteAnnotation: db.prepare(`DELETE FROM annotations WHERE id = ? AND project_id = ?`),
@@ -132,7 +133,7 @@ export function openDb(dataDir) {
     parent: r.parent_id || null,
     replies: Number(r.reply_count || 0),
     mode: r.mode || 'walk', prompt: r.prompt || null, language: r.language || null,
-    pose: safeJson(r.pose, []), poseSource: r.pose_source || null,
+    pose: safeJson(r.pose, []), poseSource: r.pose_source || null, links: safeJson(r.links, []),
     layer: r.layer, audioUrl: r.audio_url, durationMs: r.duration_ms, transcript: r.transcript, consent: !!r.consent,
     transcription: { status: r.transcript_status || (r.transcript ? 'done' : 'none'), ...safeJson(r.transcript_meta) },
   });
@@ -192,12 +193,14 @@ export function openDb(dataDir) {
         q.touchProject.run(t, projectId);
         return api.annotations.get(projectId, id);
       },
-      /** patch: { layer?, period? (object or null), consent? } */
+      /** patch: { layer?, period? (object or null), consent?, links? (array), language? (code or null) } */
       update: (projectId, id, patch) => {
         const cur = api.annotations.get(projectId, id);
         if (!cur) return null;
         const period = patch.period === undefined ? cur.period : patch.period;
-        q.updateAnnotation.run(patch.layer ?? cur.layer, period ? JSON.stringify(period) : null, (patch.consent ?? cur.consent) ? 1 : 0, id, projectId);
+        const links = patch.links === undefined ? cur.links : patch.links;
+        const language = patch.language === undefined ? cur.language : patch.language;
+        q.updateAnnotation.run(patch.layer ?? cur.layer, period ? JSON.stringify(period) : null, (patch.consent ?? cur.consent) ? 1 : 0, links?.length ? JSON.stringify(links) : null, language, id, projectId);
         q.touchProject.run(now(), projectId);
         return api.annotations.get(projectId, id);
       },

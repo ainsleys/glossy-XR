@@ -22,6 +22,7 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 import { VoiceRecorder } from './recorder.js';
 import { connect, projects as projectsApi, assets as assetsApi, annotations as annotationsApi } from './api.js';
 import { loadModel, SUPPORTED_EXTENSIONS } from './loaders.js';
+import { unclearReason, UNCLEAR_TEXT } from '../../shared/text.js';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 
 // BVH-accelerated raycasts for every mesh: anchoring, hover, and collision
@@ -34,7 +35,8 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 const LAYERS = ['default', 'draft', 'review', 'final'];
 const MARKER_RADIUS = 0.06;
 const PLAY_DISTANCE = 1.2;                        // metres; within this a marker is "near": previewed and lit, played on click (or on approach with autoplay on)
-const BLOOM_MS = 450;                             // the commit cue: a saved marker swells and glows for this long
+const BLOOM_MS = 450;
+const QUIET_PEAK = 0.05;          // recording peak (RMS × 4) below which a clip is reported as near-silent                             // the commit cue: a saved marker swells and glows for this long
 const DELETE_ARM_MS = 2500;                       // erase asks twice; the second press must come within this window
 // A crowded room stays readable: only the nearest MAX_FULL markers within
 // FULL_DISTANCE draw at full size; the rest are abstracted to small faint
@@ -59,7 +61,7 @@ const hud = {
   assetList: $('assetList'), assetFile: $('assetFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), annList: $('annList'),
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
-  walk: $('walk'), autoplay: $('autoplay'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
+  walk: $('walk'), autoplay: $('autoplay'), reviewLink: $('reviewLink'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
   interview: $('interview'), visitorLink: $('visitorLink'), question: $('question'), level: $('level'), levelBar: $('levelBar'), hint: $('hint'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
 };
 const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
@@ -96,7 +98,9 @@ const whenOf = (r) => {
   return days < 1 ? 'today' : days < 30 ? `${days} day${days === 1 ? '' : 's'} ago` : days < 365 ? `${Math.max(1, Math.floor(days / 30))} months ago` : `${Math.floor(days / 365)} year${days < 730 ? '' : 's'} ago`;
 };
 // One line about a clip for the status row: author · when · layer (unless default) · length · first words.
-const describeRecord = (r) => [r.author, whenOf(r), r.layer !== 'default' ? r.layer : '', fmtDur(r.durationMs), r.transcript ? '“' + snippet(r.transcript) + '”' : ''].filter(Boolean).join(' · ');
+const linksOf = (r) => { const n = (r.links || []).length; return n ? `${n} ${(r.links || []).every((l) => l.kind === 'image') ? 'photo' : 'attachment'}${n === 1 ? '' : 's'}` : ''; };
+const spokenText = (r) => (r.transcript && !unclearReason(r.transcript) ? r.transcript : '');   // older records may hold a loop the guard now catches
+const describeRecord = (r) => [r.author, whenOf(r), r.layer !== 'default' ? r.layer : '', fmtDur(r.durationMs), linksOf(r), spokenText(r) ? '“' + snippet(spokenText(r)) + '”' : ''].filter(Boolean).join(' · ');
 
 // ---- renderer / scene ------------------------------------------------------
 
@@ -106,7 +110,10 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
 document.body.appendChild(renderer.domElement);
-document.body.appendChild(VRButton.createButton(renderer));
+const vrButton = VRButton.createButton(renderer);
+document.body.appendChild(vrButton);
+// a desktop without a headset gets no "VR NOT SUPPORTED" sign; the help text says where VR is
+(navigator.xr ? navigator.xr.isSessionSupported('immersive-vr').catch(() => false) : Promise.resolve(false)).then((ok) => { if (!ok) vrButton.style.setProperty('display', 'none', 'important'); });
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0f14);
@@ -171,13 +178,14 @@ function renderHint() {
 // Microphone level while recording, from an analyser on the capture stream,
 // shown as a bar in the HUD and on the headset panel. The timer is in the
 // status text ("recording… 3s").
-let level = 0, levelNode = null, levelData = null, levelSrc = null, recStatusBase = '', recSecs = -1;
+let level = 0, levelNode = null, levelData = null, levelSrc = null, recStatusBase = '', recSecs = -1, recPeak = 0;
 function updateLevel() {
   if (!recorder.isRecording) { if (level) { level = 0; hud.levelBar.style.width = '0%'; } hud.level.classList.remove('on'); return; }
   if (levelNode) {
     levelNode.getByteTimeDomainData(levelData);
     let s = 0; for (let i = 0; i < levelData.length; i++) { const v = (levelData[i] - 128) / 128; s += v * v; }
     level = Math.min(1, Math.sqrt(s / levelData.length) * 4);
+    recPeak = Math.max(recPeak, level);
   }
   hud.level.classList.add('on');
   hud.levelBar.style.width = `${Math.round(level * 100)}%`;
@@ -233,14 +241,17 @@ async function showAssets(p) {
   }
   loaded.clear();
   const list = p.assets || [];
-  room.visible = list.length === 0;
-  floorGrid.visible = list.length > 0;
+  const isScene = (a) => !['image', 'video'].includes(a.type) || a.options?.mode === 'sphere';   // a photo linked to a clip hangs in the room; it is not the room
+  room.visible = !list.some(isScene);
+  floorGrid.visible = !room.visible;
   selectedId = list.some((a) => a.id === selectedId) ? selectedId : (list[0]?.id ?? null);
   renderAssets();
   await Promise.all(list.map((a, i) => loadAsset(a, i)));
   frameAll();
   updateFullDistance();
   renderAssets();
+  assetsReady = true;
+  if (focusId && markers.has(focusId)) { focusMarker(focusId); focusId = null; }   // the clip picked on the review page wins over framing
 }
 
 async function loadAsset(asset, index = loaded.size) {
@@ -304,7 +315,7 @@ function frameAll() {
   assetsRoot.updateMatrixWorld(true);
   const box = new THREE.Box3();
   for (const e of loaded.values()) {
-    if (!e.model || !e.group.visible || e.model.imageMode === 'sphere') continue;
+    if (!e.model || !e.group.visible || e.model.imageMode) continue;      // panoramas surround the camera and flat photos hang at clips: neither frames the view
     const b = e.model.box.clone().applyMatrix4(e.group.matrixWorld);
     if (Number.isFinite(b.min.x)) box.union(b);
   }
@@ -486,6 +497,7 @@ async function openProject(id) {
   hud.exportLink.href = `/api/projects/${id}/export`;
   history.replaceState(null, '', `?project=${id}${VISITOR ? '&mode=visitor' : ''}`);
   hud.visitorLink.href = `?project=${id}&mode=visitor`;
+  hud.reviewLink.href = `/review.html?project=${id}`;
   selectedId = null;
   clearMarkers();
   net.join(id);
@@ -878,6 +890,7 @@ function updateHover() {
   const cur = markers.get(id);
   if (cur) { cur.mesh.userData.hover = true; if (!cur.mesh.userData.playing) cur.mesh.material.emissiveIntensity = 1.0; }
   crosshair.classList.toggle('hover', !!id);
+  markRow(id || nearId, !!id);
   refreshIdleStatus();
 }
 
@@ -893,6 +906,7 @@ function setNear(id) {
   nearId = id;
   const cur = markers.get(id);
   if (cur) { cur.mesh.userData.near = true; if (!cur.mesh.userData.playing && !cur.mesh.userData.hover && !cur.mesh.userData.bloomUntil) cur.mesh.material.emissiveIntensity = 0.6; }
+  if (!hoverId) markRow(id, false);
   refreshIdleStatus();
 }
 
@@ -909,6 +923,32 @@ function refreshIdleStatus() {
   setStatus('', { idle: true });
 }
 
+// The list and the scene point at each other: aiming at or standing near a
+// marker marks its row and brings it into view; a row under the mouse lights
+// its marker; clicking a name turns the desktop camera to the marker.
+let hotId = null;
+function markRow(id, scroll) {
+  const ul = hud.annList;
+  hotId = id || null;
+  for (const li of ul.querySelectorAll('li.hot')) if (li.dataset.id !== id) li.classList.remove('hot');
+  if (!id) return;
+  const li = ul.querySelector(`li[data-id="${id}"]`);
+  if (!li) return;
+  li.classList.add('hot');
+  if (scroll && !ul.matches(':hover')) li.scrollIntoView({ block: 'nearest' });
+}
+let focusId = new URLSearchParams(location.search).get('focus'), assetsReady = false;
+function focusMarker(id) {
+  const m = markers.get(id);
+  if (!m || renderer.xr.isPresenting) return;
+  const a = m.mesh.position;
+  const toCentre = new THREE.Vector3(-a.x, 0, -a.z); if (toCentre.lengthSq() < 1e-4) toCentre.set(0, 0, 1); toCentre.normalize();
+  camera.position.set(a.x + toCentre.x * 1.0, 1.6, a.z + toCentre.z * 1.0);   // within approach distance, so the status previews this clip
+  camera.lookAt(a); camera.updateMatrixWorld(true);
+  bloom(id);
+  markRow(id, true);
+}
+
 // HUD list of annotations in the current project
 function renderList() {
   const ul = hud.annList;
@@ -922,20 +962,25 @@ function renderList() {
   for (const r of roots) { items.push(r); for (const c of (byParent.get(r.id) || []).sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))) items.push(c); }
   for (const record of items) {
     const li = document.createElement('li');
-    li.className = (record.id === playingId ? 'playing ' : '') + (VISITOR || record.layer === hud.layer.value ? '' : 'dim ') + (record.parent && markers.has(record.parent) ? 'reply' : '');
+    li.className = (record.id === playingId ? 'playing ' : '') + (VISITOR || record.layer === hud.layer.value ? '' : 'dim ') + (record.id === hotId ? 'hot ' : '') + (record.parent && markers.has(record.parent) ? 'reply' : '');
+    li.dataset.id = record.id;
     const tr = record.transcription || {};
-    const text = record.transcript ? `<div class="text">${esc(record.transcript)}</div>`
+    const unclear = tr.unclear || unclearReason(record.transcript);         // stored as unclear, or an older transcript the guard now catches
+    const text = record.transcript && !unclear ? `<div class="text">${esc(record.transcript)}</div>`
       : tr.status === 'pending' ? `<div class="text pending">transcribing…</div>`
       : tr.status === 'failed' ? `<div class="text failed" title="${esc(tr.error || '')}">transcription failed <button class="retry">retry</button></div>`
-      : tr.status === 'done' && tr.unclear ? `<div class="text pending" title="${esc(tr.raw || '')}">(unclear: the model repeated itself; try again closer to the microphone)</div>`
+      : unclear ? `<div class="text pending" title="${esc(tr.raw || record.transcript || '')}">(${UNCLEAR_TEXT[unclear] || 'unclear'})</div>`
       : tr.status === 'done' ? `<div class="text pending">(no speech detected)</div>` : '';
     const periodLabel = record.period ? (record.period.label || [record.period.from, record.period.to].filter(Boolean).join('–')) : '';
     const badges = (record.replies ? `<span class="badge" title="replies">↩ ${record.replies}</span>` : '') + (periodLabel ? `<span class="period" title="period">${esc(periodLabel)}</span>` : '');
     const prompt = record.prompt ? `<div class="prompt">Q: ${esc(record.prompt)}</div>` : '';
     const armed = armedDelete?.id === record.id;
     const when = whenOf(record);
-    li.innerHTML = `<button class="play" title="play">${record.id === playingId ? '■' : '▶'}</button><span class="who">${esc(record.author)}</span><span class="meta" title="${esc(when)}">${record.layer !== 'default' ? esc(record.layer) + ' · ' : ''}${fmtDur(record.durationMs)}${record.anchor.objectId ? ' · ' + esc(record.anchor.objectId) : ''}</span>${badges}<button class="del${armed ? ' armed' : ''}" title="${armed ? 'click again to erase' : 'erase (asks twice)'}">${armed ? 'erase?' : '✕'}</button>${prompt}${text}`;
+    const sw = markers.get(record.id)?.mesh.material.color.getStyle() || '#888';
+    const photos = linksOf(record);
+    li.innerHTML = `<button class="play" title="play">${record.id === playingId ? '■' : '▶'}</button><span class="sw" style="background:${sw}" title="${esc(when)}"></span><span class="who" title="turn to this clip">${esc(record.author)}</span><span class="meta" title="${esc([when, record.anchor.objectId ? 'on ' + record.anchor.objectId : ''].filter(Boolean).join(' · '))}">${record.layer !== 'default' ? esc(record.layer) + ' · ' : ''}${record.period ? '' : esc(when) + ' · '}${fmtDur(record.durationMs)}${photos ? ' · ' + photos : ''}</span>${badges}<button class="del${armed ? ' armed' : ''}" title="${armed ? 'click again to erase' : 'erase (asks twice)'}">${armed ? 'erase?' : '✕'}</button>${prompt}${text}`;
     li.querySelector('.play').addEventListener('click', () => play(record.id));
+    li.querySelector('.who').addEventListener('click', () => focusMarker(record.id));
     li.querySelector('.del').addEventListener('click', () => armDelete(record.id, 'click ✕ again to erase this clip'));
     li.querySelector('.retry')?.addEventListener('click', () => annotationsApi.transcribe(project.id, record.id).catch((e) => setStatus('retry failed: ' + e.message)));
     li.addEventListener('mouseenter', () => { const m = markers.get(record.id); if (m) m.mesh.material.emissiveIntensity = 0.9; });
@@ -1004,6 +1049,7 @@ async function beginRecording(source, opts = {}) {
   cursor.visible = !opts.parent;
   hud.rec.classList.add('on'); crosshair.classList.add('rec');
   const q = currentQuestion();
+  recPeak = 0;
   recStatusBase = opts.parent ? 'recording a reply…' : q ? `recording answer ${qIndex + 1}…` : VISITOR ? 'recording…' : 'recording… (' + hud.layer.value + ')';
   recSecs = -1;
   setStatus(recStatusBase + ' 0s');
@@ -1061,7 +1107,8 @@ async function endRecording() {
       prompt: q?.text, mode: q ? 'interview' : 'walk',
     });
     clearProvisional(provisional);
-    setStatus(parentRec ? `saved reply to ${parentRec.author}` : `saved ${fmtDur(clip.durationMs)} at (${anchor.x.toFixed(2)}, ${anchor.y.toFixed(2)}, ${anchor.z.toFixed(2)})${objectId ? ' on ' + objectId : ''}`, { hold: 2000 });
+    const quiet = levelNode && recPeak < QUIET_PEAK;              // the level meter never moved: likely the wrong input or a muted microphone
+    setStatus((parentRec ? `saved reply to ${parentRec.author}` : `saved ${fmtDur(clip.durationMs)}${objectId ? ' on ' + objectId : ''}`) + (quiet ? ' — the microphone heard almost nothing; check the input' : ''), { hold: quiet ? 5000 : 2000 });
     addMarker(rec);                  // local echo; server broadcast is deduped by id (the parent's reply count arrives as annotation:updated)
     bloom(rec.id);
     if (q) stepQuestion(1);
@@ -1213,7 +1260,11 @@ window.addEventListener('keyup', (e) => { keys.delete(e.code); if (e.code === 'K
 // ---- network ---------------------------------------------------------------
 
 const net = connect({
-  onAll: (all) => { clearMarkers(); all.forEach(addMarker); setStatus(`loaded ${markers.size}`); },
+  onAll: (all) => {
+    clearMarkers(); all.forEach(addMarker);
+    setStatus(markers.size ? '' : VISITOR ? 'nothing has been recorded here yet: you could be first' : 'nothing recorded here yet — hold the mouse button on the scene and speak', { hold: markers.size ? 0 : 6000 });
+    if (focusId && markers.has(focusId)) { focusMarker(focusId); if (assetsReady) focusId = null; }   // opened from the review page: stand in front of that clip (again once the assets have framed the view)
+  },
   onNew: (a) => a.project === project?.id && addMarker(a),
   onDeleted: (d) => { removeMarker(d); renderList(); },
   onUpdated: (a) => {                 // transcript, period, reply count or parent changed for an existing marker
@@ -1255,7 +1306,7 @@ if (import.meta.env.DEV) window.__glossy = {
   nearestId: () => { camera.getWorldPosition(tmpV); let best = null, bd = Infinity; for (const m of markers.values()) { if (!m.mesh.visible) continue; const d = m.mesh.position.distanceTo(tmpV); if (d < bd) { bd = d; best = m.record.id; } } return best; },
   get pending() { return pendingMarkers.size; },
   get interview() { return { on: hud.interview.checked, index: qIndex, question: currentQuestion()?.text || null, total: questions().length }; },
-  autoFit, frameAll, applyTransform, aimPoint, aimMarker, floorBelow, spawnInside,
+  autoFit, frameAll, applyTransform, aimPoint, aimMarker, floorBelow, spawnInside, focusMarker,
 };
 
 // ---- boot ------------------------------------------------------------------

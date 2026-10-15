@@ -35,7 +35,8 @@ export const assets = {
 export const annotations = {
   list: (project) => fetch(`/api/projects/${project}/annotations`).then(json),
   remove: (project, id) => fetch(`/api/projects/${project}/annotations/${id}`, { method: 'DELETE' }).then(json),
-  transcribe: (project, id) => fetch(`/api/projects/${project}/annotations/${id}/transcribe`, { method: 'POST' }).then(json),
+  /** body: { language } to set the clip's transcription language ('' = detect) before re-running */
+  transcribe: (project, id, body) => fetch(`/api/projects/${project}/annotations/${id}/transcribe`, { method: 'POST', ...(body ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}) }).then(json),
   update: (project, id, patch) => fetch(`/api/projects/${project}/annotations/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then(json),
   /** parent: id of the annotation this one replies to; pose: head samples over the clip; prompt/mode: interview question answered */
   create: async ({ project, blob, durationMs, anchor, author, layer, consent, objectId, parent, period, pose, poseSource, prompt, mode, language }) => {

@@ -24,7 +24,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { openDb } from './db.js';
-import { createTranscriber, looksRepetitive } from './transcribe.js';
+import { createTranscriber } from './transcribe.js';
+import { unclearReason } from '../shared/text.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -53,10 +54,11 @@ function queueTranscription(record) {
   transcriber.enqueue(record.id, file, { language }, (err, result) => {
     const cur = db.annotations.get(record.project, record.id);
     if (!cur) return;                                        // deleted while queued
+    const unclear = err ? null : unclearReason(result.text);      // the model looped, or transcribed silence as a subtitle credit: keep the raw text in meta, store no transcript
     const updated = err
       ? db.annotations.setTranscript(record.project, record.id, { transcript: cur.transcript, status: 'failed', meta: { error: err.message } })
-      : looksRepetitive(result.text)                            // the model looped: keep the raw text in meta, store no transcript
-        ? db.annotations.setTranscript(record.project, record.id, { transcript: '', status: 'done', meta: { words: [], language: result.language, detected: !!result.detected, backend: result.backend, model: result.model, ms: result.ms, unclear: 'repetition', raw: result.text } })
+      : unclear
+        ? db.annotations.setTranscript(record.project, record.id, { transcript: '', status: 'done', meta: { words: [], language: result.language, detected: !!result.detected, backend: result.backend, model: result.model, ms: result.ms, unclear, raw: result.text } })
         : db.annotations.setTranscript(record.project, record.id, { transcript: result.text, status: 'done', meta: { words: result.words, language: result.language, detected: !!result.detected, backend: result.backend, model: result.model, ms: result.ms } });
     io.to(record.project).emit('annotation:updated', updated);
   });
@@ -91,6 +93,20 @@ function parsePeriod(v) {
   const out = { from: str('from'), to: str('to'), label: str('label') };
   if (!out.from && !out.to && !out.label) return null;
   return out;
+}
+
+/** Links: up to 20 attachments, each { kind: image|document|url, asset?: project asset id, url?, title? }. */
+function parseLinks(v) {
+  const arr = typeof v === 'string' ? JSON.parse(v) : v;
+  if (arr === null) return [];
+  if (!Array.isArray(arr)) throw new Error('links must be an array');
+  return arr.slice(0, 20).map((l) => {
+    if (!l || typeof l !== 'object') throw new Error('each link must be an object');
+    const s = (k, n) => (l[k] === undefined || l[k] === null ? undefined : String(l[k]).trim().slice(0, n) || undefined);
+    const out = { kind: ['image', 'document', 'url'].includes(l.kind) ? l.kind : 'url', asset: s('asset', 80), url: s('url', 2000), title: s('title', 200) };
+    if (!out.asset && !out.url) throw new Error('a link needs an asset id or a url');
+    return out;
+  });
 }
 
 /** Head pose over the clip: [{t, p:[x,y,z], q:[x,y,z,w]}], t in ms from the start of recording. */
@@ -317,12 +333,14 @@ app.post('/api/projects/:id/annotations', projectOr404, audioUpload.single('audi
   queueTranscription(record);
 });
 
-// edit the fields a reviewer may change after the fact: layer, period (temporal reference), consent
+// edit the fields a reviewer may change after the fact: layer, period (temporal reference), consent, links (photos and documents attached to the clip), language (for the next transcription)
 app.patch('/api/projects/:id/annotations/:aid', projectOr404, (req, res) => {
   const patch = {};
   if (req.body?.layer !== undefined) patch.layer = String(req.body.layer).trim().slice(0, 120) || 'default';
   if (req.body?.consent !== undefined) patch.consent = !!req.body.consent;
   try { if (req.body?.period !== undefined) patch.period = parsePeriod(req.body.period); } catch (e) { return res.status(400).json({ error: 'period: ' + e.message }); }
+  try { if (req.body?.links !== undefined) patch.links = parseLinks(req.body.links); } catch (e) { return res.status(400).json({ error: 'links: ' + e.message }); }
+  if (req.body?.language !== undefined) patch.language = req.body.language && LANG_RE.test(String(req.body.language)) ? String(req.body.language) : null;
   const a = db.annotations.update(req.params.id, req.params.aid, patch);
   if (!a) return res.status(404).end();
   io.to(req.params.id).emit('annotation:updated', a);
@@ -334,6 +352,10 @@ app.post('/api/projects/:id/annotations/:aid/transcribe', projectOr404, (req, re
   const cur = db.annotations.get(req.params.id, req.params.aid);
   if (!cur) return res.status(404).end();
   if (!transcriber.enabled) return res.status(503).json({ error: 'transcription disabled', ...transcriber.info() });
+  if (req.body?.language !== undefined) {                      // '' = detect; a code = force it for this clip from now on
+    const language = req.body.language && LANG_RE.test(String(req.body.language)) ? String(req.body.language) : null;
+    db.annotations.update(req.params.id, cur.id, { language });
+  }
   const record = db.annotations.setTranscript(req.params.id, cur.id, { transcript: cur.transcript, status: 'pending', meta: {} });
   io.to(req.params.id).emit('annotation:updated', record);
   res.status(202).json(record);
@@ -356,7 +378,8 @@ app.delete('/api/projects/:id/annotations/:aid', projectOr404, async (req, res) 
 // (createdAt), spatial anchor (anchor, in the project's scene coordinates) and
 // temporal reference (period, null when unspecified), plus transcript, word
 // timestamps, the author's viewpoint over the clip with its source (headset
-// pose or desktop camera), parent (for replies), prompt and mode.
+// pose or desktop camera), parent (for replies), prompt, mode and links
+// (photos or documents a reviewer attached to the clip).
 function exportProject(p) {
   const annotations = db.annotations.list(p.id);
   return {
@@ -365,7 +388,7 @@ function exportProject(p) {
       id: a.id, attribution: a.author, timestamp: a.createdAt, anchor: a.anchor, period: a.period,
       parent: a.parent, mode: a.mode, prompt: a.prompt, layer: a.layer, consent: a.consent,
       audio: a.audioUrl, durationMs: a.durationMs, language: a.transcription?.language || a.language || null,
-      transcript: a.transcript, words: a.transcription?.words || [], pose: a.pose, poseSource: a.poseSource,
+      transcript: a.transcript, words: a.transcription?.words || [], pose: a.pose, poseSource: a.poseSource, links: a.links || [],
     })),
   };
 }
