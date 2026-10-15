@@ -22,7 +22,7 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 import { VoiceRecorder } from './recorder.js';
 import { connect, projects as projectsApi, assets as assetsApi, annotations as annotationsApi } from './api.js';
 import { loadModel, SUPPORTED_EXTENSIONS } from './loaders.js';
-import { unclearReason, UNCLEAR_TEXT } from '../../shared/text.js';
+import { unclearReason, UNCLEAR_TEXT, langName } from '../../shared/text.js';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 
 // BVH-accelerated raycasts for every mesh: anchoring, hover, and collision
@@ -974,15 +974,19 @@ function renderList() {
     const periodLabel = record.period ? (record.period.label || [record.period.from, record.period.to].filter(Boolean).join('–')) : '';
     const badges = (record.replies ? `<span class="badge" title="replies">↩ ${record.replies}</span>` : '') + (periodLabel ? `<span class="period" title="period">${esc(periodLabel)}</span>` : '');
     const prompt = record.prompt ? `<div class="prompt">Q: ${esc(record.prompt)}</div>` : '';
+    // the project or clip forced one language and the model heard another: say so, offer the other decoder
+    const mismatch = tr.status === 'done' && tr.heard && tr.language && tr.heard !== tr.language;
+    const note = mismatch ? `<div class="note" title="the language was set to ${esc(langName(tr.language))}; the model's own detection says ${esc(langName(tr.heard))}">sounds like ${esc(langName(tr.heard))}, transcribed as ${esc(langName(tr.language))}${VISITOR ? '' : ` <button class="asHeard">transcribe as ${esc(langName(tr.heard))}</button>`}</div>` : '';
     const armed = armedDelete?.id === record.id;
     const when = whenOf(record);
     const sw = markers.get(record.id)?.mesh.material.color.getStyle() || '#888';
     const photos = linksOf(record);
-    li.innerHTML = `<button class="play" title="play">${record.id === playingId ? '■' : '▶'}</button><span class="sw" style="background:${sw}" title="${esc(when)}"></span><span class="who" title="turn to this clip">${esc(record.author)}</span><span class="meta" title="${esc([when, record.anchor.objectId ? 'on ' + record.anchor.objectId : ''].filter(Boolean).join(' · '))}">${record.layer !== 'default' ? esc(record.layer) + ' · ' : ''}${record.period ? '' : esc(when) + ' · '}${fmtDur(record.durationMs)}${photos ? ' · ' + photos : ''}</span>${badges}<button class="del${armed ? ' armed' : ''}" title="${armed ? 'click again to erase' : 'erase (asks twice)'}">${armed ? 'erase?' : '✕'}</button>${prompt}${text}`;
+    li.innerHTML = `<button class="play" title="play">${record.id === playingId ? '■' : '▶'}</button><span class="sw" style="background:${sw}" title="${esc(when)}"></span><span class="who" title="turn to this clip">${esc(record.author)}</span><span class="meta" title="${esc([when, record.anchor.objectId ? 'on ' + record.anchor.objectId : ''].filter(Boolean).join(' · '))}">${record.layer !== 'default' ? esc(record.layer) + ' · ' : ''}${record.period ? '' : esc(when) + ' · '}${fmtDur(record.durationMs)}${photos ? ' · ' + photos : ''}</span>${badges}<button class="del${armed ? ' armed' : ''}" title="${armed ? 'click again to erase' : 'erase (asks twice)'}">${armed ? 'erase?' : '✕'}</button>${prompt}${text}${note}`;
     li.querySelector('.play').addEventListener('click', () => play(record.id));
     li.querySelector('.who').addEventListener('click', () => focusMarker(record.id));
     li.querySelector('.del').addEventListener('click', () => armDelete(record.id, 'click ✕ again to erase this clip'));
     li.querySelector('.retry')?.addEventListener('click', () => annotationsApi.transcribe(project.id, record.id).catch((e) => setStatus('retry failed: ' + e.message)));
+    li.querySelector('.asHeard')?.addEventListener('click', () => annotationsApi.transcribe(project.id, record.id, { language: tr.heard }).then(() => setStatus('transcribing again as ' + langName(tr.heard))).catch((e) => setStatus('retry failed: ' + e.message)));
     li.addEventListener('mouseenter', () => { const m = markers.get(record.id); if (m) m.mesh.material.emissiveIntensity = 0.9; });
     li.addEventListener('mouseleave', () => { const m = markers.get(record.id); if (m && !m.mesh.userData.playing) m.mesh.material.emissiveIntensity = 0.35; });
     ul.appendChild(li);

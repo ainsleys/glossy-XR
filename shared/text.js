@@ -53,3 +53,10 @@ export const UNCLEAR_TEXT = {
   repetition: 'unclear: the model repeated itself; try again closer to the microphone',
   silence: 'nothing heard: the microphone picked up no speech',
 };
+
+// Human name for an ISO language code in the page's language ("Türkçe" in a
+// Turkish page, "Turkish" in an English one); falls back to the code.
+export function langName(code, locale) {
+  if (!code) return '';
+  try { return new Intl.DisplayNames([locale || (typeof navigator !== 'undefined' && navigator.language) || 'en'], { type: 'language' }).of(code) || code; } catch { return code; }
+}

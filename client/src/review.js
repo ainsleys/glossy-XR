@@ -6,7 +6,7 @@
 // transcript and viewpoint stay linked: the word under the playhead lights,
 // and the plan shows where the speaker was looking at that moment.
 import { connect, projects as projectsApi, assets as assetsApi, annotations as annotationsApi } from './api.js';
-import { unclearReason, UNCLEAR_TEXT } from '../../shared/text.js';
+import { unclearReason, UNCLEAR_TEXT, langName } from '../../shared/text.js';
 
 const $ = (id) => document.getElementById(id);
 const ui = { project: $('project'), count: $('count'), search: $('search'), filters: $('filters'), roomLink: $('roomLink'), visitorLink: $('visitorLink'), exportLink: $('exportLink'), plan: $('plan'), clips: $('clips'), player: $('player'), audio: $('audio'), time: $('time'), toast: $('toast') };
@@ -100,13 +100,15 @@ function cardHtml(r) {
     : tr.status === 'failed' ? `<div class="text failed" title="${esc(tr.error || '')}">transcription failed</div>`
     : unclear ? `<div class="text unclear" title="${esc(tr.raw || r.transcript || '')}">${esc(UNCLEAR_TEXT[unclear] || 'unclear')}</div>`
     : tr.status === 'done' ? `<div class="text pending">no speech detected</div>` : `<div class="text pending">no transcript</div>`;
+  const mismatch = tr.status === 'done' && tr.heard && tr.language && tr.heard !== tr.language;   // forced one language, the model heard another
   const lang = tr.language ? `<span title="${tr.detected ? 'language detected by the model' : 'language set for the project or the clip'}">${esc(tr.language)}</span>` : '';
+  const heard = mismatch ? `<span class="mismatch" title="the language was set to ${esc(langName(tr.language))}; the model's own detection says ${esc(langName(tr.heard))}. Choose it below and transcribe again.">sounds like ${esc(langName(tr.heard))}</span>` : '';
   const links = (r.links || []).length ? `<div class="links">${r.links.map((l, i) => `<figure>${l.kind === 'image' && l.url ? `<a href="${esc(l.url)}" target="_blank"><img src="${esc(l.url)}" alt="${esc(l.title || 'linked photo')}" /></a>` : `<a href="${esc(l.url || '#')}" target="_blank">${esc(l.title || l.url || l.asset)}</a>`}<figcaption title="${esc(l.title || '')}">${esc(l.title || l.kind)}</figcaption><button class="unlink" data-i="${i}" title="remove this link (the file stays in the project's assets)">✕</button></figure>`).join('')}</div>` : '';
   const presets = distinctPeriods().filter((p) => periodKey(p) !== periodKey(r.period)).map((p) => `<button class="preset" data-period='${esc(JSON.stringify(p))}' title="set this period">${esc(periodLabel(p))}</button>`).join('');
   const isArmed = armed?.id === r.id;
   return `<article data-id="${r.id}" class="${r.parent && records.has(r.parent) ? 'reply ' : ''}${r.id === selectedId ? 'sel ' : ''}${matches(r) ? '' : 'dim'}">
     <div class="head"><span class="sw" style="background:${colourOf(r)}"></span><span class="who">${esc(r.author)}</span>
-      ${r.period ? `<span class="period">${esc(periodLabel(r.period))}</span>` : ''}<span title="${esc(r.createdAt)}">${esc(ago(r.createdAt))}</span><span>${fmtDur(r.durationMs)}</span>${lang}
+      ${r.period ? `<span class="period">${esc(periodLabel(r.period))}</span>` : ''}<span title="${esc(r.createdAt)}">${esc(ago(r.createdAt))}</span><span>${fmtDur(r.durationMs)}</span>${lang}${heard}
       ${r.anchor?.objectId ? `<span>on ${esc(r.anchor.objectId)}</span>` : ''}${r.replies ? `<span>↩ ${r.replies}</span>` : ''}${r.consent === false ? '<span style="color:var(--rec)">consent withdrawn</span>' : ''}
       <span class="right"><button class="playBtn" title="play this clip">${r.id === selectedId && !ui.audio.paused ? '■ stop' : '▶ play'}</button><a href="/?project=${esc(r.project)}&focus=${esc(r.id)}" title="stand in front of this clip in the room">in the room</a></span></div>
     ${r.prompt ? `<div class="prompt">Q: ${esc(r.prompt)}</div>` : ''}
@@ -114,7 +116,7 @@ function cardHtml(r) {
     <div class="tools">
       <span class="group">period <input type="text" class="from" placeholder="from" value="${esc(r.period?.from || '')}" /><input type="text" class="to" placeholder="to" value="${esc(r.period?.to || '')}" /><input type="text" class="label" placeholder="label" value="${esc(r.period?.label || '')}" /><button class="savePeriod">set</button>${r.period ? '<button class="clearPeriod">clear</button>' : ''}${presets}</span>
       <span class="group"><label class="file" title="attach a photograph or scan to this clip; it also appears in the room at the clip">attach a photo<input type="file" class="photo" accept="image/*" /></label></span>
-      <span class="group"><select class="lang" title="language for the next transcription">${LANGS.map(([v, l]) => `<option value="${v}" ${(r.language || '') === v ? 'selected' : ''}>${l}</option>`).join('')}</select><button class="retranscribe" title="run speech-to-text again with this language">transcribe again</button></span>
+      <span class="group"><select class="lang" title="language for the next transcription">${LANGS.map(([v, l]) => `<option value="${v}" ${(mismatch ? tr.heard : r.language || '') === v ? 'selected' : ''}>${l}</option>`).join('')}</select><button class="retranscribe" title="run speech-to-text again with this language">transcribe again</button></span>
       <span class="group"><label><input type="checkbox" class="consent" ${r.consent ? 'checked' : ''} /> consent</label></span>
       <span class="group"><button class="erase danger ${isArmed ? 'armed' : ''}" title="${isArmed ? 'click again to erase' : 'erase the clip, its audio and transcript (asks twice)'}">${isArmed ? 'erase?' : 'erase'}</button></span>
     </div>

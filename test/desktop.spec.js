@@ -309,6 +309,7 @@ test('approach previews a clip instead of playing it, autoplay is opt-in, the li
   expect(await page.evaluate(() => window.__glossy.playingId)).toBeNull();
   expect(await page.evaluate(() => [...window.__glossy.markers.values()][0].mesh.material.emissiveIntensity)).toBeGreaterThan(0.5);
   // autoplay on: the same approach plays the clip
+  await page.evaluate(() => { document.getElementById('settingsPanel').open = true; });
   await page.check('#autoplay');
   await expect.poll(() => page.evaluate(() => window.__glossy.playingId), { timeout: 10_000 }).toBe(a.id);
   await page.uncheck('#autoplay');

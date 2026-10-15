@@ -10,7 +10,9 @@
 // Language: a job may pass `language` (ISO code) from the annotation or its
 // project; otherwise GLOSSY_LANGUAGE; otherwise the local backend detects it
 // with one decoder step over the language tokens (about 200 ms) before
-// transcribing. The library itself would silently default to English.
+// transcribing. The library itself would silently default to English. When a
+// language is forced the same step still runs and its answer is returned as
+// `heard`, so clients can flag a clip spoken in some other language.
 //
 //   GLOSSY_TRANSCRIBE      local (default) | openai | none
 //   GLOSSY_WHISPER_MODEL   HF id, default onnx-community/whisper-base_timestamped
@@ -105,8 +107,13 @@ function localBackend(log) {
         const out = await asr(audio, { return_timestamps: 'word', chunk_length_s: 30 });
         return { text: out.text.trim(), words: wordsOf(out), language: 'en', detected: false, fallback: !!language && language !== 'en' };
       }
+      // One detection step runs either way (about 200 ms): with no language it
+      // chooses the decoder; with a forced language it is kept as `heard`, so a
+      // clip spoken in another language than the project's is flagged rather
+      // than silently decoded into noise.
+      const heard = await detectLanguage(asr, audio);
       if (!language) {
-        language = await detectLanguage(asr, audio);
+        language = heard;
         detected = !!language;
         if (!language) { language = 'en'; fallback = true; }       // no language tokens to score against
       }
@@ -116,7 +123,7 @@ function localBackend(log) {
         retried = true;
         try { out = await asr(audio, { return_timestamps: 'word', chunk_length_s: 30, language, task: 'transcribe', no_repeat_ngram_size: 3 }); } catch {}
       }
-      return { text: out.text.trim(), words: wordsOf(out), language, detected, fallback, retried };
+      return { text: out.text.trim(), words: wordsOf(out), language, detected, heard: detected ? null : heard, fallback, retried };
     },
   };
 }
@@ -168,6 +175,13 @@ export function createTranscriber({ log = console } = {}) {
   }
   ready = backend ? check() : Promise.resolve(false);
 
+  // The caller's callback writes the result to the store. If that write throws
+  // (a locked database, a closed connection) the failure must stay in the log:
+  // a rejection escaping the pump would take the whole server down.
+  function finish(job, err, result) {
+    try { job.done(err, result); } catch (e) { log.error(`transcribe: ${job.id} result not stored: ${e.message}`); }
+  }
+
   async function pump() {
     if (busy) return;
     busy = true;
@@ -177,10 +191,10 @@ export function createTranscriber({ log = console } = {}) {
       try {
         if (!(await ready)) throw new Error(unavailable || 'transcription disabled');
         const result = await backend.transcribe(job.file, job.opts);
-        job.done(null, { ...result, backend: backend.name, model: backend.model, ms: Date.now() - t0 });
+        finish(job, null, { ...result, backend: backend.name, model: backend.model, ms: Date.now() - t0 });
       } catch (e) {
         log.warn(`transcribe: ${job.id} failed: ${e.message}`);
-        job.done(e, null);
+        finish(job, e, null);
       }
     }
     busy = false;

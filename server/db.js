@@ -11,6 +11,7 @@ export function openDb(dataDir) {
   const db = new DatabaseSync(path.join(dataDir, 'glossy.db'));
   db.exec(`
     PRAGMA journal_mode = WAL;
+    PRAGMA busy_timeout = 5000;   -- wait for a competing writer (a seeding script, a checkpoint) instead of failing with 'database is locked'
     PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS projects (
       id          TEXT PRIMARY KEY,

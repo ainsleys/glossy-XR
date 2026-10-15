@@ -58,8 +58,8 @@ function queueTranscription(record) {
     const updated = err
       ? db.annotations.setTranscript(record.project, record.id, { transcript: cur.transcript, status: 'failed', meta: { error: err.message } })
       : unclear
-        ? db.annotations.setTranscript(record.project, record.id, { transcript: '', status: 'done', meta: { words: [], language: result.language, detected: !!result.detected, backend: result.backend, model: result.model, ms: result.ms, unclear, raw: result.text } })
-        : db.annotations.setTranscript(record.project, record.id, { transcript: result.text, status: 'done', meta: { words: result.words, language: result.language, detected: !!result.detected, backend: result.backend, model: result.model, ms: result.ms } });
+        ? db.annotations.setTranscript(record.project, record.id, { transcript: '', status: 'done', meta: { words: [], language: result.language, detected: !!result.detected, heard: result.heard || null, backend: result.backend, model: result.model, ms: result.ms, unclear, raw: result.text } })
+        : db.annotations.setTranscript(record.project, record.id, { transcript: result.text, status: 'done', meta: { words: result.words, language: result.language, detected: !!result.detected, heard: result.heard || null, backend: result.backend, model: result.model, ms: result.ms } });
     io.to(record.project).emit('annotation:updated', updated);
   });
 }

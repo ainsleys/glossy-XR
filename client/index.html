@@ -22,17 +22,19 @@
       #hud .row > * { flex: 1 1 0; min-width: 0; width: auto; }
       #hud .row input[type=checkbox] { flex: 0 0 auto; width: 16px; min-width: 16px; height: 16px; margin: 0; }
       #hud .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
-      #status { margin-top: 8px; font-size: 12px; color: #9f9; min-height: 1.2em; }
+      #live { margin: 2px 0 0; padding: 5px 7px; background: rgba(255,255,255,.06); border-radius: 5px; }
+      #status { font-size: 13px; color: #cfc; min-height: 1.2em; }
+      #links { font-size: 11px; color: #789; margin-top: 4px; }
       #rec { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #444; margin-right: 6px; vertical-align: middle; }
       #rec.on { background: #f33; box-shadow: 0 0 8px #f33; }
       #level { height: 3px; background: #222; margin-top: 3px; border-radius: 2px; overflow: hidden; display: none; }
       #level.on { display: block; }
       #levelBar { height: 100%; width: 0; background: #f33; transition: width 60ms linear; }
-      #hint { font-size: 11px; color: #789; margin-top: 3px; min-height: 1.2em; }
-      #help { font-size: 11px; color: #888; margin-top: 8px; }
+      #hint { font-size: 11px; color: #789; margin-top: 2px; min-height: 1.2em; }
+      #help { font-size: 11px; color: #888; margin-top: 4px; }
       #hud a { color: #8cf; }
       kbd { background: #222; border: 1px solid #555; border-radius: 3px; padding: 0 4px; font-size: 10px; }
-      #modelInfo { font-size: 11px; color: #9ab; margin-top: 4px; }
+      #modelInfo { font-size: 11px; color: #9ab; font-weight: normal; margin-left: 6px; }
       progress { width: 100%; height: 6px; }
       #assetList { list-style: none; margin: 4px 0 6px; padding: 0; max-height: 140px; overflow: auto; }
       #assetList li { display: flex; gap: 6px; align-items: center; padding: 3px 4px; border-radius: 4px; font-size: 12px; }
@@ -49,6 +51,8 @@
       #annList .text.pending { color: #8a9bb0; font-style: italic; }
       #annList .text.failed { color: #f88; }
       #annList .text .retry { margin-left: 4px; }
+      #annList .note { flex: 1 0 100%; padding: 0 0 2px 30px; color: #e6c27a; font-size: 11px; line-height: 1.35; white-space: normal; }
+      #annList .note button { margin-left: 4px; font-size: 11px; padding: 0 5px; }
       #annList li:hover { background: rgba(255,255,255,.06); }
       #annList li.playing { background: rgba(140,200,255,.15); }
       #annList li.dim { opacity: .5; }
@@ -87,48 +91,30 @@
   <body>
     <div id="hud">
       <h1>Glossy XR <span id="count"></span></h1>
+      <!-- the live line first: what the tool is doing now, the microphone level, the next key -->
+      <div id="live">
+        <div id="status"><span id="rec"></span><span id="statusText">connecting…</span></div>
+        <div id="level"><div id="levelBar"></div></div>
+        <div id="hint"></div>
+      </div>
+
+      <label for="author">Your name</label>
+      <input id="author" placeholder="e.g. Ainsley" autocomplete="off" />
+      <div class="row" style="margin-top:6px"><input type="checkbox" id="consent" /><label for="consent" style="margin:0">I consent to my recording being stored and shared</label></div>
 
       <label for="project" class="op">Project</label>
       <div class="row op">
         <select id="project"></select>
         <button id="newProject" style="flex:0 0 auto">+ New</button>
       </div>
-      <div id="modelInfo" class="op">no model</div>
+      <nav id="links" class="op"><a id="reviewLink" href="/review.html" title="Read, search and tag the clips of this project at a desk: seek by word, set periods, attach photographs">Review</a> · <a id="exportLink" href="/api/export" target="_blank">Export JSON</a> · <a id="visitorLink" href="?mode=visitor" title="The page a guest sees: no operator controls, the script asked without a toggle, nothing erasable">Visitor view</a></nav>
 
-      <label for="author">Your name</label>
-      <input id="author" placeholder="e.g. Ainsley" autocomplete="off" />
-      <label for="layer" class="op">Layer</label>
-      <select id="layer" class="op">
-        <option value="default">default</option>
-        <option value="draft">draft</option>
-        <option value="review">review</option>
-        <option value="final">final</option>
-      </select>
-      <label for="language" class="op">Transcription language (project)</label>
-      <select id="language" class="op">
-        <option value="">detect automatically</option>
-        <option value="tr">Türkçe (tr)</option>
-        <option value="en">English (en)</option>
-        <option value="de">Deutsch (de)</option>
-        <option value="fr">français (fr)</option>
-        <option value="es">español (es)</option>
-        <option value="it">italiano (it)</option>
-        <option value="ar">العربية (ar)</option>
-        <option value="el">ελληνικά (el)</option>
-        <option value="pl">polski (pl)</option>
-      </select>
-      <div class="row" style="margin-top:6px"><input type="checkbox" id="consent" /><label for="consent" style="margin:0">I consent to my recording being stored and shared</label></div>
-      <div class="row op" style="margin-top:4px"><input type="checkbox" id="walk" checked /><label for="walk" style="margin:0" title="Floor-following and wall collision on desktop; untick to fly with Q/E">Walk mode (collide with the scene)</label></div>
-      <div class="row op" style="margin-top:4px"><input type="checkbox" id="autoplay" /><label for="autoplay" style="margin:0" title="Off: walking up to a clip previews it (who, when, first words) and lights it; play with a click or the trigger. On: clips on the active layer play as you approach, for guided walks">Autoplay clips on approach</label></div>
       <div id="timeRow">
         <div class="row" style="margin-top:6px"><input type="checkbox" id="timeAll" checked /><label for="timeAll" style="margin:0" title="Untick to move through time: only clips whose period includes the year stay, plus timeless ones">All periods</label><span id="yearLabel" style="flex:0 0 auto;color:#d9b36c;font-variant-numeric:tabular-nums"></span></div>
         <input type="range" id="year" min="1900" max="2026" step="1" value="2026" disabled style="padding:0;margin-top:4px" />
         <div id="periodBands" hidden></div>
         <div id="timeLegend" title="Marker colour is the period: amber earliest, blue latest, grey timeless; faded means recorded over six months ago.">colour: period · grey: timeless · faded: older than six months</div>
       </div>
-      <div id="status"><span id="rec"></span><span id="statusText">connecting…</span></div>
-      <div id="level"><div id="levelBar"></div></div>
-      <div id="hint"></div>
 
       <details id="interviewPanel">
         <summary>Interview</summary>
@@ -144,13 +130,34 @@
         <button id="saveScript" class="op" style="margin-top:4px">Save questions</button>
       </details>
 
-      <details id="annPanel" open>
-        <summary>Annotations</summary>
-        <ul id="annList"></ul>
+      <details id="settingsPanel" class="op">
+        <summary>Settings</summary>
+        <label for="layer">Layer</label>
+        <select id="layer">
+          <option value="default">default</option>
+          <option value="draft">draft</option>
+          <option value="review">review</option>
+          <option value="final">final</option>
+        </select>
+        <label for="language">Transcription language (project)</label>
+        <select id="language">
+          <option value="">detect automatically</option>
+          <option value="tr">Türkçe (tr)</option>
+          <option value="en">English (en)</option>
+          <option value="de">Deutsch (de)</option>
+          <option value="fr">français (fr)</option>
+          <option value="es">español (es)</option>
+          <option value="it">italiano (it)</option>
+          <option value="ar">العربية (ar)</option>
+          <option value="el">ελληνικά (el)</option>
+          <option value="pl">polski (pl)</option>
+        </select>
+        <div class="row" style="margin-top:6px"><input type="checkbox" id="walk" checked /><label for="walk" style="margin:0" title="Floor-following and wall collision on desktop; untick to fly with Q/E">Walk mode (collide with the scene)</label></div>
+        <div class="row" style="margin-top:4px"><input type="checkbox" id="autoplay" /><label for="autoplay" style="margin:0" title="Off: walking up to a clip previews it (who, when, first words) and lights it; play with a click or the trigger. On: clips on the active layer play as you approach, for guided walks">Autoplay clips on approach</label></div>
       </details>
 
-      <details id="assetPanel" class="op" open>
-        <summary>Assets</summary>
+      <details id="assetPanel" class="op">
+        <summary>Assets <span id="modelInfo">no model</span></summary>
         <ul id="assetList"></ul>
         <label for="assetFile">Add: glb, gltf, ply, pcd, obj, splat, ksplat, spz, sog, png, jpg, webp, mp4, webm. Select sidecars (.bin, textures, .mtl) together with the main file.</label>
         <input type="file" id="assetFile" multiple />
@@ -175,15 +182,22 @@
         </div>
       </details>
 
+      <details id="annPanel" open>
+        <summary>Annotations</summary>
+        <ul id="annList"></ul>
+      </details>
+
       <div id="visitorHelp" class="vis">
         Hold the trigger (or the mouse button) and speak; let go to save. Point at a mark and pull the trigger to hear it. Squeeze to hear the question again. Nothing here can be erased by mistake: ask at the desk to have a recording removed.
       </div>
-      <div id="help" class="op">
-        Headset: trigger = record (release to save) or play the marker you point at; squeeze = cycle layer (in visitor view: hear the question again).<br />
-        Desktop: click once to capture the mouse, then <b>hold the mouse button to record</b> at the crosshair and release to save; walk up to a marker to read who left it and when, click it to play (again to stop), hold <kbd>R</kbd> while aiming at a marker to record a reply to it, <kbd>Delete</kbd> twice (or ✕ twice in the list) erases the marker you aim at. <kbd>W A S D</kbd> move, <kbd>Q</kbd>/<kbd>E</kbd> down/up when not walking, <kbd>Esc</kbd> releases the mouse. (<kbd>K</kbd>/<kbd>L</kbd>/<kbd>Space</kbd> still work.)
-        Annotations anchor to the surface you point at.
-        <a id="reviewLink" href="/review.html" title="Read, search and tag the clips of this project at a desk: seek by word, set periods, attach photographs">Review</a> · <a id="exportLink" href="/api/export" target="_blank">Export JSON</a> · <a id="visitorLink" href="?mode=visitor" title="The page a guest sees: no operator controls, the script asked without a toggle, nothing erasable">Visitor view</a>
-      </div>
+      <details id="helpPanel" class="op">
+        <summary>Help</summary>
+        <div id="help">
+          Headset: trigger = record (release to save) or play the marker you point at; squeeze = cycle layer (in visitor view: hear the question again).<br />
+          Desktop: click once to capture the mouse, then <b>hold the mouse button to record</b> at the crosshair and release to save; walk up to a marker to read who left it and when, click it to play (again to stop), hold <kbd>R</kbd> while aiming at a marker to record a reply to it, <kbd>Delete</kbd> twice (or ✕ twice in the list) erases the marker you aim at. <kbd>W A S D</kbd> move, <kbd>Q</kbd>/<kbd>E</kbd> down/up when not walking, <kbd>Esc</kbd> releases the mouse. (<kbd>K</kbd>/<kbd>L</kbd>/<kbd>Space</kbd> still work.)
+          Annotations anchor to the surface you point at.
+        </div>
+      </details>
     </div>
     <div id="crosshair" hidden></div>
     <script type="module" src="/src/main.js"></script>
