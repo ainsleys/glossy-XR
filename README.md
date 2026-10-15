@@ -87,9 +87,9 @@ On release of the button or trigger, a provisional marker is placed in the scene
 
 ## Time and crowding
 
-Time is a navigation axis. Untick **All periods** in the HUD and the year slider becomes the viewer's position in time: clips whose `period` includes the year stay, clips outside it disappear from the scene, the list and the aim ray, and clips with no period are timeless and always stay. The slider's range comes from the periods present in the project, and the label shows how many clips are in view. (The headset has no time control yet; it follows the HUD's setting.)
+Time is a navigation axis. Untick **All periods** in the HUD and the year slider becomes the viewer's position in time: clips whose `period` includes the year stay, clips outside it disappear from the scene, the list and the aim ray, and clips with no period are timeless and always stay. The slider's range comes from the periods present in the project; bands under it show each distinct period in its colour, and the label names the period the year falls in (or says "between periods") and how many clips are in view. Marker colour encodes the period, amber for the project's earliest years through to blue for its latest, grey for timeless clips, desaturated for clips older than 180 days; layers are text in the operator's list, not a colour. (The headset has no time control yet; it follows the HUD's setting.)
 
-A crowded room stays readable without deleting anything: only the nearest 40 markers within 8 m draw at full size, the rest shrink to faint dots until approached, hovered or played, and clips older than 180 days draw a little dimmer. `node scripts/seed-dense.mjs --data data --count 200` seeds a project with 200 clips across three periods, several authors and layers, and replies, for trying this by hand; the suite seeds the same fixture and checks the rule, the frame time and the year filter.
+A crowded room stays readable without deleting anything: only the nearest 40 markers within 8 m draw at full size, the rest shrink to faint dots until approached, hovered or played. `node scripts/seed-dense.mjs --data data --count 200` seeds a project with 200 clips across three periods, several authors and layers, and replies, for trying this by hand; the suite seeds the same fixture and checks the rule, the frame time and the year filter.
 
 ## Transcription
 

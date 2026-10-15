@@ -58,6 +58,9 @@
       #annList .period { color: #d9b36c; font-size: 11px; white-space: nowrap; }
       #annList .prompt { flex: 1 0 100%; padding: 0 0 0 30px; color: #8a9bb0; font-size: 11px; font-style: italic; }
       #interviewPanel #question { font-size: 13px; color: #fff; margin: 6px 0; min-height: 1.4em; }
+      #periodBands { position: relative; margin: 2px 0 0; }
+      #periodBands span { position: absolute; height: 8px; border-radius: 2px; font-size: 9px; line-height: 8px; color: #000; overflow: hidden; white-space: nowrap; padding: 0 3px; box-sizing: border-box; opacity: .9; }
+      #timeLegend { font-size: 10px; color: #888; margin-top: 3px; }
       /* visitor mode: operator controls (.op) go, visitor text (.vis) appears, the question is large */
       body.visitor .op { display: none !important; }
       body:not(.visitor) .vis { display: none !important; }
@@ -113,6 +116,8 @@
       <div id="timeRow">
         <div class="row" style="margin-top:6px"><input type="checkbox" id="timeAll" checked /><label for="timeAll" style="margin:0" title="Untick to move through time: only clips whose period includes the year stay, plus timeless ones">All periods</label><span id="yearLabel" style="flex:0 0 auto;color:#d9b36c;font-variant-numeric:tabular-nums"></span></div>
         <input type="range" id="year" min="1900" max="2026" step="1" value="2026" disabled style="padding:0;margin-top:4px" />
+        <div id="periodBands" hidden></div>
+        <div id="timeLegend">Marker colour is the period: amber earliest, blue latest, grey timeless; faded means recorded over six months ago.</div>
       </div>
       <div id="status"><span id="rec"></span><span id="statusText">connecting…</span></div>
 

@@ -50,8 +50,25 @@ test('a crowded room thins to the nearest markers and filters by year', async ({
     const want = expectAt(year);
     await expect.poll(() => page.evaluate(() => window.__glossy.visibleIds().sort())).toEqual(want);
     await expect(page.locator('#annList li')).toHaveCount(want.length);
-    await expect(page.locator('#yearLabel')).toHaveText(`${year} · ${want.length}/200`);
+    const covering = PERIODS.filter((p) => p && parseInt(p.from) <= year && year <= parseInt(p.to)).map((p) => p.label);
+    await expect(page.locator('#yearLabel')).toHaveText(`${year} · ${covering.length ? covering.join(', ') : 'between periods'} · ${want.length}/200`);
   }
+  // period bands under the slider: one per distinct period, placed on the slider's scale
+  const bands = page.locator('#periodBands span');
+  await expect(bands).toHaveCount(3);
+  await expect(bands.nth(0)).toHaveText('orchard years');
+  expect(await bands.nth(0).evaluate((e) => e.style.left)).toBe('0%');
+  expect(parseFloat(await bands.nth(2).evaluate((e) => e.style.left))).toBeCloseTo((2000 - 1950) / 76 * 100, 0);
+  // colour says when: the three periods differ from each other and from timeless grey
+  const hexByPeriod = await page.evaluate(() => {
+    const out = {};
+    for (const m of window.__glossy.markers.values()) out[m.record.period ? m.record.period.label : 'timeless'] ??= m.mesh.material.color.getHSL({});
+    return out;
+  });
+  expect(new Set(Object.values(hexByPeriod).map((c) => c.h.toFixed(2))).size).toBe(4);
+  expect(hexByPeriod.timeless.s).toBeLessThan(0.1);                       // grey
+  expect(hexByPeriod['orchard years'].h).toBeLessThan(hexByPeriod['summer house'].h);   // amber → blue with time
+  expect(hexByPeriod['summer house'].h).toBeLessThan(hexByPeriod.museum.h);
   expect(expectAt(1995).length).toBeLessThan(expectAt(1955).length);   // 1995 falls between periods: only timeless clips remain
   // hidden markers are not aim targets
   await expect.poll(() => page.evaluate(() => { const g = window.__glossy; const hid = [...g.markers.values()].find((m) => !m.mesh.visible); g.camera.lookAt(hid.mesh.position); g.camera.updateMatrixWorld(true); return g.aimMarker(g.camera) === hid.record.id; })).toBe(false);

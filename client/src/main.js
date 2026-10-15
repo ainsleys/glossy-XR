@@ -58,7 +58,7 @@ const hud = {
   assetList: $('assetList'), assetFile: $('assetFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), annList: $('annList'),
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
-  walk: $('walk'), autoplay: $('autoplay'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'),
+  walk: $('walk'), autoplay: $('autoplay'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
   interview: $('interview'), visitorLink: $('visitorLink'), question: $('question'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
 };
 const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
@@ -550,13 +550,28 @@ const markers = new Map();           // id -> { mesh, sound, record }
 const markerGroup = new THREE.Group();
 scene.add(markerGroup);
 const audioLoader = new THREE.AudioLoader();
-const layerColor = (layer) => new THREE.Color().setHSL(((LAYERS.indexOf(layer) + 8) % 8) / 8, 0.75, 0.55);
+// Colour says when. A period's midpoint maps from amber (the project's earliest
+// year) to blue (its latest); timeless clips are grey; clips older than
+// OLD_AFTER_DAYS are desaturated. Layer is text in the operator's list, not a
+// colour, because a visitor cannot read it.
+const TIMELESS = new THREE.Color(0xb6bcc4);
+let yearBounds = { min: NaN, max: NaN };
+function markerColor(record) {
+  const old = Date.parse(record.createdAt) < Date.now() - OLD_AFTER_DAYS * 86400e3;
+  if (!record.period) return TIMELESS.clone().multiplyScalar(old ? 0.7 : 1);
+  const a = yearOf(record.period.from, NaN), b = yearOf(record.period.to, NaN);
+  const mid = Number.isFinite(a) && Number.isFinite(b) ? (a + b) / 2 : Number.isFinite(a) ? a : b;
+  const span = yearBounds.max - yearBounds.min;
+  const t = Number.isFinite(mid) && span > 0 ? THREE.MathUtils.clamp((mid - yearBounds.min) / span, 0, 1) : 0;
+  return new THREE.Color().setHSL(0.08 + 0.52 * t, old ? 0.3 : 0.75, old ? 0.45 : 0.55);
+}
+function recolour(m) { const c = markerColor(m.record); m.mesh.material.color.copy(c); m.mesh.material.emissive.copy(c); }
 
 function addMarker(record) {
   if (markers.has(record.id)) return;
   const mesh = new THREE.Mesh(
     new THREE.SphereGeometry(MARKER_RADIUS, 20, 14),
-    new THREE.MeshStandardMaterial({ color: layerColor(record.layer), emissive: layerColor(record.layer), emissiveIntensity: 0.35 }),
+    new THREE.MeshStandardMaterial({ color: markerColor(record), emissive: markerColor(record), emissiveIntensity: 0.35 }),
   );
   mesh.position.set(record.anchor.x, record.anchor.y, record.anchor.z);
   const isReply = !!record.parent && markers.has(record.parent);   // a reply whose parent is gone stands as a root
@@ -592,7 +607,7 @@ function updateCount() { hud.count.textContent = `${markers.size} annotation${ma
 
 function applyLayerFilter() {
   for (const { mesh, record } of markers.values()) {
-    const active = record.layer === hud.layer.value;
+    const active = VISITOR || record.layer === hud.layer.value;   // layers are an operator's working view; a visitor sees every clip alike
     mesh.material.opacity = active ? 1 : 0.25;
     mesh.material.transparent = true;
     mesh.userData.baseScale = active ? 1 : 0.7;
@@ -625,8 +640,60 @@ function updateYearBounds() {
   const has = Number.isFinite(min);
   hud.year.disabled = hud.timeAll.checked || !has;
   if (has) { hud.year.min = min; hud.year.max = max; if (Number(hud.year.value) < min || Number(hud.year.value) > max) hud.year.value = max; }
+  if (`${min}-${max}` !== `${yearBounds.min}-${yearBounds.max}`) {        // the time scale moved: every colour is relative to it
+    yearBounds = { min, max };
+    for (const m of markers.values()) recolour(m);
+  }
+  renderBands();
   const vis = [...markers.values()].filter((m) => m.mesh.visible).length;
-  hud.yearLabel.textContent = hud.timeAll.checked ? (has ? `${min}–${max}` : '') : `${hud.year.value} · ${vis}/${markers.size}`;
+  if (hud.timeAll.checked) hud.yearLabel.textContent = has ? `${min}–${max}` : '';
+  else {
+    const y = Number(hud.year.value);
+    const covering = distinctPeriods().filter(({ period }) => yearOf(period.from, -Infinity) <= y && y <= yearOf(period.to, Infinity)).map(({ period }) => periodLabelOf(period));
+    hud.yearLabel.textContent = `${hud.year.value} · ${covering.length ? covering.join(', ') : 'between periods'} · ${vis}/${markers.size}`;
+  }
+}
+
+// Period bands under the year slider: one bar per distinct period in the
+// project, on the slider's scale and in the period's colour, so the viewer can
+// see where the clips sit in time and when a year falls between periods.
+const periodKey = (p) => `${p.from ?? ''}|${p.to ?? ''}|${p.label ?? ''}`;
+const periodLabelOf = (p) => p.label || [p.from, p.to].filter(Boolean).join('–');
+function distinctPeriods() {
+  const seen = new Map();
+  for (const { record } of markers.values()) {
+    if (!record.period) continue;
+    const k = periodKey(record.period), e = seen.get(k) || { period: record.period, n: 0 };
+    e.n++; seen.set(k, e);
+  }
+  return [...seen.values()].sort((x, y) => yearOf(x.period.from, -Infinity) - yearOf(y.period.from, -Infinity));
+}
+let shownBands = null;
+function renderBands() {
+  const el = hud.periodBands, { min, max } = yearBounds, span = max - min;
+  const periods = span > 0 ? distinctPeriods().slice(0, 12) : [];
+  const key = `${min}-${max}:` + periods.map((p) => periodKey(p.period) + '#' + p.n).join(';');
+  if (key === shownBands) return;
+  shownBands = key;
+  el.innerHTML = '';
+  if (!periods.length) { el.hidden = true; return; }
+  const lanes = [];                                       // overlapping periods stack in lanes instead of covering each other
+  for (const { period, n } of periods) {
+    const a = yearOf(period.from, min), b = yearOf(period.to, max);
+    let lane = lanes.findIndex((end) => end <= a);
+    if (lane < 0) { lane = lanes.length; lanes.push(0); }
+    lanes[lane] = b;
+    const s = document.createElement('span');
+    s.style.left = `${((a - min) / span) * 100}%`;
+    s.style.width = `${Math.max(((b - a) / span) * 100, 1)}%`;
+    s.style.top = `${lane * 10}px`;
+    s.style.background = '#' + markerColor({ period, createdAt: new Date().toISOString() }).getHexString();
+    s.title = `${periodLabelOf(period)} · ${a}–${b} · ${n} clip${n === 1 ? '' : 's'}`;
+    s.textContent = periodLabelOf(period);
+    el.appendChild(s);
+  }
+  el.style.height = `${lanes.length * 10}px`;
+  el.hidden = false;
 }
 function applyTime() {
   for (const m of markers.values()) {
@@ -667,7 +734,7 @@ function scaleMarkers() {
   for (const { mesh } of markers.values()) {
     const d = mesh.position.distanceTo(tmpV);
     const r = THREE.MathUtils.clamp(0.012 * d, 0.02, 0.15);              // world radius, ~0.7° of view
-    mesh.scale.setScalar((mesh.userData.baseScale ?? 1) * (mesh.userData.playing ? 1.3 : mesh.userData.hover ? 1.15 : mesh.userData.full === false ? 0.5 : 1) * r / MARKER_RADIUS);
+    mesh.scale.setScalar((mesh.userData.baseScale ?? 1) * (mesh.userData.playing ? 1.3 : mesh.userData.hover ? 1.3 : mesh.userData.full === false ? 0.5 : 1) * r / MARKER_RADIUS);
     if (mesh.userData.reply) mesh.scale.multiplyScalar(0.75);
     if (mesh.userData.bloomUntil) {                                        // commit cue: swell and settle
       const left = (mesh.userData.bloomUntil - now) / BLOOM_MS;
@@ -753,7 +820,7 @@ function updateHover() {
   if (prev) { prev.mesh.userData.hover = false; prev.mesh.material.emissiveIntensity = prev.mesh.userData.playing ? 1.0 : 0.35; }
   hoverId = id;
   const cur = markers.get(id);
-  if (cur) { cur.mesh.userData.hover = true; if (!cur.mesh.userData.playing) cur.mesh.material.emissiveIntensity = 0.8; }
+  if (cur) { cur.mesh.userData.hover = true; if (!cur.mesh.userData.playing) cur.mesh.material.emissiveIntensity = 1.0; }
   crosshair.classList.toggle('hover', !!id);
   refreshIdleStatus();
 }
@@ -799,7 +866,7 @@ function renderList() {
   for (const r of roots) { items.push(r); for (const c of (byParent.get(r.id) || []).sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))) items.push(c); }
   for (const record of items) {
     const li = document.createElement('li');
-    li.className = (record.id === playingId ? 'playing ' : '') + (record.layer === hud.layer.value ? '' : 'dim ') + (record.parent && markers.has(record.parent) ? 'reply' : '');
+    li.className = (record.id === playingId ? 'playing ' : '') + (VISITOR || record.layer === hud.layer.value ? '' : 'dim ') + (record.parent && markers.has(record.parent) ? 'reply' : '');
     const tr = record.transcription || {};
     const text = record.transcript ? `<div class="text">${esc(record.transcript)}</div>`
       : tr.status === 'pending' ? `<div class="text pending">transcribing…</div>`
@@ -1081,8 +1148,8 @@ const net = connect({
     const m = markers.get(a.id);
     if (!m || a.project !== project?.id) return;
     if (m.record.parent && !a.parent) { m.mesh.position.set(a.anchor.x, a.anchor.y, a.anchor.z); m.mesh.userData.reply = false; }   // parent erased: now a root
-    if (m.record.layer !== a.layer) { m.mesh.material.color.copy(layerColor(a.layer)); m.mesh.material.emissive.copy(layerColor(a.layer)); }
     m.record = a;
+    recolour(m);                     // period or age may have changed
     applyLayerFilter();
     m.mesh.visible = inTime(a);
     renderList();
