@@ -127,6 +127,7 @@ export function toEdm(project, annotations, { base, provider, rights }) {
       'glossy:anchor': { x: a.anchor?.x, y: a.anchor?.y, z: a.anchor?.z, ...(a.anchor?.objectId ? { objectId: a.anchor.objectId } : {}) },
       'glossy:mode': a.mode || 'walk',
       'glossy:layer': a.layer,
+      ...(a.hands ? { 'glossy:gesture': true } : {}),
       'glossy:nativeRecord': nativeRecord,
     };
     if (text) node['dc:description'] = lang ? { '@value': text, '@language': lang } : text;
@@ -138,7 +139,7 @@ export function toEdm(project, annotations, { base, provider, rights }) {
     graph.push(node);
 
     const provenance = [
-      `Recorded in Glossy XR ${a.poseSource === 'xr' ? 'in a headset' : 'on a desktop'} at the scene anchor; the viewpoint trace is in the native record.`,
+      `Recorded in Glossy XR ${a.poseSource === 'xr' ? 'in a headset' : 'on a desktop'} at the scene anchor; the viewpoint trace${a.hands ? ` and a hand-gesture trace of ${a.hands.frames.length} frames` : ''} ${a.hands ? 'are' : 'is'} in the native record.`,
       tr.status === 'done' && tr.model ? `Transcribed by ${tr.model} (${tr.backend})${lang ? `, language ${lang} ${tr.detected ? 'detected' : 'set by the project'}` : ''}${tr.unclear ? '; the transcript was rejected as unclear' : ''}.` : tr.status === 'failed' ? 'Transcription failed.' : 'Not transcribed.',
     ].join(' ');
     graph.push({

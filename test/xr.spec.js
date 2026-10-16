@@ -79,3 +79,51 @@ test('a visitor in the headset sees the question and squeeze reads it aloud', as
   await page.evaluate(() => window.__xr.controllers.right.updateButtonValue('squeeze', 0));
   expect(await page.inputValue('#layer')).toBe('default');   // squeeze did not cycle the layer
 });
+
+test('with hands tracked, speaking starts a clip, the gesture is stored and replays as ghost hands', async ({ page, request }) => {
+  const project = await openProject(page, request, 'xr-hands');
+  await prepareRecording(page, 'HandTester');
+  await page.evaluate(() => { window.__xr.primaryInputMode = 'hand'; });   // hands, no controllers
+  const btn = page.locator('#VRButton');
+  await expect(btn).toHaveText(/ENTER VR/i);
+  await btn.click();
+  await page.waitForFunction(() => window.__glossy.renderer.xr.isPresenting, null, { timeout: 15_000 });
+  await expect.poll(() => page.evaluate(() => window.__glossy.handsPresent), { timeout: 10_000 }).toBe(true);
+  // the fake microphone is already speaking: no pinch, no trigger, the clip starts on its own, anchored where the headset looks
+  await expect.poll(() => status(page), { timeout: 10_000 }).toMatch(/recording/);
+  // meanwhile the left hand stirs: a circle 15 cm across in front of the body
+  await page.evaluate(() => new Promise((done) => {
+    const h = window.__xr.hands.left, t0 = performance.now();
+    const id = setInterval(() => {
+      const a = (performance.now() - t0) / 400;
+      h.position.set(-0.15 + 0.15 * Math.cos(a), 1.15, 0.25 + 0.15 * Math.sin(a));
+      if (performance.now() - t0 > 1500) { clearInterval(id); done(); }
+    }, 50);
+  }));
+  await page.evaluate(() => window.__glossy.endRecording());    // the pause that would end it; the looping fake voice never pauses
+  await expect.poll(() => markerCount(page), { timeout: 10_000 }).toBe(1);
+  await expect.poll(() => status(page)).toMatch(/^saved .* with gesture/);
+  const [a] = await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json();
+  expect(a.poseSource).toBe('xr');
+  expect(a.hands.joints).toHaveLength(25);
+  expect(a.hands.frames.length).toBeGreaterThanOrEqual(15);
+  const left = a.hands.frames.map((f) => f.l).filter(Boolean);
+  expect(left.length).toBeGreaterThanOrEqual(15);
+  expect(left[0]).toHaveLength(75);
+  const xs = left.map((l) => l[0]);
+  expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(0.1);   // the wrist moved: the stir is in the record
+  expect(Math.abs(left.at(-1)[1] - 1.15)).toBeLessThan(0.15);      // and it is in scene metres at hand height (the first frames predate the stir)
+  // the export carries it, and the EDM record says a gesture was made
+  const exp = await (await request.get(`${API}/api/projects/${project.id}/export`)).json();
+  expect(exp.contributions[0].hands.frames.length).toBe(a.hands.frames.length);
+  const edm = await (await request.get(`${API}/api/projects/${project.id}/export?format=edm`)).json();
+  expect(edm['@graph'].find((n) => n['@id'].endsWith(a.id))['glossy:gesture']).toBe(true);
+  // playback draws the ghost hands and takes them down when the clip ends
+  await expect.poll(() => page.evaluate((id) => !!window.__glossy.markers.get(id)?.sound.buffer, a.id), { timeout: 10_000 }).toBe(true);
+  await page.evaluate((id) => window.__glossy.play(id), a.id);
+  await expect.poll(() => page.evaluate(() => window.__glossy.ghost.visible)).toBe(true);
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: 'test-results/xr-ghost-hands.png' });
+  await expect.poll(() => page.evaluate(() => window.__glossy.ghost.visible), { timeout: 10_000 }).toBe(false);
+  await expect(page.locator('#annList li .badge', { hasText: '✋' })).toHaveCount(1);
+});

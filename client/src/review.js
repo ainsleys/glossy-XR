@@ -109,7 +109,7 @@ function cardHtml(r) {
   return `<article data-id="${r.id}" class="${r.parent && records.has(r.parent) ? 'reply ' : ''}${r.id === selectedId ? 'sel ' : ''}${matches(r) ? '' : 'dim'}">
     <div class="head"><span class="sw" style="background:${colourOf(r)}"></span><span class="who">${esc(r.author)}</span>
       ${r.period ? `<span class="period">${esc(periodLabel(r.period))}</span>` : ''}<span title="${esc(r.createdAt)}">${esc(ago(r.createdAt))}</span><span>${fmtDur(r.durationMs)}</span>${lang}${heard}
-      ${r.anchor?.objectId ? `<span>on ${esc(r.anchor.objectId)}</span>` : ''}${r.replies ? `<span>↩ ${r.replies}</span>` : ''}${r.consent === false ? '<span style="color:var(--rec)">consent withdrawn</span>' : ''}
+      ${r.anchor?.objectId ? `<span>on ${esc(r.anchor.objectId)}</span>` : ''}${r.hands ? `<span title="a hand gesture was recorded with this clip; its wrist paths are drawn on the plan">✋ gesture</span>` : ''}${r.replies ? `<span>↩ ${r.replies}</span>` : ''}${r.consent === false ? '<span style="color:var(--rec)">consent withdrawn</span>' : ''}
       <span class="right"><button class="playBtn" title="play this clip">${r.id === selectedId && !ui.audio.paused ? '■ stop' : '▶ play'}</button><a href="/?project=${esc(r.project)}&focus=${esc(r.id)}" title="stand in front of this clip in the room">in the room</a></span></div>
     ${r.prompt ? `<div class="prompt">Q: ${esc(r.prompt)}</div>` : ''}
     ${text}${links}
@@ -168,7 +168,7 @@ function renderPlan() {
   const X = (x) => 50 + (x - cx) * scale, Y = (z) => 50 + (z - cz) * scale;     // +z (towards the default spawn) is down the page
   const dots = all.map((r) => `<circle data-id="${r.id}" cx="${X(r.anchor.x).toFixed(2)}" cy="${Y(r.anchor.z).toFixed(2)}" r="${r.parent && records.has(r.parent) ? 1.1 : 1.7}" fill="${colourOf(r)}" class="${matches(r) ? '' : 'dim'}${r.id === selectedId ? ' sel' : ''}"><title>${esc([r.author, periodLabel(r.period) || ago(r.createdAt), r.transcript ? r.transcript.slice(0, 60) : ''].filter(Boolean).join(' · '))}</title></circle>`).join('');
   const m = scale;   // one metre in viewBox units
-  svg.innerHTML = `<line class="scale" x1="3" y1="97.5" x2="${(3 + m).toFixed(2)}" y2="97.5" /><text x="${(3 + m + 1).toFixed(2)}" y="98.5">1 m</text>${dots}<path id="poseArrow" class="pose" d="" />`;
+  svg.innerHTML = `<line class="scale" x1="3" y1="97.5" x2="${(3 + m).toFixed(2)}" y2="97.5" /><text x="${(3 + m + 1).toFixed(2)}" y="98.5">1 m</text>${dots}<path id="handPath" class="hand" d="" /><path id="poseArrow" class="pose" d="" />`;
   for (const c of svg.querySelectorAll('circle')) c.addEventListener('click', () => { selectCard(c.dataset.id, true); });
   drawPose();
 }
@@ -179,10 +179,34 @@ function selectCard(id, scroll) {
   for (const c of ui.plan.querySelectorAll('circle')) c.classList.toggle('sel', c.dataset.id === id);
   if (scroll) ui.clips.querySelector(`article[data-id="${id}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
+// the wrist paths of a recorded gesture, as seen from above, for the selected clip
+let handsShownFor = null;
+function drawHands(r) {
+  const path = ui.plan.querySelector('#handPath');
+  if (!path || !planBox) return;
+  const key = r?.hands ? r.id : null;
+  if (key === handsShownFor) return;
+  handsShownFor = key;
+  if (!key) { path.setAttribute('d', ''); return; }
+  const { cx, cz, scale } = planBox;
+  const X = (x) => 50 + (x - cx) * scale, Y = (z) => 50 + (z - cz) * scale;
+  let d = '';
+  for (const side of ['l', 'r']) {
+    let pen = false;
+    for (const f of r.hands.frames) {
+      const a = f[side];
+      if (!a) { pen = false; continue; }
+      d += `${pen ? 'L' : 'M'}${X(a[0]).toFixed(2)},${Y(a[2]).toFixed(2)} `;
+      pen = true;
+    }
+  }
+  path.setAttribute('d', d.trim());
+}
 // the author's viewpoint at the playhead: a short arrow from where they stood in the direction they faced
 function drawPose() {
   const arrow = ui.plan.querySelector('#poseArrow');
   const r = records.get(selectedId);
+  drawHands(r);
   if (!arrow || !r || !planBox || !r.pose?.length || ui.audio.paused && ui.audio.currentTime === 0) { if (arrow) arrow.setAttribute('d', ''); return; }
   const t = ui.audio.currentTime * 1000;
   let s = r.pose[0]; for (const p of r.pose) { if (p.t <= t) s = p; else break; }

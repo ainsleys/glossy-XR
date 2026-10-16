@@ -17,6 +17,8 @@
 
 import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
+import { HandTrace, GhostHands, describeHands } from './hands.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { VoiceRecorder } from './recorder.js';
@@ -61,7 +63,7 @@ const hud = {
   assetList: $('assetList'), assetFile: $('assetFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), edmLink: $('edmLink'), annList: $('annList'),
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
-  walk: $('walk'), autoplay: $('autoplay'), reviewLink: $('reviewLink'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
+  walk: $('walk'), autoplay: $('autoplay'), voiceStart: $('voiceStart'), reviewLink: $('reviewLink'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
   interview: $('interview'), visitorLink: $('visitorLink'), question: $('question'), level: $('level'), levelBar: $('levelBar'), hint: $('hint'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
 };
 const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
@@ -74,6 +76,8 @@ hud.consent.addEventListener('change', () => ls.set('glossy.consent', hud.consen
 hud.walk.checked = ls.get('glossy.walk', '1') === '1';
 hud.walk.addEventListener('change', () => ls.set('glossy.walk', hud.walk.checked ? '1' : '0'));
 hud.autoplay.checked = ls.get('glossy.autoplay', '0') === '1';
+hud.voiceStart.checked = ls.get('glossy.voiceStart', '1') === '1';
+hud.voiceStart.addEventListener('change', () => ls.set('glossy.voiceStart', hud.voiceStart.checked ? '1' : '0'));
 hud.autoplay.addEventListener('change', () => ls.set('glossy.autoplay', hud.autoplay.checked ? '1' : '0'));
 hud.interview.checked = ls.get('glossy.interview', '0') === '1';
 hud.interview.addEventListener('change', () => { ls.set('glossy.interview', hud.interview.checked ? '1' : '0'); renderInterview(); });
@@ -100,7 +104,7 @@ const whenOf = (r) => {
 // One line about a clip for the status row: author · when · layer (unless default) · length · first words.
 const linksOf = (r) => { const n = (r.links || []).length; return n ? `${n} ${(r.links || []).every((l) => l.kind === 'image') ? 'photo' : 'attachment'}${n === 1 ? '' : 's'}` : ''; };
 const spokenText = (r) => (r.transcript && !unclearReason(r.transcript) ? r.transcript : '');   // older records may hold a loop the guard now catches
-const describeRecord = (r) => [r.author, whenOf(r), r.layer !== 'default' ? r.layer : '', fmtDur(r.durationMs), linksOf(r), spokenText(r) ? '“' + snippet(spokenText(r)) + '”' : ''].filter(Boolean).join(' · ');
+const describeRecord = (r) => [r.author, whenOf(r), r.layer !== 'default' ? r.layer : '', fmtDur(r.durationMs), linksOf(r), r.hands ? 'gesture' : '', spokenText(r) ? '“' + snippet(spokenText(r)) + '”' : ''].filter(Boolean).join(' · ');
 
 // ---- renderer / scene ------------------------------------------------------
 
@@ -110,7 +114,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
 document.body.appendChild(renderer.domElement);
-const vrButton = VRButton.createButton(renderer);
+const vrButton = VRButton.createButton(renderer, { optionalFeatures: ['hand-tracking'] });   // hands, when the headset tracks them, are part of a clip
 document.body.appendChild(vrButton);
 // a desktop without a headset gets no "VR NOT SUPPORTED" sign; the help text says where VR is
 (navigator.xr ? navigator.xr.isSessionSupported('immersive-vr').catch(() => false) : Promise.resolve(false)).then((ok) => { if (!ok) vrButton.style.setProperty('display', 'none', 'important'); });
@@ -158,7 +162,9 @@ function updateXrPanel() {
   if (!renderer.xr.isPresenting) { if (xrPanel.mesh.visible) xrPanel.draw('', '', '', false); return; }
   const qs = questions(), q = currentQuestion();
   const question = q ? `${qIndex + 1}/${qs.length} · ${q.text}` : qs.length && qIndex >= qs.length ? 'all questions answered' : '';
-  const hint = q ? (VISITOR ? 'squeeze: hear the question · hold the trigger to answer' : 'hold the trigger to answer') : '';
+  const hands = handsPresent();
+  const act = hands ? (hud.voiceStart.checked ? 'pinch, or just speak, to answer' : 'pinch and hold to answer') : 'hold the trigger to answer';
+  const hint = q ? (VISITOR && !hands ? 'squeeze: hear the question · ' + act : act) : hands && hud.voiceStart.checked ? 'speak to leave a clip where you look · pinch to hold one' : '';
   xrPanel.draw(question, hud.status.textContent, hint, hud.rec.classList.contains('on'), level);
 }
 
@@ -179,12 +185,16 @@ function renderHint() {
 // shown as a bar in the HUD and on the headset panel. The timer is in the
 // status text ("recording… 3s").
 let level = 0, levelNode = null, levelData = null, levelSrc = null, recStatusBase = '', recSecs = -1, recPeak = 0;
+function measureLevel() {
+  if (!levelNode) return 0;
+  levelNode.getByteTimeDomainData(levelData);
+  let s = 0; for (let i = 0; i < levelData.length; i++) { const v = (levelData[i] - 128) / 128; s += v * v; }
+  return Math.min(1, Math.sqrt(s / levelData.length) * 4);
+}
 function updateLevel() {
   if (!recorder.isRecording) { if (level) { level = 0; hud.levelBar.style.width = '0%'; } hud.level.classList.remove('on'); return; }
   if (levelNode) {
-    levelNode.getByteTimeDomainData(levelData);
-    let s = 0; for (let i = 0; i < levelData.length; i++) { const v = (levelData[i] - 128) / 128; s += v * v; }
-    level = Math.min(1, Math.sqrt(s / levelData.length) * 4);
+    level = measureLevel();
     recPeak = Math.max(recPeak, level);
   }
   hud.level.classList.add('on');
@@ -832,6 +842,7 @@ function bloom(id) {
 
 let playingId = null;
 function stopAll() {
+  ghost.hide();
   for (const other of markers.values()) {
     if (other.sound.isPlaying) other.sound.stop();
     other.mesh.userData.playing = false;
@@ -846,9 +857,11 @@ function play(id) {
   if (listener.context.state === 'suspended') listener.context.resume();
   if (playingId === id) { stopAll(); setStatus('■ stopped'); return; }   // click the playing marker again to stop
   stopAll();
-  m.sound.onEnded = () => { m.sound.isPlaying = false; if (playingId === id) { playingId = null; m.mesh.userData.playing = false; m.mesh.material.emissiveIntensity = 0.35; renderList(); } };
+  m.sound.onEnded = () => { m.sound.isPlaying = false; ghost.hide(); if (playingId === id) { playingId = null; m.mesh.userData.playing = false; m.mesh.material.emissiveIntensity = 0.35; renderList(); } };
   m.sound.play();
   playingId = id;
+  playStartedAt = performance.now();
+  if (m.record.hands) ghost.show(m.record.hands); else ghost.hide();
   m.mesh.userData.playing = true;
   m.mesh.material.emissiveIntensity = 1.0;
   renderList();
@@ -973,7 +986,7 @@ function renderList() {
       : unclear ? `<div class="text pending" title="${esc(tr.raw || record.transcript || '')}">(${UNCLEAR_TEXT[unclear] || 'unclear'})</div>`
       : tr.status === 'done' ? `<div class="text pending">(no speech detected)</div>` : '';
     const periodLabel = record.period ? (record.period.label || [record.period.from, record.period.to].filter(Boolean).join('–')) : '';
-    const badges = (record.replies ? `<span class="badge" title="replies">↩ ${record.replies}</span>` : '') + (periodLabel ? `<span class="period" title="period">${esc(periodLabel)}</span>` : '');
+    const badges = (record.hands ? `<span class="badge" title="${esc(describeHands(record.hands))}">✋</span>` : '') + (record.replies ? `<span class="badge" title="replies">↩ ${record.replies}</span>` : '') + (periodLabel ? `<span class="period" title="period">${esc(periodLabel)}</span>` : '');
     const prompt = record.prompt ? `<div class="prompt">Q: ${esc(record.prompt)}</div>` : '';
     // the project or clip forced one language and the model heard another: say so, offer the other decoder
     const mismatch = tr.status === 'done' && tr.heard && tr.language && tr.heard !== tr.language;
@@ -997,7 +1010,7 @@ function renderList() {
 // ---- recording -------------------------------------------------------------
 
 const recorder = new VoiceRecorder();
-recorder.onstart = (stream) => {
+function attachLevel(stream) {
   try {
     const ctx = listener.context;
     if (ctx.state === 'suspended') ctx.resume();
@@ -1009,7 +1022,8 @@ recorder.onstart = (stream) => {
       levelData = new Uint8Array(levelNode.fftSize);
     }
   } catch {}
-};
+}
+recorder.onstart = attachLevel;
 const cursor = new THREE.Mesh(new THREE.SphereGeometry(MARKER_RADIUS * 1.2, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff3333, wireframe: true }));
 cursor.visible = false;
 scene.add(cursor);
@@ -1051,6 +1065,7 @@ async function beginRecording(source, opts = {}) {
   starting = null;
   anchorSource = source;
   poseStart();
+  if (renderer.xr.isPresenting) handTrace.start();          // hands, if the headset tracks them, travel with the clip
   cursor.visible = !opts.parent;
   hud.rec.classList.add('on'); crosshair.classList.add('rec');
   const q = currentQuestion();
@@ -1071,6 +1086,7 @@ function releaseRecording(source) {
 // device unplugged) or when the clip cannot be kept.
 function resetRecordingUi() {
   clearInterval(pose.timer); pose.timer = null;
+  clearInterval(handTrace.timer); handTrace.timer = null;
   cursor.visible = false; anchorSource = null; recOpts = {};
   hud.rec.classList.remove('on'); crosshair.classList.remove('rec');
 }
@@ -1100,6 +1116,7 @@ async function endRecording() {
     : aimPoint(anchorSource);
   const provisional = placeProvisional(anchor);
   const samples = poseStop();
+  const hands = handTrace.stop();
   const clip = await recorder.stop();
   resetRecordingUi();
   if (!clip) { clearProvisional(provisional); return setStatus('too short, discarded'); }
@@ -1108,12 +1125,12 @@ async function endRecording() {
   try {
     const rec = await annotationsApi.create({
       project: project.id, ...clip, anchor, objectId, author: hud.author.value.trim(), layer: hud.layer.value, consent: true,
-      parent: parentRec?.id, pose: samples, poseSource: pose.source,
+      parent: parentRec?.id, pose: samples, poseSource: pose.source, hands,
       prompt: q?.text, mode: q ? 'interview' : 'walk',
     });
     clearProvisional(provisional);
     const quiet = levelNode && recPeak < QUIET_PEAK;              // the level meter never moved: likely the wrong input or a muted microphone
-    setStatus((parentRec ? `saved reply to ${parentRec.author}` : `saved ${fmtDur(clip.durationMs)}${objectId ? ' on ' + objectId : ''}`) + (quiet ? ' — the microphone heard almost nothing; check the input' : ''), { hold: quiet ? 5000 : 2000 });
+    setStatus((parentRec ? `saved reply to ${parentRec.author}` : `saved ${fmtDur(clip.durationMs)}${objectId ? ' on ' + objectId : ''}${hands ? ' with ' + describeHands(hands) : ''}`) + (quiet ? ' — the microphone heard almost nothing; check the input' : ''), { hold: quiet ? 5000 : 2000 });
     addMarker(rec);                  // local echo; server broadcast is deduped by id (the parent's reply count arrives as annotation:updated)
     bloom(rec.id);
     if (q) stepQuestion(1);
@@ -1202,6 +1219,45 @@ for (let i = 0; i < 2; i++) {
   const grip = renderer.xr.getControllerGrip(i);
   grip.add(controllerModelFactory.createControllerModel(grip));
   rig.add(grip);
+}
+
+// Hands. With hand tracking the headset reports an input source per hand:
+// its target ray and pinch arrive through the same controller objects above
+// (a pinch is a select), and the joints through renderer.xr.getHand(i). The
+// joints are sampled into the clip while recording (HandTrace) and drawn back
+// on playback (GhostHands). With hands and no controller there is no trigger
+// to hold, so, when "start a clip when I speak" is on, speech starts a clip
+// anchored where the author looks and a pause ends it.
+const handModelFactory = new XRHandModelFactory();
+const xrHands = {};                  // handedness -> XRHandSpace while connected
+for (let i = 0; i < 2; i++) {
+  const hand = renderer.xr.getHand(i);
+  hand.add(handModelFactory.createHandModel(hand, 'spheres'));
+  hand.addEventListener('connected', (e) => { if (e.data?.hand) xrHands[e.data.handedness] = hand; if (e.data?.hand && renderer.xr.isPresenting) recorder.init().then(() => attachLevel(recorder.stream)).catch(() => {}); });
+  hand.addEventListener('disconnected', (e) => { for (const k of Object.keys(xrHands)) if (xrHands[k] === hand) delete xrHands[k]; });
+  rig.add(hand);
+}
+const handsPresent = () => Object.keys(xrHands).length > 0;
+const handTrace = new HandTrace(() => xrHands);
+const ghost = new GhostHands(scene);
+let playStartedAt = 0;
+// voice start: speech above VOICE_START for VOICE_START_MS begins a clip; a pause below VOICE_STOP for VOICE_STOP_MS ends it
+const VOICE_START = 0.1, VOICE_START_MS = 250, VOICE_STOP = 0.06, VOICE_STOP_MS = 1200, VOICE_MIN_MS = 600;
+let voiceAbove = 0, voiceQuiet = 0;
+function voiceStart(now) {
+  if (!renderer.xr.isPresenting || !handsPresent() || !hud.voiceStart.checked || !levelNode) return;
+  if ('speechSynthesis' in window && speechSynthesis.speaking) { voiceAbove = 0; return; }   // the Ask voice is not the visitor
+  if (playingId && !recorder.isRecording) { voiceAbove = 0; return; }                        // nor is a clip being listened to
+  const lvl = measureLevel();
+  if (recorder.isRecording) {
+    if (!recOpts.voice) return;                                 // a pinch-held clip ends on release, not on silence
+    if (lvl < VOICE_STOP) { if (!voiceQuiet) voiceQuiet = now; else if (now - voiceQuiet > VOICE_STOP_MS && now - recorder.startedAt > VOICE_MIN_MS) { voiceQuiet = 0; releaseAt = now; endRecording(); } }
+    else voiceQuiet = 0;
+    return;
+  }
+  if (starting) return;
+  if (lvl > VOICE_START) { if (!voiceAbove) voiceAbove = now; else if (now - voiceAbove > VOICE_START_MS) { voiceAbove = 0; voiceQuiet = 0; beginRecording(camera, { voice: true }); } }
+  else voiceAbove = 0;
 }
 
 // ---- desktop fallback ------------------------------------------------------
@@ -1311,7 +1367,8 @@ if (import.meta.env.DEV) window.__glossy = {
   nearestId: () => { camera.getWorldPosition(tmpV); let best = null, bd = Infinity; for (const m of markers.values()) { if (!m.mesh.visible) continue; const d = m.mesh.position.distanceTo(tmpV); if (d < bd) { bd = d; best = m.record.id; } } return best; },
   get pending() { return pendingMarkers.size; },
   get interview() { return { on: hud.interview.checked, index: qIndex, question: currentQuestion()?.text || null, total: questions().length }; },
-  autoFit, frameAll, applyTransform, aimPoint, aimMarker, floorBelow, spawnInside, focusMarker,
+  autoFit, frameAll, applyTransform, aimPoint, aimMarker, floorBelow, spawnInside, focusMarker, play, endRecording,
+  ghost, xrHands, get handsPresent() { return handsPresent(); },
 };
 
 // ---- boot ------------------------------------------------------------------
@@ -1378,6 +1435,8 @@ renderer.setAnimationLoop(() => {
     }
   }
   setNear(bestId);
+  voiceStart(performance.now());
+  if (ghost.visible) ghost.update(performance.now() - playStartedAt);
 
   renderer.render(scene, camera);
 });

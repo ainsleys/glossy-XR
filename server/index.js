@@ -83,6 +83,8 @@ const safeName = (n) => path.basename(n).replace(/[^\w.\-]+/g, '_').slice(0, 120
 
 const LANG_RE = /^[a-z]{2,3}$/;             // Whisper takes bare ISO codes (tr, en), not region tags
 const MAX_POSE_SAMPLES = 6000;                  // 10 Hz for ten minutes
+const MAX_HAND_FRAMES = 2400;                   // 20 Hz for two minutes
+const MAX_HAND_JOINTS = 25;                     // WebXR hand joints
 
 /** Temporal reference: { from, to, label } with free-form strings (years, dates, "always"); null clears it. */
 function parsePeriod(v) {
@@ -124,6 +126,26 @@ function parsePose(v) {
   });
 }
 
+// hands: { joints: [name…], rate, frames: [{ t, l: [x,y,z × joints] | null, r: … | null }] } in scene metres
+function parseHands(v) {
+  if (v === undefined || v === null || v === '') return null;
+  const h = typeof v === 'string' ? JSON.parse(v) : v;
+  if (!h || !Array.isArray(h.joints) || !Array.isArray(h.frames)) throw new Error('hands must have joints[] and frames[]');
+  const joints = h.joints.slice(0, MAX_HAND_JOINTS).map((j) => String(j).slice(0, 40));
+  const n = joints.length * 3;
+  const r3 = (x) => Math.round(Number(x) * 1000) / 1000;
+  const hand = (a) => {
+    if (a === null || a === undefined) return null;
+    if (!Array.isArray(a) || a.length !== n) throw new Error(`a hand needs ${n} numbers or null`);
+    const out = a.map(r3);
+    if (out.some((x) => !Number.isFinite(x))) throw new Error('hand values must be numbers');
+    return out;
+  };
+  const frames = h.frames.slice(0, MAX_HAND_FRAMES).map((f) => ({ t: Math.max(0, Math.round(Number(f.t) || 0)), l: hand(f.l), r: hand(f.r) }));
+  if (!frames.some((f) => f.l || f.r)) return null;
+  return { joints, rate: Math.min(120, Math.max(1, Math.round(Number(h.rate) || 20))), frames };
+}
+
 function validateAnnotation(body, projectId) {
   const errors = [];
   const num = (v) => (v === undefined || v === null || v === '' ? NaN : Number(v));
@@ -145,11 +167,13 @@ function validateAnnotation(body, projectId) {
   let period = null, pose = [];
   try { period = parsePeriod(body.period) ?? null; } catch (e) { errors.push('period: ' + e.message); }
   try { pose = parsePose(body.pose); } catch (e) { errors.push('pose: ' + e.message); }
+  let hands = null;
+  try { hands = parseHands(body.hands); } catch (e) { errors.push('hands: ' + e.message); }
   const prompt = body.prompt ? String(body.prompt).trim().slice(0, 500) : null;
   const mode = body.mode === 'interview' ? 'interview' : 'walk';
   const language = body.language && LANG_RE.test(String(body.language)) ? String(body.language) : null;
   const poseSource = body.poseSource === 'xr' ? 'xr' : 'desktop';
-  return { errors, x, y, z, author, layer, objectId, consent, parent, period, pose, poseSource, prompt, mode, language };
+  return { errors, x, y, z, author, layer, objectId, consent, parent, period, pose, poseSource, hands, prompt, mode, language };
 }
 
 // ---- http ------------------------------------------------------------------
@@ -180,7 +204,7 @@ const audioUpload = multer({
       cb(null, `${randomUUID()}.${ext}`);
     },
   }),
-  limits: { fileSize: 25 * 1024 * 1024 },
+  limits: { fileSize: 25 * 1024 * 1024, fieldSize: 8 * 1024 * 1024 },   // fieldSize: the pose and hand traces ride along as JSON fields
   // Browsers send audio/webm or audio/ogg; some clients label the same bytes
   // video/webm or application/octet-stream, so accept those containers too.
   fileFilter: (_req, file, cb) => cb(null,
@@ -327,7 +351,7 @@ app.post('/api/projects/:id/annotations', projectOr404, audioUpload.single('audi
     author: v.author, x: v.x, y: v.y, z: v.z, objectId: v.objectId, layer: v.layer,
     audioUrl: `/audio/${req.file.filename}`, durationMs: Number(req.body.durationMs) || null, consent: true,
     transcriptStatus: transcriber.enabled ? 'pending' : 'skipped',
-    parent: v.parent, period: v.period, pose: v.pose, poseSource: v.poseSource, prompt: v.prompt, mode: v.mode, language: v.language,
+    parent: v.parent, period: v.period, pose: v.pose, poseSource: v.poseSource, hands: v.hands, prompt: v.prompt, mode: v.mode, language: v.language,
   });
   io.to(req.params.id).emit('annotation:new', record);     // the record we just saved, to everyone in the project
   if (record.parent) io.to(req.params.id).emit('annotation:updated', db.annotations.get(req.params.id, record.parent));   // its reply count moved
@@ -390,7 +414,7 @@ function exportProject(p) {
       id: a.id, attribution: a.author, timestamp: a.createdAt, anchor: a.anchor, period: a.period,
       parent: a.parent, mode: a.mode, prompt: a.prompt, layer: a.layer, consent: a.consent,
       audio: a.audioUrl, durationMs: a.durationMs, language: a.transcription?.language || a.language || null,
-      transcript: a.transcript, words: a.transcription?.words || [], pose: a.pose, poseSource: a.poseSource, links: a.links || [],
+      transcript: a.transcript, words: a.transcription?.words || [], pose: a.pose, poseSource: a.poseSource, hands: a.hands || null, links: a.links || [],
     })),
   };
 }
