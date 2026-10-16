@@ -409,3 +409,44 @@ test('recording shows a timer and a microphone level, and the selector count kee
   expect(await page.evaluate(() => window.__glossy.fullDistance)).toBeCloseTo(4.5, 1);
   expect(await listAnnotations(request, project.id)).toHaveLength(1);
 });
+
+test('the session log records a session: project open, the clip from start to saved, and a session summary', async ({ page, request }) => {
+  const project = await openProject(page, request, 'log');
+  await prepareRecording(page, 'Tester');
+  await lockPointer(page);
+  await recordWithMouse(page, 1200);
+  await page.evaluate(() => window.__glossy.log.flush());
+  await expect.poll(async () => (await (await request.get(`${API}/api/projects/${project.id}/events`)).json()).map((e) => e.kind), { timeout: 10_000 }).toEqual(expect.arrayContaining(['session:start', 'project:open', 'record:start', 'record:end', 'record:saved']));
+  const events = await (await request.get(`${API}/api/projects/${project.id}/events`)).json();
+  const kinds = events.map((e) => e.kind);
+  expect(kinds.indexOf('record:start')).toBeLessThan(kinds.indexOf('record:end'));
+  expect(kinds.indexOf('record:end')).toBeLessThan(kinds.indexOf('record:saved'));
+  const start = events.find((e) => e.kind === 'record:start'), end = events.find((e) => e.kind === 'record:end'), saved = events.find((e) => e.kind === 'record:saved');
+  expect(start.data.source).toBe('mouse');
+  expect(end.data.reason).toBe('release');
+  expect(end.data.durationMs).toBeGreaterThan(1000);
+  const [a] = await listAnnotations(request, project.id);
+  expect(saved.data.id).toBe(a.id);
+  expect(saved.data.hands).toBeNull();
+  expect(events.filter((e) => e.kind === 'stats').length).toBeGreaterThanOrEqual(1);   // once a second while recording
+  for (const e of events) { expect(e.session).toBe(events[0].session); expect(e.t).toBeGreaterThanOrEqual(0); expect(Date.parse(e.at)).toBeGreaterThan(0); }
+  // no audio and no text in the log
+  expect(JSON.stringify(events)).not.toMatch(/lamp|table is broken|audioUrl|transcript/);
+  // the sessions summary and the ndjson export
+  const sessions = await (await request.get(`${API}/api/projects/${project.id}/sessions`)).json();
+  expect(sessions).toHaveLength(1);
+  expect(sessions[0]).toMatchObject({ session: events[0].session, events: events.length, visitor: false });
+  const nd = await (await request.get(`${API}/api/projects/${project.id}/events?format=ndjson`)).text();
+  expect(nd.trim().split('\n')).toHaveLength(events.length);
+  // bad batches are refused, oversize data is truncated rather than stored
+  expect((await request.post(`${API}/api/projects/${project.id}/events`, { data: { events: [] } })).status()).toBe(400);
+  const big = await request.post(`${API}/api/projects/${project.id}/events`, { data: { session: 'x', events: [{ t: 1, at: new Date().toISOString(), kind: 'test', data: { blob: 'y'.repeat(10000) } }] } });
+  expect(big.status()).toBe(202);
+  const stored = (await (await request.get(`${API}/api/projects/${project.id}/events?session=x`)).json())[0];
+  expect(stored.data).toEqual({ truncated: true });
+  // the report script reads the same API
+  const { execFileSync } = await import('node:child_process');
+  const out = execFileSync('node', ['scripts/session-report.mjs', '--project', project.id, '--api', API], { encoding: 'utf8' });
+  expect(out).toMatch(/1 started \(mouse 1\), 1 saved/);
+  expect(out).toMatch(/ended by: release 1/);
+});

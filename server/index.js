@@ -196,7 +196,7 @@ app.use('/models', express.static(MODEL_DIR, { maxAge: 0, setHeaders: (res, p) =
   if (p.endsWith('.gltf')) res.setHeader('Content-Type', 'model/gltf+json');
   if (p.endsWith('.glb')) res.setHeader('Content-Type', 'model/gltf-binary');
 } }));
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));   // event batches from the session log can pass the 100 kB default
 
 const audioUpload = multer({
   storage: multer.diskStorage({
@@ -400,6 +400,41 @@ app.delete('/api/projects/:id/annotations/:aid', projectOr404, async (req, res) 
   for (const cid of gone.detached) io.to(req.params.id).emit('annotation:updated', db.annotations.get(req.params.id, cid));   // now roots
   if (gone.parent) { const p = db.annotations.get(req.params.id, gone.parent); if (p) io.to(req.params.id).emit('annotation:updated', p); }   // one reply fewer
   res.status(204).end();
+});
+
+// Session log. Clients post what happened to them in batches (shared
+// vocabulary in client/src/session-log.js): the session beginning and ending,
+// the headset session, input sources coming and going, each recording's start,
+// end and fate with its source and reason, playback, questions asked, errors,
+// and once a second while presenting a `stats` line with frame rate, hand
+// tracking coverage per hand and microphone level. No audio and no text from
+// the clips. The point is that a session in a headset leaves a record that
+// can be read at the desk afterwards (scripts/session-report.mjs) instead of
+// being reconstructed from memory.
+const MAX_EVENTS_PER_POST = 500, MAX_EVENT_DATA = 4096;
+app.post('/api/projects/:id/events', projectOr404, (req, res) => {
+  const session = String(req.body?.session || '').slice(0, 40);
+  const list = Array.isArray(req.body?.events) ? req.body.events.slice(0, MAX_EVENTS_PER_POST) : null;
+  if (!session || !list) return res.status(400).json({ error: 'session and events[] are required' });
+  const events = [];
+  for (const e of list) {
+    if (!e || typeof e !== 'object' || !e.kind) continue;
+    let data = e.data === undefined ? null : e.data;
+    if (data !== null && JSON.stringify(data).length > MAX_EVENT_DATA) data = { truncated: true };
+    const at = Number.isFinite(Date.parse(e.at)) ? new Date(e.at).toISOString() : new Date().toISOString();
+    events.push({ t: Math.max(0, Math.round(Number(e.t) || 0)), at, kind: String(e.kind).slice(0, 40), data });
+  }
+  const n = db.events.add(req.params.id, session, events);
+  res.status(202).json({ stored: n });
+});
+app.get('/api/projects/:id/sessions', projectOr404, (req, res) => res.json(db.events.sessions(req.params.id)));
+app.get('/api/projects/:id/events', projectOr404, (req, res) => {
+  const events = db.events.list(req.params.id, { session: req.query.session ? String(req.query.session) : null, after: Number(req.query.after) || 0, limit: Math.min(50000, Number(req.query.limit) || 20000) });
+  if (req.query.format === 'ndjson') {
+    res.setHeader('Content-Disposition', `attachment; filename="glossy-${req.params.id}-events.ndjson"`);
+    return res.type('application/x-ndjson').send(events.map((e) => JSON.stringify(e)).join('\n') + (events.length ? '\n' : ''));
+  }
+  res.json(events);
 });
 
 // Export. Every contribution carries attribution (author), timestamp

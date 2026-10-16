@@ -19,6 +19,7 @@ import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
 import { HandTrace, GhostHands, describeHands } from './hands.js';
+import { createSessionLog, createStatsSampler } from './session-log.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { VoiceRecorder } from './recorder.js';
@@ -51,12 +52,17 @@ const DEFAULT_TRANSFORM = { scale: 1, rotX: 0, rotY: 0, rotZ: 0, x: 0, y: 0, z: 
 // ---- HUD -------------------------------------------------------------------
 
 const $ = (id) => document.getElementById(id);
+// Session log: the moments below are posted to the server per project and session (client/src/session-log.js)
+const log = createSessionLog();
+const stats = createStatsSampler();
+const handsSummary = (h) => h?.frames?.length ? { frames: h.frames.length, ms: h.frames.at(-1).t - h.frames[0].t, lost: { l: h.frames.filter((f) => !f.l || f.lf).length, r: h.frames.filter((f) => !f.r || f.rf).length }, filled: h.filled ? { l: h.filled.l, r: h.filled.r } : undefined } : null;
 // Visitor mode (?mode=visitor): the page an exhibition guest sees. Operator
 // controls (projects, assets, layers, language, the script editor, erase) are
 // hidden, the project's script is asked without a toggle, and nothing can be
 // erased from this page. It is a presentation setting, not access control.
 const VISITOR = new URLSearchParams(location.search).get('mode') === 'visitor';
 document.body.classList.toggle('visitor', VISITOR);
+log('session:start', { ua: navigator.userAgent.slice(0, 200), visitor: VISITOR, viewport: [innerWidth, innerHeight], href: location.pathname + location.search });
 const hud = {
   project: $('project'), newProject: $('newProject'), modelInfo: $('modelInfo'),
   author: $('author'), layer: $('layer'), consent: $('consent'), status: $('statusText'), rec: $('rec'), count: $('count'),
@@ -72,7 +78,19 @@ hud.layer.value = ls.get('glossy.layer', 'default');
 hud.consent.checked = ls.get('glossy.consent', '0') === '1';
 hud.author.addEventListener('change', () => ls.set('glossy.author', hud.author.value));
 hud.layer.addEventListener('change', () => ls.set('glossy.layer', hud.layer.value));
-hud.consent.addEventListener('change', () => ls.set('glossy.consent', hud.consent.checked ? '1' : '0'));
+hud.consent.addEventListener('change', () => { ls.set('glossy.consent', hud.consent.checked ? '1' : '0'); if (hud.consent.checked) readyMic(); });
+// The microphone is asked for here, on the flat page, in the gesture that ticks
+// consent: a permission prompt that first appears inside an immersive session
+// may not be seen (Quest Browser), and the first clip would be lost to it. With
+// consent already ticked from an earlier visit, the first click on the page does it.
+let micState = 'unasked';            // unasked | asking | ready | blocked
+async function readyMic() {
+  if (micState === 'ready' || micState === 'asking') return;
+  micState = 'asking';
+  try { await recorder.init(); attachLevel(recorder.stream); micState = 'ready'; setStatus('microphone ready', { hold: 1500 }); log('mic:ready'); }
+  catch (e) { micState = 'blocked'; setStatus('microphone blocked: ' + e.message, { hold: 4000 }); log('mic:error', { error: e.message }); }
+}
+if (hud.consent.checked) document.addEventListener('pointerdown', () => readyMic(), { once: true });
 hud.walk.checked = ls.get('glossy.walk', '1') === '1';
 hud.walk.addEventListener('change', () => ls.set('glossy.walk', hud.walk.checked ? '1' : '0'));
 hud.autoplay.checked = ls.get('glossy.autoplay', '0') === '1';
@@ -113,6 +131,8 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
+renderer.xr.addEventListener('sessionstart', () => log('xr:start'));
+renderer.xr.addEventListener('sessionend', () => log('xr:end'));
 document.body.appendChild(renderer.domElement);
 const vrButton = VRButton.createButton(renderer, { optionalFeatures: ['hand-tracking'] });   // hands, when the headset tracks them, are part of a clip
 document.body.appendChild(vrButton);
@@ -164,7 +184,8 @@ function updateXrPanel() {
   const question = q ? `${qIndex + 1}/${qs.length} · ${q.text}` : qs.length && qIndex >= qs.length ? 'all questions answered' : '';
   const hands = handsPresent();
   const act = hands ? (hud.voiceStart.checked ? 'pinch, or just speak, to answer' : 'pinch and hold to answer') : 'hold the trigger to answer';
-  const hint = q ? (VISITOR && !hands ? 'squeeze: hear the question · ' + act : act) : hands && hud.voiceStart.checked ? 'speak to leave a clip where you look · pinch to hold one' : '';
+  let hint = q ? (VISITOR && !hands ? 'squeeze: hear the question · ' + act : act) : hands && hud.voiceStart.checked ? 'speak to leave a clip where you look · pinch to hold one' : '';
+  if (micState !== 'ready' && !recorder.isRecording) hint = micState === 'blocked' ? 'microphone blocked: leave VR and allow it in the browser' : 'microphone not yet allowed: tick consent on the page before entering VR';
   xrPanel.draw(question, hud.status.textContent, hint, hud.rec.classList.contains('on'), level);
 }
 
@@ -509,6 +530,7 @@ async function openProject(id) {
   history.replaceState(null, '', `?project=${id}${VISITOR ? '&mode=visitor' : ''}`);
   hud.visitorLink.href = `?project=${id}&mode=visitor`;
   hud.reviewLink.href = `/review.html?project=${id}`;
+  log.setProject(id); log('project:open', { id, name: project.name, assets: (project.assets || []).length });
   selectedId = null;
   clearMarkers();
   net.join(id);
@@ -567,7 +589,7 @@ function renderInterview() {
   hud.nextQ.disabled = !qs.length || qIndex >= qs.length;
   hud.askQ.disabled = !q;
 }
-function stepQuestion(d) { const n = questions().length; qIndex = Math.max(0, Math.min(n, qIndex + d)); renderInterview(); }
+function stepQuestion(d) { const n = questions().length; qIndex = Math.max(0, Math.min(n, qIndex + d)); log('question:step', { index: qIndex }); renderInterview(); }
 hud.prevQ.addEventListener('click', () => stepQuestion(-1));
 hud.nextQ.addEventListener('click', () => stepQuestion(1));
 // Read the question aloud with the browser's speech synthesis where it exists.
@@ -587,6 +609,7 @@ function askCurrent() {
   const q = currentQuestion(); if (!q) return;
   lastAsked = q.text;
   const r = speak(q.text);
+  log('question:ask', { index: qIndex, result: r });
   if (r === 'muted') setStatus('finish recording first; the question is not read while the microphone is open');
   else if (r === 'unavailable') setStatus('speech synthesis unavailable here; read the question from the panel');
 }
@@ -841,8 +864,9 @@ function bloom(id) {
 }
 
 let playingId = null;
-function stopAll() {
+function stopAll(reason = 'other') {
   ghost.hide();
+  if (playingId) log('play:stop', { id: playingId, reason });
   for (const other of markers.values()) {
     if (other.sound.isPlaying) other.sound.stop();
     other.mesh.userData.playing = false;
@@ -853,13 +877,15 @@ function stopAll() {
 }
 function play(id) {
   const m = markers.get(id);
-  if (!m || !m.sound.buffer) return;
+  if (!m) return;
+  if (!m.sound.buffer) return setStatus('audio still loading…', { hold: 1000 });
   if (listener.context.state === 'suspended') listener.context.resume();
-  if (playingId === id) { stopAll(); setStatus('■ stopped'); return; }   // click the playing marker again to stop
-  stopAll();
-  m.sound.onEnded = () => { m.sound.isPlaying = false; ghost.hide(); if (playingId === id) { playingId = null; m.mesh.userData.playing = false; m.mesh.material.emissiveIntensity = 0.35; renderList(); } };
+  if (playingId === id) { stopAll('click'); setStatus('■ stopped'); return; }   // click the playing marker again to stop
+  stopAll('other');
+  m.sound.onEnded = () => { m.sound.isPlaying = false; ghost.hide(); if (playingId === id) { log('play:stop', { id, reason: 'ended' }); playingId = null; m.mesh.userData.playing = false; m.mesh.material.emissiveIntensity = 0.35; renderList(); } };
   m.sound.play();
   playingId = id;
+  log('play:start', { id, hands: !!m.record.hands });
   playStartedAt = performance.now();
   if (m.record.hands) ghost.show(m.record.hands); else ghost.hide();
   m.mesh.userData.playing = true;
@@ -928,12 +954,12 @@ function setNear(id) {
 // clip, else nothing while a clip plays, else the near clip, else blank.
 function refreshIdleStatus() {
   if (recorder.isRecording || starting) return;
-  const press = renderer.xr.isPresenting ? 'trigger' : 'click';          // the same line reads on the headset panel
+  const press = !renderer.xr.isPresenting ? 'click' : handsPresent() ? 'pinch' : 'trigger';          // the same line reads on the headset panel
   const cur = markers.get(hoverId);
   if (cur) return setStatus(`${describeRecord(cur.record)} — ${press} to ${cur.record.id === playingId ? 'stop' : 'play'}`, { idle: true });
   if (playingId) return;
   const n = markers.get(nearId);
-  if (n) return setStatus(`near: ${describeRecord(n.record)} — ${renderer.xr.isPresenting ? 'point and pull the trigger' : 'click it'} to play`, { idle: true });
+  if (n) return setStatus(`near: ${describeRecord(n.record)} — ${!renderer.xr.isPresenting ? 'click it' : handsPresent() ? 'point and pinch' : 'point and pull the trigger'} to play`, { idle: true });
   setStatus('', { idle: true });
 }
 
@@ -1023,7 +1049,7 @@ function attachLevel(stream) {
     }
   } catch {}
 }
-recorder.onstart = attachLevel;
+recorder.onstart = (stream) => { attachLevel(stream); if (micState !== 'ready') { micState = 'ready'; log('mic:ready', { via: 'first clip' }); } };
 const cursor = new THREE.Mesh(new THREE.SphereGeometry(MARKER_RADIUS * 1.2, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff3333, wireframe: true }));
 cursor.visible = false;
 scene.add(cursor);
@@ -1032,6 +1058,7 @@ let starting = null;                 // source whose recording is still waiting 
 let releasedEarly = false;           // trigger/button let go before the microphone was ready
 let recOpts = {};                    // { parent } for a reply
 let releaseAt = 0;                   // performance.now() at the release that ended the clip
+let saving = false;                  // between the end of a clip and its save: no new clip starts by voice, so "saved" is seen
 let lastPlacementMs = null;          // release -> provisional marker visible, measured on the last clip
 
 // The author's viewpoint over the clip, sampled at POSE_HZ from the camera's
@@ -1055,14 +1082,16 @@ function poseStop() { clearInterval(pose.timer); pose.timer = null; poseSample()
 
 async function beginRecording(source, opts = {}) {
   if (recorder.isRecording || starting) return;
-  if (!project) return setStatus('no project');
-  if (!hud.author.value.trim()) return setStatus('enter your name first');
-  if (!hud.consent.checked) return setStatus('tick consent first');
+  const via = opts.voice ? 'voice' : opts.parent ? 'reply' : source === camera ? (opts.via || 'key') : handsPresent() ? 'pinch' : 'trigger';
+  if (!project) { log('record:blocked', { reason: 'no project', via }); return setStatus('no project'); }
+  if (!hud.author.value.trim()) { log('record:blocked', { reason: 'no name', via }); return setStatus('enter your name first'); }
+  if (!hud.consent.checked) { log('record:blocked', { reason: 'no consent', via }); return setStatus('tick consent first'); }
   if ('speechSynthesis' in window) speechSynthesis.cancel();   // never record over our own voice
-  starting = source; releasedEarly = false; recOpts = { ...opts, projectId: project.id };
+  starting = source; releasedEarly = false; recOpts = { ...opts, projectId: project.id, via };
   setStatus('starting microphone…');
-  try { await recorder.start(); } catch (e) { starting = null; return setStatus('mic blocked: ' + e.message); }
+  try { await recorder.start(); } catch (e) { starting = null; log('record:blocked', { reason: 'mic', via, error: e.message }); return setStatus('mic blocked: ' + e.message); }
   starting = null;
+  log('record:start', { source: via, question: currentQuestion() ? qIndex : undefined, layer: hud.layer.value, presenting: renderer.xr.isPresenting, hands: handsPresent() });
   anchorSource = source;
   poseStart();
   if (renderer.xr.isPresenting) handTrace.start();          // hands, if the headset tracks them, travel with the clip
@@ -1079,7 +1108,7 @@ async function beginRecording(source, opts = {}) {
 // Release of the button/trigger that started a recording. Safe to call while the mic is still warming up.
 function releaseRecording(source) {
   if (starting === source) { releasedEarly = true; releaseAt = performance.now(); return; }
-  if (recorder.isRecording && anchorSource === source) { releaseAt = performance.now(); endRecording(); }
+  if (recorder.isRecording && anchorSource === source) { releaseAt = performance.now(); endRecording('release'); }
 }
 
 // Reset the recording UI when the microphone stops on its own (track ended,
@@ -1087,7 +1116,7 @@ function releaseRecording(source) {
 function resetRecordingUi() {
   voiceArmed = false;                                         // whatever ended this clip, wait for a pause before speech can start another
   clearInterval(pose.timer); pose.timer = null;
-  clearInterval(handTrace.timer); handTrace.timer = null;
+  handTrace.reset();
   cursor.visible = false; anchorSource = null; recOpts = {};
   hud.rec.classList.remove('on'); crosshair.classList.remove('rec');
 }
@@ -1104,11 +1133,14 @@ function placeProvisional(anchor) {
 }
 function clearProvisional(mesh) { scene.remove(mesh); pendingMarkers.delete(mesh); }
 
-async function endRecording() {
+async function endRecording(reason = 'release') {
   if (!recorder.isRecording) return;
   const opts = recOpts; recOpts = {};
+  const heldMs = Math.round(performance.now() - recorder.startedAt);
   if (opts.projectId !== project?.id) {                     // the project changed under the recording: nothing sensible to anchor to
+    anchorSource = null;
     await recorder.stop(); resetRecordingUi();
+    log('record:end', { reason: 'project-changed', source: opts.via, durationMs: heldMs }); log('record:discarded', { reason: 'project changed', source: opts.via });
     return setStatus('project changed while recording; clip discarded');
   }
   const parentRec = opts.parent ? markers.get(opts.parent)?.record : null;
@@ -1116,11 +1148,13 @@ async function endRecording() {
     ? { point: new THREE.Vector3(parentRec.anchor.x, parentRec.anchor.y, parentRec.anchor.z), objectId: parentRec.anchor.objectId }
     : aimPoint(anchorSource);
   const provisional = placeProvisional(anchor);
+  anchorSource = null; saving = true;                        // from here the clip is ending on purpose: the loop's "track ended" check and voice start both stand down until it is saved
   const samples = poseStop();
   const hands = handTrace.stop();
   const clip = await recorder.stop();
   resetRecordingUi();
-  if (!clip) { clearProvisional(provisional); return setStatus('too short, discarded'); }
+  log('record:end', { reason, source: opts.via, durationMs: heldMs, hands: handsSummary(hands) });
+  if (!clip) { clearProvisional(provisional); saving = false; log('record:discarded', { reason: 'too short', source: opts.via, durationMs: heldMs }); return setStatus('too short, discarded'); }
   setStatus('saving…');
   const q = currentQuestion();
   try {
@@ -1132,13 +1166,16 @@ async function endRecording() {
     clearProvisional(provisional);
     const quiet = levelNode && recPeak < QUIET_PEAK;              // the level meter never moved: likely the wrong input or a muted microphone
     setStatus((parentRec ? `saved reply to ${parentRec.author}` : `saved ${fmtDur(clip.durationMs)}${objectId ? ' on ' + objectId : ''}${hands ? ' with ' + describeHands(hands) : ''}`) + (quiet ? ' — the microphone heard almost nothing; check the input' : ''), { hold: quiet ? 5000 : 2000 });
+    log('record:saved', { id: rec.id, source: opts.via, durationMs: clip.durationMs, placementMs: lastPlacementMs, quiet: !!quiet, objectId, hands: handsSummary(rec.hands), reply: !!parentRec, question: q ? qIndex : undefined });
     addMarker(rec);                  // local echo; server broadcast is deduped by id (the parent's reply count arrives as annotation:updated)
     bloom(rec.id);
     if (q) stepQuestion(1);
   } catch (e) {
     clearProvisional(provisional);
+    log('record:discarded', { reason: 'save failed', source: opts.via, error: e.message });
     setStatus('save failed: ' + e.message);
   }
+  saving = false;
 }
 
 // ---- aiming ----------------------------------------------------------------
@@ -1210,6 +1247,8 @@ for (let i = 0; i < 2; i++) {
     if (hit) play(hit); else beginRecording(ctrl);
   });
   ctrl.addEventListener('selectend', () => releaseRecording(ctrl));
+  ctrl.addEventListener('connected', (e) => log('input:connected', { kind: e.data?.hand ? 'hand' : 'controller', handedness: e.data?.handedness, profiles: (e.data?.profiles || []).slice(0, 3) }));
+  ctrl.addEventListener('disconnected', (e) => log('input:disconnected', { kind: e.data?.hand ? 'hand' : 'controller', handedness: e.data?.handedness }));
   ctrl.addEventListener('squeezestart', () => {
     if (VISITOR) return askCurrent();                        // a guest hears the question again; layers are an operator concern
     const next = LAYERS[(LAYERS.indexOf(hud.layer.value) + 1) % LAYERS.length];
@@ -1234,7 +1273,7 @@ const xrHands = {};                  // handedness -> XRHandSpace while connecte
 for (let i = 0; i < 2; i++) {
   const hand = renderer.xr.getHand(i);
   hand.add(handModelFactory.createHandModel(hand, 'spheres'));
-  hand.addEventListener('connected', (e) => { if (e.data?.hand) xrHands[e.data.handedness] = hand; if (e.data?.hand && renderer.xr.isPresenting) recorder.init().then(() => attachLevel(recorder.stream)).catch(() => {}); });
+  hand.addEventListener('connected', (e) => { if (e.data?.hand) xrHands[e.data.handedness] = hand; if (e.data?.hand && renderer.xr.isPresenting) readyMic(); });   // with hands there is no trigger: voice start needs the microphone open
   hand.addEventListener('disconnected', (e) => { for (const k of Object.keys(xrHands)) if (xrHands[k] === hand) delete xrHands[k]; });
   rig.add(hand);
 }
@@ -1252,11 +1291,11 @@ function voiceStart(now) {
   const lvl = measureLevel();
   if (recorder.isRecording) {
     if (!recOpts.voice) return;                                 // a pinch-held clip ends on release, not on silence
-    if (lvl < VOICE_STOP) { if (!voiceQuiet) voiceQuiet = now; else if (now - voiceQuiet > VOICE_STOP_MS && now - recorder.startedAt > VOICE_MIN_MS) { voiceQuiet = 0; releaseAt = now; endRecording(); } }
+    if (lvl < VOICE_STOP) { if (!voiceQuiet) voiceQuiet = now; else if (now - voiceQuiet > VOICE_STOP_MS && now - recorder.startedAt > VOICE_MIN_MS) { voiceQuiet = 0; releaseAt = now; endRecording('voice-pause'); } }
     else voiceQuiet = 0;
     return;
   }
-  if (starting) return;
+  if (starting || saving) return;
   if (lvl < VOICE_STOP) voiceArmed = true;                    // speech that simply continues after a clip ended does not start the next one
   if (!voiceArmed) { voiceAbove = 0; return; }
   if (lvl > VOICE_START) { if (!voiceAbove) voiceAbove = now; else if (now - voiceAbove > VOICE_START_MS) { voiceAbove = 0; voiceQuiet = 0; voiceArmed = false; beginRecording(camera, { voice: true }); } }
@@ -1295,7 +1334,7 @@ renderer.domElement.addEventListener('mousedown', (e) => {
     return;
   }
   const hit = aimMarker(camera);
-  if (hit) play(hit); else beginRecording(camera);
+  if (hit) play(hit); else beginRecording(camera, { via: 'mouse' });
 });
 renderer.domElement.addEventListener('mouseup', (e) => { if (e.button === 0) releaseRecording(camera); });
 renderer.domElement.addEventListener('mousemove', softLook);
@@ -1310,7 +1349,7 @@ const keys = new Set();
 window.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   keys.add(e.code);
-  if (e.code === 'KeyK') beginRecording(camera);
+  if (e.code === 'KeyK') beginRecording(camera, { via: 'key' });
   if (e.code === 'KeyL') releaseRecording(camera);
   if (e.code === 'KeyR' && !e.repeat) { const hit = aimMarker(camera); if (hit) beginRecording(camera, { parent: hit }); else setStatus('aim at a marker to reply to it'); }
   if (e.code === 'Space') { const hit = aimMarker(camera); if (hit) play(hit); }
@@ -1371,7 +1410,7 @@ if (import.meta.env.DEV) window.__glossy = {
   get pending() { return pendingMarkers.size; },
   get interview() { return { on: hud.interview.checked, index: qIndex, question: currentQuestion()?.text || null, total: questions().length }; },
   autoFit, frameAll, applyTransform, aimPoint, aimMarker, floorBelow, spawnInside, focusMarker, play, endRecording,
-  ghost, xrHands, get handsPresent() { return handsPresent(); },
+  ghost, xrHands, get handsPresent() { return handsPresent(); }, log,
 };
 
 // ---- boot ------------------------------------------------------------------
@@ -1416,8 +1455,9 @@ renderer.setAnimationLoop(() => {
     }
   }
 
+  handTrace.tick();                                          // hand joints into the clip at HAND_HZ, from the frames they were posed in
   if (recorder.isRecording && anchorSource) cursor.position.copy(aimPoint(anchorSource).point);
-  else if (anchorSource && !starting && !recorder.isRecording) { resetRecordingUi(); setStatus('microphone stopped; nothing saved'); }   // the track ended under us
+  else if (anchorSource && !starting && !recorder.isRecording) { log('record:end', { reason: 'track-ended', source: recOpts.via }); resetRecordingUi(); setStatus('microphone stopped; nothing saved'); }   // the track ended under us
   updateHover();
   scaleMarkers();
   updateLevel();
@@ -1440,6 +1480,11 @@ renderer.setAnimationLoop(() => {
   setNear(bestId);
   voiceStart(performance.now());
   if (ghost.visible) ghost.update(performance.now() - playStartedAt);
+
+  // once a second while presenting or recording: frame rate, hand tracking coverage, microphone level
+  stats.frame(); stats.level(recorder.isRecording ? level : levelNode ? measureLevel() : 0);   // the room's level is only kept while recording; the log wants it whenever the microphone is open
+  for (const [side, key] of [['l', 'left'], ['r', 'right']]) { const h = xrHands[key]; stats.hand(side, !!h, !!h?.joints?.wrist?.visible); }
+  if (stats.due) { const line = stats.take(); if (renderer.xr.isPresenting || recorder.isRecording) log('stats', { presenting: renderer.xr.isPresenting, recording: recorder.isRecording, ...line }); }
 
   renderer.render(scene, camera);
 });

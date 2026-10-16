@@ -30,18 +30,26 @@ export const MAX_HAND_FRAMES = 20 * 120;   // two minutes at HAND_HZ
 const _v = new THREE.Vector3();
 const r3 = (n) => Math.round(n * 1000) / 1000;
 
-/** Samples the tracked hands of a three.js WebXR session while a clip records. */
+/** Samples the tracked hands of a three.js WebXR session while a clip records.
+ *  Driven from the render loop (`tick()` every frame), not a timer: a timer slips
+ *  to 100 ms and worse when the page is busy, and the timestamps must be the
+ *  frames the joints were actually posed in. */
 export class HandTrace {
   /** @param {() => {left?: THREE.Object3D, right?: THREE.Object3D}} hands  the XRHandSpace objects by handedness, when connected */
-  constructor(hands) { this.hands = hands; this.frames = []; this.timer = null; this.t0 = 0; this.any = false; }
+  constructor(hands) { this.hands = hands; this.frames = []; this.active = false; this.t0 = 0; this.last = -Infinity; this.any = false; }
   start() {
-    clearInterval(this.timer);
-    this.frames = []; this.any = false; this.t0 = performance.now();
+    this.frames = []; this.any = false; this.t0 = performance.now(); this.last = -Infinity; this.active = true;
     this.sample();
-    this.timer = setInterval(() => this.sample(), 1000 / HAND_HZ);
   }
-  sample() {
+  /** Call once per rendered frame; samples at HAND_HZ while a clip records. */
+  tick() {
+    if (!this.active) return;
+    const now = performance.now();
+    if (now - this.last >= 1000 / HAND_HZ - 4) this.sample(now);
+  }
+  sample(now = performance.now()) {
     if (this.frames.length >= MAX_HAND_FRAMES) return;
+    this.last = now;
     const hs = this.hands();
     const one = (hand) => {
       const joints = hand?.joints;
@@ -57,19 +65,24 @@ export class HandTrace {
     };
     const l = one(hs.left), r = one(hs.right);
     if (l || r) this.any = true;
-    this.frames.push({ t: Math.round(performance.now() - this.t0), l, r });
+    this.frames.push({ t: Math.round(now - this.t0), l, r });
   }
   /** @returns {{joints: string[], rate: number, frames: {t:number,l:number[]|null,r:number[]|null}[]} | null} null when no hand was ever seen */
   stop() {
-    clearInterval(this.timer); this.timer = null;
-    if (!this.any) return null;
+    if (!this.active) return null;                            // a trace is read out once; a later clip that never started one (desktop after a headset clip) gets nothing stale
+    this.active = false;
     this.sample();
+    const frames = this.frames, any = this.any;
+    this.frames = []; this.any = false;
+    if (!any) return null;
     // trim leading and trailing frames with no hand at all, keep interior gaps
-    let a = 0, b = this.frames.length - 1;
-    while (a < b && !this.frames[a].l && !this.frames[a].r) a++;
-    while (b > a && !this.frames[b].l && !this.frames[b].r) b--;
-    return { joints: JOINTS, rate: HAND_HZ, frames: this.frames.slice(a, b + 1) };
+    let a = 0, b = frames.length - 1;
+    while (a < b && !frames[a].l && !frames[a].r) a++;
+    while (b > a && !frames[b].l && !frames[b].r) b--;
+    return { joints: JOINTS, rate: HAND_HZ, frames: frames.slice(a, b + 1) };
   }
+  /** Drop whatever was sampled without reading it (the microphone died under the clip). */
+  reset() { this.active = false; this.frames = []; this.any = false; }
 }
 
 /** Translucent hands replayed from a stored trace, in scene coordinates. */
@@ -91,12 +104,16 @@ export class GhostHands {
     this._m = new THREE.Matrix4(); this._zero = new THREE.Matrix4().makeScale(0, 0, 0);
   }
   get visible() { return this.group.visible; }
-  show(trace) { this.trace = trace; this.cursor = 0; this.shownT = -1; this.group.visible = !!trace?.frames?.length; this.update(0); }
+  show(trace) { this.trace = trace; this.cursor = 0; this.shownT = -1; this.group.visible = !!trace?.frames?.length; if (this.group.visible) this.update(0); }
   hide() { this.group.visible = false; this.trace = null; }
   /** Draw the frame at t milliseconds into the clip. */
   update(t) {
     const tr = this.trace; if (!tr || !this.group.visible) return;
     const f = tr.frames;
+    // before the first tracked frame and after the last one there is no hand to show: hidden, not frozen
+    const inSpan = t >= f[0].t && t <= f[f.length - 1].t + 1000 / (tr.rate || HAND_HZ);
+    this.joints.visible = this.bones.visible = inSpan;
+    if (!inSpan) return;
     if (t < (f[this.cursor]?.t ?? 0)) this.cursor = 0;
     while (this.cursor + 1 < f.length && f[this.cursor + 1].t <= t) this.cursor++;
     const frame = f[this.cursor];

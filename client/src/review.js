@@ -15,6 +15,8 @@ const fmtDur = (ms) => (ms ? (ms / 1000).toFixed(1) + ' s' : '');
 const yearOf = (v, d) => { const n = parseInt(String(v ?? ''), 10); return Number.isFinite(n) ? n : d; };
 const periodLabel = (p) => (p ? p.label || [p.from, p.to].filter(Boolean).join('–') : '');
 const periodKey = (p) => (p ? JSON.stringify([p.from ?? '', p.to ?? '', p.label ?? '']) : '');
+// "gesture 4.2 s, both hands, 5 frames reconstructed" (the room shows the same line; shared/hands-fill.js owns the flags)
+const describeHands = (h) => { if (!h?.frames?.length) return ''; const l = h.frames.some((f) => f.l), r = h.frames.some((f) => f.r); const filled = (h.filled?.l || 0) + (h.filled?.r || 0); return `gesture ${((h.frames.at(-1).t - h.frames[0].t) / 1000).toFixed(1)} s, ${l && r ? 'both hands' : l ? 'left hand' : 'right hand'}${filled ? `, ${filled} frames reconstructed` : ''}`; };
 const ago = (iso) => {
   const days = Math.floor((Date.now() - Date.parse(iso)) / 86400e3);
   if (!(days >= 0)) return '';
@@ -109,7 +111,7 @@ function cardHtml(r) {
   return `<article data-id="${r.id}" class="${r.parent && records.has(r.parent) ? 'reply ' : ''}${r.id === selectedId ? 'sel ' : ''}${matches(r) ? '' : 'dim'}">
     <div class="head"><span class="sw" style="background:${colourOf(r)}"></span><span class="who">${esc(r.author)}</span>
       ${r.period ? `<span class="period">${esc(periodLabel(r.period))}</span>` : ''}<span title="${esc(r.createdAt)}">${esc(ago(r.createdAt))}</span><span>${fmtDur(r.durationMs)}</span>${lang}${heard}
-      ${r.anchor?.objectId ? `<span>on ${esc(r.anchor.objectId)}</span>` : ''}${r.hands ? `<span title="a hand gesture was recorded with this clip; its wrist paths are drawn on the plan">✋ gesture</span>` : ''}${r.replies ? `<span>↩ ${r.replies}</span>` : ''}${r.consent === false ? '<span style="color:var(--rec)">consent withdrawn</span>' : ''}
+      ${r.anchor?.objectId ? `<span>on ${esc(r.anchor.objectId)}</span>` : ''}${r.hands ? `<span title="a hand gesture was recorded with this clip; its wrist paths are drawn on the plan">✋ ${esc(describeHands(r.hands))}</span>` : ''}${r.replies ? `<span>↩ ${r.replies}</span>` : ''}${r.consent === false ? '<span style="color:var(--rec)">consent withdrawn</span>' : ''}
       <span class="right"><button class="playBtn" title="play this clip">${r.id === selectedId && !ui.audio.paused ? '■ stop' : '▶ play'}</button><a href="/?project=${esc(r.project)}&focus=${esc(r.id)}" title="stand in front of this clip in the room">in the room</a></span></div>
     ${r.prompt ? `<div class="prompt">Q: ${esc(r.prompt)}</div>` : ''}
     ${text}${links}
@@ -168,6 +170,7 @@ function renderPlan() {
   const X = (x) => 50 + (x - cx) * scale, Y = (z) => 50 + (z - cz) * scale;     // +z (towards the default spawn) is down the page
   const dots = all.map((r) => `<circle data-id="${r.id}" cx="${X(r.anchor.x).toFixed(2)}" cy="${Y(r.anchor.z).toFixed(2)}" r="${r.parent && records.has(r.parent) ? 1.1 : 1.7}" fill="${colourOf(r)}" class="${matches(r) ? '' : 'dim'}${r.id === selectedId ? ' sel' : ''}"><title>${esc([r.author, periodLabel(r.period) || ago(r.createdAt), r.transcript ? r.transcript.slice(0, 60) : ''].filter(Boolean).join(' · '))}</title></circle>`).join('');
   const m = scale;   // one metre in viewBox units
+  handsShownFor = null;                                     // the paths below are new elements: redraw the selected clip's gesture into them
   svg.innerHTML = `<line class="scale" x1="3" y1="97.5" x2="${(3 + m).toFixed(2)}" y2="97.5" /><text x="${(3 + m + 1).toFixed(2)}" y="98.5">1 m</text>${dots}<path id="handPath" class="hand" d="" /><path id="handNow" class="handNow" d="" /><path id="poseArrow" class="pose" d="" />`;
   for (const c of svg.querySelectorAll('circle')) c.addEventListener('click', () => { selectCard(c.dataset.id, true); });
   drawPose();

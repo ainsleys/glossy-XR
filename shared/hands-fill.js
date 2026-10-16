@@ -35,6 +35,18 @@ function hermite(p1, m1, p2, m2, t1, t2, t) {
   return [0, 1, 2].map((k) => h00 * p1[k] + h10 * dt * m1[k] + h01 * p2[k] + h11 * dt * m2[k]);
 }
 const velocity = (pa, ta, pb, tb) => (tb === ta ? [0, 0, 0] : [0, 1, 2].map((k) => (pb[k] - pa[k]) / (tb - ta)));
+// the tracked frame at least VEL_MS (at most VEL_MAX_MS) away from the gap's edge in direction dir, as a velocity baseline; undefined when there is none
+const VEL_MS = 100, VEL_MAX_MS = 250;
+function reach(tracked, k, dir, frames, tEdge) {
+  let found;
+  for (let j = k + dir; j >= 0 && j < tracked.length; j += dir) {
+    const d = Math.abs(frames[tracked[j]].t - tEdge);
+    if (d > VEL_MAX_MS && found !== undefined) break;
+    found = tracked[j];
+    if (d >= VEL_MS) break;
+  }
+  return found;
+}
 
 // the shape (joint offsets from the wrist) blended between two tracked hands,
 // with each finger chain rescaled to the blended bone lengths of the originals
@@ -83,8 +95,10 @@ export function fillGaps(hands, { maxGapMs = 1000 } = {}) {
       if (gapMs > maxGapMs) continue;                     // too long to guess
       const a = frames[ia][side], b = frames[ib][side];
       const p1 = get(a, 0), p2 = get(b, 0), t1 = frames[ia].t, t2 = frames[ib].t;
-      const i0 = tracked[k - 1], i3 = tracked[k + 2];
-      // wrist velocity entering and leaving the gap, from the frames just outside it; with no neighbour on one side, borrow the other's
+      // wrist velocity entering and leaving the gap, over the tracked frames just outside it. One frame
+      // step is too short a baseline at 20 Hz (tracker jitter, or a timer that delivered two steps in one
+      // tick, doubles or halves it), so the baseline reaches back at least VEL_MS where frames exist.
+      const i0 = reach(tracked, k, -1, frames, t1), i3 = reach(tracked, k + 1, +1, frames, t2);
       let m1 = i0 !== undefined ? velocity(get(frames[i0][side], 0), frames[i0].t, p1, t1) : null;
       let m2 = i3 !== undefined ? velocity(p2, t2, get(frames[i3][side], 0), frames[i3].t) : null;
       if (!m1 && !m2) m1 = m2 = velocity(p1, t1, p2, t2);

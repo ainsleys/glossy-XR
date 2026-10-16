@@ -2,6 +2,7 @@
 // installs a fake navigator.xr before the app boots, we enter VR through the
 // real VRButton, aim the emulated right controller, and record with its trigger.
 import { test, expect } from '@playwright/test';
+import fs from 'node:fs';
 import { API, openProject, prepareRecording, status, markerCount } from './helpers.js';
 
 test.beforeEach(async ({ page }) => {
@@ -108,6 +109,7 @@ test('with hands tracked, speaking starts a clip, the gesture is stored and repl
   await expect.poll(() => markerCount(page), { timeout: 10_000 }).toBe(1);
   await expect.poll(() => status(page)).toMatch(/^saved .* with gesture/);
   const [a] = await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json();
+  fs.writeFileSync('test-results/xr-hands-trace.json', JSON.stringify(a.hands));   // the emulated trace, for looking at when the geometry below disagrees
   expect(a.poseSource).toBe('xr');
   expect(a.hands.joints).toHaveLength(25);
   expect(a.hands.frames.length).toBeGreaterThanOrEqual(15);
@@ -121,11 +123,16 @@ test('with hands tracked, speaking starts a clip, the gesture is stored and repl
   expect(a.hands.filled.l).toBeGreaterThan(0);
   const inferred = a.hands.frames.filter((f) => f.lf);
   expect(inferred.length).toBe(a.hands.filled.l);
-  // on the circle the tracked wrist drew, not across it: compare radii about the centroid of the tracked stir frames
+  // on the circle the tracked wrist drew, not across it: fit a circle (Kåsa least squares) to the tracked stir frames and compare radii
   const stirFrames = a.hands.frames.filter((f) => f.l && !f.lf && Math.abs(f.l[1] - 1.15) < 0.15);
-  const cx = stirFrames.reduce((s, f) => s + f.l[0], 0) / stirFrames.length, cz = stirFrames.reduce((s, f) => s + f.l[2], 0) / stirFrames.length;
-  const radii = stirFrames.map((f) => Math.hypot(f.l[0] - cx, f.l[2] - cz)).sort((p, q) => p - q);
-  const rTracked = radii[Math.floor(radii.length / 2)];
+  const pts = stirFrames.map((f) => [f.l[0], f.l[2]]);
+  const mx = pts.reduce((s, p) => s + p[0], 0) / pts.length, mz = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+  let suu = 0, svv = 0, suv = 0, suuu = 0, svvv = 0, suvv = 0, svuu = 0;
+  for (const [x, z] of pts) { const u = x - mx, v = z - mz; suu += u * u; svv += v * v; suv += u * v; suuu += u ** 3; svvv += v ** 3; suvv += u * v * v; svuu += v * u * u; }
+  const det = suu * svv - suv * suv;
+  const uc = (0.5 * ((suuu + suvv) * svv - (svvv + svuu) * suv)) / det, vc = (0.5 * ((svvv + svuu) * suu - (suuu + suvv) * suv)) / det;
+  const cx = mx + uc, cz = mz + vc, rTracked = Math.sqrt(uc * uc + vc * vc + (suu + svv) / pts.length);
+  expect(Math.abs(rTracked - 0.15)).toBeLessThan(0.03);            // the fit found the 15 cm circle the emulated hand drew
   console.log('stir centroid', cx.toFixed(3), cz.toFixed(3), 'radius', rTracked.toFixed(3), 'inferred', inferred.map((f) => [f.t, Math.hypot(f.l[0] - cx, f.l[2] - cz).toFixed(3)].join('@')).join(' '));
   for (const f of inferred) expect(Math.abs(Math.hypot(f.l[0] - cx, f.l[2] - cz) - rTracked)).toBeLessThan(0.03);
   const firstStir = a.hands.frames.findIndex((f) => f.l && Math.abs(f.l[1] - 1.15) < 0.15);
@@ -143,4 +150,20 @@ test('with hands tracked, speaking starts a clip, the gesture is stored and repl
   await page.screenshot({ path: 'test-results/xr-ghost-hands.png' });
   await expect.poll(() => page.evaluate(() => window.__glossy.ghost.visible), { timeout: 10_000 }).toBe(false);
   await expect(page.locator('#annList li .badge', { hasText: '✋' })).toHaveCount(1);
+
+  // the session log saw it: the hands connect, the clip start by voice, per-second tracking coverage, the playback with ghost hands
+  await page.evaluate(() => window.__glossy.log.flush());
+  const events = await expect.poll(async () => (await request.get(`${API}/api/projects/${project.id}/events`)).json(), { timeout: 10_000 }).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'record:saved' })])).then(async () => (await request.get(`${API}/api/projects/${project.id}/events`)).json());
+  expect(events.filter((e) => e.kind === 'input:connected' && e.data.kind === 'hand').length).toBeGreaterThanOrEqual(1);
+  expect(events.find((e) => e.kind === 'record:start').data.source).toBe('voice');
+  const savedEv = events.find((e) => e.kind === 'record:saved');
+  expect(savedEv.data.hands.frames).toBe(a.hands.frames.length);
+  expect(savedEv.data.hands.filled.l).toBe(a.hands.filled.l);
+  const stats = events.filter((e) => e.kind === 'stats' && e.data.presenting);
+  expect(stats.length).toBeGreaterThan(2);
+  expect(stats.some((e) => e.data.hands.l.of > 0 && e.data.hands.l.seen > 0)).toBe(true);
+  expect(events.find((e) => e.kind === 'play:start').data.hands).toBe(true);
+  const sessions = await (await request.get(`${API}/api/projects/${project.id}/sessions`)).json();
+  expect(sessions).toHaveLength(1);
+  expect(sessions[0].events).toBe(events.length);
 });

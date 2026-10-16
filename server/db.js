@@ -50,6 +50,17 @@ export function openDb(dataDir) {
       created_at  TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS assets_project ON assets(project_id, sort, created_at);
+    CREATE TABLE IF NOT EXISTS events (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      session     TEXT NOT NULL,
+      t           INTEGER NOT NULL,        -- ms since the client session began
+      at          TEXT NOT NULL,           -- client wall clock, ISO
+      received    TEXT NOT NULL,           -- server wall clock, ISO
+      kind        TEXT NOT NULL,
+      data        TEXT                     -- JSON
+    );
+    CREATE INDEX IF NOT EXISTS events_session ON events(project_id, session, id);
   `);
   // columns added after the first release
   const addCols = (table, defs) => {
@@ -113,6 +124,12 @@ export function openDb(dataDir) {
     updateAsset: db.prepare(`UPDATE assets SET name = ?, transform = ?, options = ?, visible = ?, sort = ? WHERE id = ? AND project_id = ?`),
     deleteAsset: db.prepare(`DELETE FROM assets WHERE id = ? AND project_id = ?`),
     countAssets: db.prepare(`SELECT COUNT(*) AS n FROM assets WHERE project_id = ?`),
+    insertEvent: db.prepare(`INSERT INTO events (project_id, session, t, at, received, kind, data) VALUES (?, ?, ?, ?, ?, ?, ?)`),
+    listEvents: db.prepare(`SELECT * FROM events WHERE project_id = ? AND (? IS NULL OR session = ?) AND id > ? ORDER BY id LIMIT ?`),
+    listSessions: db.prepare(`
+      SELECT session, MIN(at) AS started, MAX(at) AS ended, COUNT(*) AS n,
+             (SELECT data FROM events s WHERE s.project_id = e.project_id AND s.session = e.session AND s.kind = 'session:start' ORDER BY id LIMIT 1) AS start_data
+      FROM events e WHERE project_id = ? GROUP BY session ORDER BY started DESC`),
   };
 
   const now = () => new Date().toISOString();
@@ -221,6 +238,19 @@ export function openDb(dataDir) {
         q.deleteAnnotation.run(id, projectId);
         return { ...row, detached };
       },
+    },
+    // Session log: what the clients did, as events (shared/events in the README). Append-only; cascades with the project.
+    events: {
+      add: (projectId, session, events) => {
+        const received = now();
+        const tx = db.prepare('BEGIN'), end = db.prepare('COMMIT');
+        tx.run();
+        try { for (const e of events) q.insertEvent.run(projectId, session, e.t, e.at, received, e.kind, e.data === undefined ? null : JSON.stringify(e.data)); end.run(); }
+        catch (err) { db.prepare('ROLLBACK').run(); throw err; }
+        return events.length;
+      },
+      list: (projectId, { session = null, after = 0, limit = 20000 } = {}) => q.listEvents.all(projectId, session, session, after, limit).map((r) => ({ id: r.id, session: r.session, t: r.t, at: r.at, received: r.received, kind: r.kind, data: safeJson(r.data, null) })),
+      sessions: (projectId) => q.listSessions.all(projectId).map((r) => ({ session: r.session, started: r.started, ended: r.ended, events: Number(r.n), ...(safeJson(r.start_data, {}) || {}) })),
     },
     /** One-time import of the pre-SQLite JSON store into a project. */
     importLegacyJson(file, projectName = 'default') {
