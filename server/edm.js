@@ -140,8 +140,9 @@ export function toEdm(project, annotations, { base, provider, rights }) {
 
     const provenance = [
       `Recorded in Glossy XR ${a.poseSource === 'xr' ? 'in a headset' : 'on a desktop'} at the scene anchor; the viewpoint trace${a.hands ? ` and a hand-gesture trace of ${a.hands.frames.length} frames` : ''} ${a.hands ? 'are' : 'is'} in the native record.`,
+      a.hands?.filled && (a.hands.filled.l || a.hands.filled.r) ? `${a.hands.filled.l + a.hands.filled.r} of the gesture frames were reconstructed across ${a.hands.filled.gaps} tracking gap${a.hands.filled.gaps === 1 ? '' : 's'} of up to ${a.hands.filled.maxGapMs} ms by kinematic interpolation and are flagged as such in the native record.` : '',
       tr.status === 'done' && tr.model ? `Transcribed by ${tr.model} (${tr.backend})${lang ? `, language ${lang} ${tr.detected ? 'detected' : 'set by the project'}` : ''}${tr.unclear ? '; the transcript was rejected as unclear' : ''}.` : tr.status === 'failed' ? 'Transcription failed.' : 'Not transcribed.',
-    ].join(' ');
+    ].filter(Boolean).join(' ');
     graph.push({
       '@id': audio, '@type': 'edm:WebResource',
       'dc:format': 'audio/webm',

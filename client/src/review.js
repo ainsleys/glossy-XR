@@ -168,7 +168,7 @@ function renderPlan() {
   const X = (x) => 50 + (x - cx) * scale, Y = (z) => 50 + (z - cz) * scale;     // +z (towards the default spawn) is down the page
   const dots = all.map((r) => `<circle data-id="${r.id}" cx="${X(r.anchor.x).toFixed(2)}" cy="${Y(r.anchor.z).toFixed(2)}" r="${r.parent && records.has(r.parent) ? 1.1 : 1.7}" fill="${colourOf(r)}" class="${matches(r) ? '' : 'dim'}${r.id === selectedId ? ' sel' : ''}"><title>${esc([r.author, periodLabel(r.period) || ago(r.createdAt), r.transcript ? r.transcript.slice(0, 60) : ''].filter(Boolean).join(' · '))}</title></circle>`).join('');
   const m = scale;   // one metre in viewBox units
-  svg.innerHTML = `<line class="scale" x1="3" y1="97.5" x2="${(3 + m).toFixed(2)}" y2="97.5" /><text x="${(3 + m + 1).toFixed(2)}" y="98.5">1 m</text>${dots}<path id="handPath" class="hand" d="" /><path id="poseArrow" class="pose" d="" />`;
+  svg.innerHTML = `<line class="scale" x1="3" y1="97.5" x2="${(3 + m).toFixed(2)}" y2="97.5" /><text x="${(3 + m + 1).toFixed(2)}" y="98.5">1 m</text>${dots}<path id="handPath" class="hand" d="" /><path id="handNow" class="handNow" d="" /><path id="poseArrow" class="pose" d="" />`;
   for (const c of svg.querySelectorAll('circle')) c.addEventListener('click', () => { selectCard(c.dataset.id, true); });
   drawPose();
 }
@@ -202,11 +202,34 @@ function drawHands(r) {
   }
   path.setAttribute('d', d.trim());
 }
+// the stretch of the gesture that goes with the word at the playhead ("like *this*"): the wrist path inside the word's time window, or ±0.4 s around the playhead between words
+function drawHandNow(r) {
+  const path = ui.plan.querySelector('#handNow');
+  if (!path || !planBox) return;
+  if (!r?.hands || (ui.audio.paused && ui.audio.currentTime === 0)) { path.setAttribute('d', ''); return; }
+  const t = ui.audio.currentTime;
+  const word = (r.transcription?.words || []).find((w) => w.s <= t && t <= w.e);
+  const [from, to] = word ? [word.s * 1000, word.e * 1000] : [(t - 0.4) * 1000, (t + 0.4) * 1000];
+  const { cx, cz, scale } = planBox;
+  const X = (x) => 50 + (x - cx) * scale, Y = (z) => 50 + (z - cz) * scale;
+  let d = '';
+  for (const side of ['l', 'r']) {
+    let pen = false;
+    for (const f of r.hands.frames) {
+      if (f.t < from || f.t > to) { pen = false; continue; }
+      const a = f[side];
+      if (!a) { pen = false; continue; }
+      d += `${pen ? 'L' : 'M'}${X(a[0]).toFixed(2)},${Y(a[2]).toFixed(2)} `;
+      pen = true;
+    }
+  }
+  path.setAttribute('d', d.trim());
+}
 // the author's viewpoint at the playhead: a short arrow from where they stood in the direction they faced
 function drawPose() {
   const arrow = ui.plan.querySelector('#poseArrow');
   const r = records.get(selectedId);
-  drawHands(r);
+  drawHands(r); drawHandNow(r);
   if (!arrow || !r || !planBox || !r.pose?.length || ui.audio.paused && ui.audio.currentTime === 0) { if (arrow) arrow.setAttribute('d', ''); return; }
   const t = ui.audio.currentTime * 1000;
   let s = r.pose[0]; for (const p of r.pose) { if (p.t <= t) s = p; else break; }

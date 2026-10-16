@@ -77,8 +77,10 @@ export class GhostHands {
   constructor(parent) {
     this.group = new THREE.Group(); this.group.visible = false; this.group.name = 'ghost-hands';
     const n = JOINTS.length * 2;
-    this.joints = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 10, 8), new THREE.MeshBasicMaterial({ color: 0x9fd3ff, transparent: true, opacity: 0.8, depthWrite: false }), n);
+    this.joints = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, depthWrite: false }), n);
     this.joints.frustumCulled = false;
+    this._seen = new THREE.Color(0x9fd3ff); this._inferred = new THREE.Color(0x6f7f95);   // tracked joints light blue; reconstructed frames grey, so a viewer can tell
+    for (let i = 0; i < n; i++) this.joints.setColorAt(i, this._seen);
     this.bonePos = new Float32Array(BONES.length * 2 * 2 * 3);
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(this.bonePos, 3));
     this.bones = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xcfe8ff, transparent: true, opacity: 0.6, depthWrite: false }));
@@ -102,10 +104,11 @@ export class GhostHands {
     this.shownT = frame.t;
     const nJ = JOINTS.length;
     let bi = 0;
-    for (const [side, arr] of [[0, frame.l], [1, frame.r]]) {
+    for (const [side, arr, inferred] of [[0, frame.l, frame.lf], [1, frame.r, frame.rf]]) {
       for (let i = 0; i < nJ; i++) {
         const k = side * nJ + i;
         if (!arr) { this.joints.setMatrixAt(k, this._zero); continue; }
+        this.joints.setColorAt(k, inferred ? this._inferred : this._seen);
         const s = i === 0 ? 0.012 : i % 5 === 4 ? 0.007 : 0.0085;       // wrist larger, fingertips smaller
         this._m.makeScale(s, s, s).setPosition(arr[3 * i], arr[3 * i + 1], arr[3 * i + 2]);
         this.joints.setMatrixAt(k, this._m);
@@ -117,6 +120,7 @@ export class GhostHands {
       }
     }
     this.joints.instanceMatrix.needsUpdate = true;
+    if (this.joints.instanceColor) this.joints.instanceColor.needsUpdate = true;
     this.bones.geometry.attributes.position.needsUpdate = true;
   }
 }
@@ -126,5 +130,6 @@ export function describeHands(h) {
   if (!h?.frames?.length) return '';
   const l = h.frames.some((f) => f.l), r = h.frames.some((f) => f.r);
   const secs = (h.frames.at(-1).t - h.frames[0].t) / 1000;
-  return `gesture ${secs.toFixed(1)} s, ${l && r ? 'both hands' : l ? 'left hand' : 'right hand'}`;
+  const filled = (h.filled?.l || 0) + (h.filled?.r || 0);
+  return `gesture ${secs.toFixed(1)} s, ${l && r ? 'both hands' : l ? 'left hand' : 'right hand'}${filled ? `, ${filled} frames reconstructed` : ''}`;
 }

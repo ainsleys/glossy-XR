@@ -92,12 +92,16 @@ test('with hands tracked, speaking starts a clip, the gesture is stored and repl
   // the fake microphone is already speaking: no pinch, no trigger, the clip starts on its own, anchored where the headset looks
   await expect.poll(() => status(page), { timeout: 10_000 }).toMatch(/recording/);
   // meanwhile the left hand stirs: a circle 15 cm across in front of the body
+  // the tracker loses the left hand for 400 ms in the middle of the stir, then finds it again
   await page.evaluate(() => new Promise((done) => {
     const h = window.__xr.hands.left, t0 = performance.now();
+    let dropped = false;
     const id = setInterval(() => {
-      const a = (performance.now() - t0) / 400;
+      const dt = performance.now() - t0, a = dt / 400;
       h.position.set(-0.15 + 0.15 * Math.cos(a), 1.15, 0.25 + 0.15 * Math.sin(a));
-      if (performance.now() - t0 > 1500) { clearInterval(id); done(); }
+      if (dt > 700 && dt < 1100 && !dropped) { dropped = true; h.connected = false; }
+      if (dt >= 1100 && dropped) { dropped = false; h.connected = true; }
+      if (dt > 1900) { clearInterval(id); done(); }
     }, 50);
   }));
   await page.evaluate(() => window.__glossy.endRecording());    // the pause that would end it; the looping fake voice never pauses
@@ -113,6 +117,19 @@ test('with hands tracked, speaking starts a clip, the gesture is stored and repl
   const xs = left.map((l) => l[0]);
   expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(0.1);   // the wrist moved: the stir is in the record
   expect(Math.abs(left.at(-1)[1] - 1.15)).toBeLessThan(0.15);      // and it is in scene metres at hand height (the first frames predate the stir)
+  // the 400 ms the tracker lost the hand came back reconstructed and flagged, so no gap remains inside the stir
+  expect(a.hands.filled.l).toBeGreaterThan(0);
+  const inferred = a.hands.frames.filter((f) => f.lf);
+  expect(inferred.length).toBe(a.hands.filled.l);
+  // on the circle the tracked wrist drew, not across it: compare radii about the centroid of the tracked stir frames
+  const stirFrames = a.hands.frames.filter((f) => f.l && !f.lf && Math.abs(f.l[1] - 1.15) < 0.15);
+  const cx = stirFrames.reduce((s, f) => s + f.l[0], 0) / stirFrames.length, cz = stirFrames.reduce((s, f) => s + f.l[2], 0) / stirFrames.length;
+  const radii = stirFrames.map((f) => Math.hypot(f.l[0] - cx, f.l[2] - cz)).sort((p, q) => p - q);
+  const rTracked = radii[Math.floor(radii.length / 2)];
+  console.log('stir centroid', cx.toFixed(3), cz.toFixed(3), 'radius', rTracked.toFixed(3), 'inferred', inferred.map((f) => [f.t, Math.hypot(f.l[0] - cx, f.l[2] - cz).toFixed(3)].join('@')).join(' '));
+  for (const f of inferred) expect(Math.abs(Math.hypot(f.l[0] - cx, f.l[2] - cz) - rTracked)).toBeLessThan(0.03);
+  const firstStir = a.hands.frames.findIndex((f) => f.l && Math.abs(f.l[1] - 1.15) < 0.15);
+  expect(a.hands.frames.slice(firstStir).filter((f) => !f.l)).toHaveLength(0);
   // the export carries it, and the EDM record says a gesture was made
   const exp = await (await request.get(`${API}/api/projects/${project.id}/export`)).json();
   expect(exp.contributions[0].hands.frames.length).toBe(a.hands.frames.length);

@@ -1085,6 +1085,7 @@ function releaseRecording(source) {
 // Reset the recording UI when the microphone stops on its own (track ended,
 // device unplugged) or when the clip cannot be kept.
 function resetRecordingUi() {
+  voiceArmed = false;                                         // whatever ended this clip, wait for a pause before speech can start another
   clearInterval(pose.timer); pose.timer = null;
   clearInterval(handTrace.timer); handTrace.timer = null;
   cursor.visible = false; anchorSource = null; recOpts = {};
@@ -1243,7 +1244,7 @@ const ghost = new GhostHands(scene);
 let playStartedAt = 0;
 // voice start: speech above VOICE_START for VOICE_START_MS begins a clip; a pause below VOICE_STOP for VOICE_STOP_MS ends it
 const VOICE_START = 0.1, VOICE_START_MS = 250, VOICE_STOP = 0.06, VOICE_STOP_MS = 1200, VOICE_MIN_MS = 600;
-let voiceAbove = 0, voiceQuiet = 0;
+let voiceAbove = 0, voiceQuiet = 0, voiceArmed = true;   // armed: a quiet moment has passed since the last clip, so speech may start a new one
 function voiceStart(now) {
   if (!renderer.xr.isPresenting || !handsPresent() || !hud.voiceStart.checked || !levelNode) return;
   if ('speechSynthesis' in window && speechSynthesis.speaking) { voiceAbove = 0; return; }   // the Ask voice is not the visitor
@@ -1256,7 +1257,9 @@ function voiceStart(now) {
     return;
   }
   if (starting) return;
-  if (lvl > VOICE_START) { if (!voiceAbove) voiceAbove = now; else if (now - voiceAbove > VOICE_START_MS) { voiceAbove = 0; voiceQuiet = 0; beginRecording(camera, { voice: true }); } }
+  if (lvl < VOICE_STOP) voiceArmed = true;                    // speech that simply continues after a clip ended does not start the next one
+  if (!voiceArmed) { voiceAbove = 0; return; }
+  if (lvl > VOICE_START) { if (!voiceAbove) voiceAbove = now; else if (now - voiceAbove > VOICE_START_MS) { voiceAbove = 0; voiceQuiet = 0; voiceArmed = false; beginRecording(camera, { voice: true }); } }
   else voiceAbove = 0;
 }
 

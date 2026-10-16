@@ -27,6 +27,7 @@ import { openDb } from './db.js';
 import { createTranscriber } from './transcribe.js';
 import { unclearReason } from '../shared/text.js';
 import { toEdm } from './edm.js';
+import { fillGaps } from '../shared/hands-fill.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -143,7 +144,8 @@ function parseHands(v) {
   };
   const frames = h.frames.slice(0, MAX_HAND_FRAMES).map((f) => ({ t: Math.max(0, Math.round(Number(f.t) || 0)), l: hand(f.l), r: hand(f.r) }));
   if (!frames.some((f) => f.l || f.r)) return null;
-  return { joints, rate: Math.min(120, Math.max(1, Math.round(Number(h.rate) || 20))), frames };
+  // short tracking gaps are reconstructed here, once, and every reconstructed frame is flagged (shared/hands-fill.js)
+  return fillGaps({ joints, rate: Math.min(120, Math.max(1, Math.round(Number(h.rate) || 20))), frames });
 }
 
 function validateAnnotation(body, projectId) {
