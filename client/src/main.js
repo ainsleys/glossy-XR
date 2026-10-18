@@ -69,7 +69,7 @@ const hud = {
   assetList: $('assetList'), assetFile: $('assetFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), edmLink: $('edmLink'), annList: $('annList'),
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
-  walk: $('walk'), autoplay: $('autoplay'), voiceStart: $('voiceStart'), reviewLink: $('reviewLink'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
+  walk: $('walk'), autoplay: $('autoplay'), voiceStart: $('voiceStart'), ghostStyle: $('ghostStyle'), ghostTrail: $('ghostTrail'), reviewLink: $('reviewLink'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
   interview: $('interview'), visitorLink: $('visitorLink'), question: $('question'), level: $('level'), levelBar: $('levelBar'), hint: $('hint'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
 };
 const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
@@ -1279,7 +1279,13 @@ for (let i = 0; i < 2; i++) {
 }
 const handsPresent = () => Object.keys(xrHands).length > 0;
 const handTrace = new HandTrace(() => xrHands);
-const ghost = new GhostHands(scene);
+// how the ghost hands are drawn: a setting, persisted, and overridable from the URL (?ghost=solid&trail=1) so a headset can switch without the laptop
+const urlq = new URLSearchParams(location.search);
+hud.ghostStyle.value = urlq.get('ghost') || ls.get('glossy.ghostStyle', 'skeleton');
+hud.ghostTrail.checked = urlq.has('trail') ? urlq.get('trail') !== '0' : ls.get('glossy.ghostTrail', '0') === '1';
+const ghost = new GhostHands(scene, { style: hud.ghostStyle.value, trail: hud.ghostTrail.checked });
+hud.ghostStyle.addEventListener('change', () => { ghost.setStyle(hud.ghostStyle.value); ls.set('glossy.ghostStyle', ghost.style); log('setting', { ghost: ghost.style }); });
+hud.ghostTrail.addEventListener('change', () => { ghost.trail = hud.ghostTrail.checked; ls.set('glossy.ghostTrail', ghost.trail ? '1' : '0'); log('setting', { trail: ghost.trail }); });
 let playStartedAt = 0;
 // voice start: speech above VOICE_START for VOICE_START_MS begins a clip; a pause below VOICE_STOP for VOICE_STOP_MS ends it
 const VOICE_START = 0.1, VOICE_START_MS = 250, VOICE_STOP = 0.06, VOICE_STOP_MS = 1200, VOICE_MIN_MS = 600;
