@@ -21,6 +21,7 @@
 //   question:ask       { index, result }   question:step { index }
 //   stats              { presenting, recording, fps, hands: { l: { seen, of }, r: { seen, of } }, level }
 //   error              { message, source? }
+//   control            { action, args }      an operator message received (POST /api/projects/:id/control)
 // `t` is ms since the page loaded, `at` the client clock; the server adds `received`.
 // Nothing here carries audio or transcript text.
 

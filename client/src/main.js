@@ -1382,6 +1382,27 @@ const net = connect({
     if (focusId && markers.has(focusId)) { focusMarker(focusId); if (assetsReady) focusId = null; }   // opened from the review page: stand in front of that clip (again once the assets have framed the view)
   },
   onNew: (a) => a.project === project?.id && addMarker(a),
+  onControl: (c) => {                 // an operator at a laptop (POST /api/projects/:id/control) steering this page; see the README
+    if (c.session && c.session !== log.session) return;
+    const a = c.args || {};
+    log('control', { action: c.action, args: a });
+    switch (c.action) {
+      case 'say': setStatus(String(a.text || '').slice(0, 200), { hold: Number(a.holdMs) || 6000 }); break;
+      case 'play': if (markers.has(a.id)) play(a.id); break;
+      case 'stop': stopAll('control'); break;
+      case 'ghost':
+        if (a.style) { hud.ghostStyle.value = a.style; hud.ghostStyle.dispatchEvent(new Event('change')); }
+        if (a.trail !== undefined) { hud.ghostTrail.checked = !!a.trail; hud.ghostTrail.dispatchEvent(new Event('change')); }
+        break;
+      case 'voiceStart': hud.voiceStart.checked = !!a.on; hud.voiceStart.dispatchEvent(new Event('change')); break;
+      case 'interview': hud.interview.checked = !!a.on; hud.interview.dispatchEvent(new Event('change')); break;
+      case 'ask': askCurrent(); break;
+      case 'step': stepQuestion(Number(a.by) || 1); break;
+      case 'project': if (a.id && a.id !== project?.id) openProject(a.id); break;
+      case 'reload': log.flush().finally(() => location.reload()); break;
+      case 'exitVR': renderer.xr.getSession()?.end(); break;
+    }
+  },
   onDeleted: (d) => { removeMarker(d); renderList(); },
   onUpdated: (a) => {                 // transcript, period, reply count or parent changed for an existing marker
     const m = markers.get(a.id);

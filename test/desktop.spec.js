@@ -488,3 +488,36 @@ test('a microphone the browser ends under the page is asked for again: before th
   expect(events.filter((e) => e.kind === 'record:saved')).toHaveLength(3);
   expect(events.filter((e) => e.kind === 'record:blocked')).toHaveLength(0);
 });
+
+test('an operator can steer a page over the control channel: a panel message, playback, the ghost style, and only the page addressed', async ({ page, request }) => {
+  const project = await openProject(page, request, 'control');
+  await prepareRecording(page, 'Tester');
+  await lockPointer(page);
+  await recordWithMouse(page, 800);
+  const [a] = await listAnnotations(request, project.id);
+  const control = (body) => request.post(`${API}/api/projects/${project.id}/control`, { data: body });
+  // a message on the status line (and so on the headset panel), held for a while
+  expect((await control({ action: 'say', args: { text: 'look at the pot', holdMs: 8000 } })).status()).toBe(202);
+  await expect.poll(() => status(page)).toBe('look at the pot');
+  // play and stop a clip
+  await expect.poll(() => page.evaluate((id) => !!window.__glossy.markers.get(id)?.sound.buffer, a.id), { timeout: 10_000 }).toBe(true);
+  await control({ action: 'play', args: { id: a.id } });
+  await expect.poll(() => page.evaluate(() => window.__glossy.playingId)).toBe(a.id);
+  await control({ action: 'stop' });
+  await expect.poll(() => page.evaluate(() => window.__glossy.playingId)).toBeNull();
+  // the ghost drawing and a setting
+  await control({ action: 'ghost', args: { style: 'solid', trail: true } });
+  await expect.poll(() => page.evaluate(() => [window.__glossy.ghost.style, window.__glossy.ghost.trail])).toEqual(['solid', true]);
+  await control({ action: 'voiceStart', args: { on: false } });
+  expect(await page.isChecked('#voiceStart')).toBe(false);
+  // a message for another session is ignored; one for this session lands; unknown actions are refused
+  const session = await page.evaluate(() => window.__glossy.log.session);
+  await control({ action: 'say', args: { text: 'not for you' }, session: 'someone-else' });
+  await control({ action: 'say', args: { text: 'for you', holdMs: 8000 }, session });
+  await expect.poll(() => status(page)).toBe('for you');
+  expect((await control({ action: 'format-disk' })).status()).toBe(400);
+  // the log keeps what was received
+  await page.evaluate(() => window.__glossy.log.flush());
+  const events = await (await request.get(`${API}/api/projects/${project.id}/events`)).json();
+  expect(events.filter((e) => e.kind === 'control').map((e) => e.data.action)).toEqual(['say', 'play', 'stop', 'ghost', 'voiceStart', 'say']);
+});

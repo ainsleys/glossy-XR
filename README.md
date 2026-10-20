@@ -116,6 +116,9 @@ Every page keeps a log of what happened to it and posts it to the server in smal
 
 `GET /api/projects/:id/sessions` lists sessions (start, end, event count, client); `GET /api/projects/:id/events?session=…` returns the events, `&format=ndjson` one per line; `POST /api/projects/:id/events` is what the client calls. `node scripts/session-report.mjs --project <id>` prints a summary per session (recordings by source and outcome, clip lengths, placement times, false voice starts, hand loss per hand, frame rate, microphone level), `--events` the full trail. The vocabulary is listed at the top of `client/src/session-log.js`.
 
+**Driving a page from the laptop.** `POST /api/projects/:id/control` with `{action, args, session?}` reaches every page open on that project (or one page, by the `session` id the session log gives it): `say {text, holdMs}` puts a line on the status bar and so on the headset panel, `play {id}` / `stop`, `ghost {style, trail}`, `voiceStart {on}`, `interview {on}`, `ask`, `step {by}`, `project {id}`, `reload`, `exitVR`. Nothing that needs a user gesture (entering VR, the microphone) can be done this way. It is for a headset nobody can type into, and for an operator steering a visitor's headset in an exhibition; the page logs each message as a `control` event.
+
+
 ## Review page
 
 `/review.html?project=…` (the HUD's *Review* link) is the same project read at a desk: a light page, where the room is dark, because reading and walking are different jobs. It has a search box over transcripts, names, questions and period labels (accent- and case-insensitive, Turkish dotted and dotless i folded together) that highlights the matching words and fades the rest rather than hiding them; a plan of the room from above with one dot per clip in its period colour, which selects the clip when clicked; and one card per clip, replies nested under their parent. Every word of a transcript is clickable and starts playback at that word; the word under the playhead lights as the clip plays, and while it plays an arrow on the plan shows where the author stood and faced at that moment, from the recorded pose. Audio, transcript and viewpoint move together.
@@ -191,6 +194,7 @@ Headless Chromium refuses the Pointer Lock API, so the client falls back to a so
 |---|---|---|
 | GET / POST | `/api/projects` | list; create `{name}` |
 | GET / PATCH / DELETE | `/api/projects/:id` | read (includes `assets[]`, `language`, `script`); update `{name, transform, language, script}`; delete with files |
+| POST | `/api/projects/:id/control` | steer the pages open on a project: `{action, args, session?}` (see Session log) |
 | GET / POST | `/api/projects/:id/assets` | list; add (multipart `model` plus optional `files` sidecars; `mode=sphere` for a panorama) |
 | PATCH / DELETE | `/api/projects/:id/assets/:aid` | update `{name, transform, options, visible, sort}`; remove |
 | GET / POST | `/api/projects/:id/annotations` | list; create (multipart `audio`, `x`, `y`, `z`, `author`, `layer`, `consent=true`; optional `objectId`, `durationMs`, `parent`, `period` (JSON), `pose` (JSON), `prompt`, `mode`, `language`) |

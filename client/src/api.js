@@ -70,5 +70,6 @@ export function connect(handlers) {
   socket.on('project:updated', handlers.onProjectUpdated);
   socket.on('project:created', handlers.onProjectsChanged);
   socket.on('project:deleted', handlers.onProjectsChanged);
+  socket.on('control', (c) => handlers.onControl?.(c));
   return { socket, join: (project) => socket.emit('join', { project }) };
 }

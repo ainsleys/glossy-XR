@@ -427,6 +427,19 @@ app.post('/api/projects/:id/events', projectOr404, (req, res) => {
   const n = db.events.add(req.params.id, session, events);
   res.status(202).json({ stored: n });
 });
+// Operator control: a message to the pages of a project (or one page, by its
+// session id): say something on the panel, play or stop a clip, switch the
+// ghost-hand drawing, the project, settings, or reload. For a headset that
+// nobody can type into, driven from a laptop, or by an exhibition operator.
+const CONTROL_ACTIONS = ['say', 'play', 'stop', 'ghost', 'voiceStart', 'interview', 'ask', 'step', 'project', 'reload', 'exitVR'];
+app.post('/api/projects/:id/control', projectOr404, (req, res) => {
+  const { session, action, args } = req.body || {};
+  if (!CONTROL_ACTIONS.includes(action)) return res.status(400).json({ error: 'action must be one of ' + CONTROL_ACTIONS.join(' ') });
+  const msg = { session: session ? String(session).slice(0, 40) : undefined, action, args: args && typeof args === 'object' ? args : {}, at: new Date().toISOString() };
+  const n = io.sockets.adapter.rooms.get(req.params.id)?.size || 0;
+  io.to(req.params.id).emit('control', msg);
+  res.status(202).json({ sent: n });
+});
 app.get('/api/projects/:id/sessions', projectOr404, (req, res) => res.json(db.events.sessions(req.params.id)));
 app.get('/api/projects/:id/events', projectOr404, (req, res) => {
   const events = db.events.list(req.params.id, { session: req.query.session ? String(req.query.session) : null, after: Number(req.query.after) || 0, limit: Math.min(50000, Number(req.query.limit) || 20000) });
