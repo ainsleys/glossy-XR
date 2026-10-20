@@ -11,7 +11,7 @@
 //   xr:start / xr:end  {}
 //   input:connected    { kind: 'controller' | 'hand', handedness, profiles }
 //   input:disconnected { kind, handedness }
-//   mic:ready          { via? }            mic:error { error }
+//   mic:ready          { via?: 'first clip' | 'reacquired' }   mic:error { error }   mic:ended { recording }
 //   record:start       { source: 'trigger' | 'pinch' | 'voice' | 'mouse' | 'key' | 'reply', question, layer }
 //   record:blocked     { reason: 'no name' | 'no consent' | 'mic' | 'no project' }
 //   record:end         { reason: 'release' | 'voice-pause' | 'project-changed' | 'track-ended', durationMs, hands }

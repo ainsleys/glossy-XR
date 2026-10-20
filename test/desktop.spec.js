@@ -450,3 +450,41 @@ test('the session log records a session: project open, the clip from start to sa
   expect(out).toMatch(/1 started \(mouse 1\), 1 saved/);
   expect(out).toMatch(/ended by: release 1/);
 });
+
+test('a microphone the browser ends under the page is asked for again: before the next clip and in the middle of one', async ({ page, request }) => {
+  // Seen on the Quest: the headset sleeps, the OS ends the microphone track, and
+  // before this fix MediaRecorder.start on the dead stream threw but left a
+  // recorder in the 'recording' state, so every later clip was refused silently
+  // while the panel counted seconds.
+  const project = await openProject(page, request, 'mic-ended');
+  await prepareRecording(page, 'Tester');
+  await lockPointer(page);
+  await recordWithMouse(page, 800);                                              // a normal clip first, so a stream exists
+  await expect.poll(() => markerCount(page)).toBe(1);
+  const endMic = () => page.evaluate(() => { for (const t of window.__glossy.recorder.stream.getAudioTracks()) { t.stop(); t.dispatchEvent(new Event('ended')); } });
+  // 1. the track ends while nothing records: the next clip re-acquires the microphone and saves
+  await endMic();
+  await expect.poll(() => page.evaluate(() => window.__glossy.recorder.live)).toBe(false);
+  await aimCamera(page, [0, 1.6, 0.6], [-2, 0.4, 0.5]);                          // the chest: a fresh spot, not the marker just made (a click on a marker plays it)
+  await recordWithMouse(page, 800);
+  await expect.poll(() => markerCount(page), { timeout: 10_000 }).toBe(2);
+  expect(await page.evaluate(() => window.__glossy.recorder.live)).toBe(true);
+  // 2. the track ends in the middle of a clip: the clip closes as track-ended, nothing hangs, and the clip after it records
+  await aimCamera(page, [0.4, 1.6, 0.6], [0.4, 0.79, -1.2]);                     // the table
+  await page.mouse.down();
+  await expect.poll(() => page.evaluate(() => window.__glossy.recorder.isRecording)).toBe(true);
+  await endMic();
+  await expect.poll(() => status(page)).toMatch(/microphone stopped/);
+  await page.mouse.up();
+  await aimCamera(page, [0, 1.6, 0], [2.5, 1.2, 0.3]);                            // the east wall
+  await recordWithMouse(page, 800);
+  await expect.poll(() => markerCount(page), { timeout: 10_000 }).toBe(3);
+  // the log tells the story
+  await page.evaluate(() => window.__glossy.log.flush());
+  const events = await (await request.get(`${API}/api/projects/${project.id}/events`)).json();
+  expect(events.filter((e) => e.kind === 'mic:ended').map((e) => e.data.recording)).toEqual([false, true]);
+  expect(events.filter((e) => e.kind === 'mic:ready').map((e) => e.data?.via)).toContain('reacquired');
+  expect(events.filter((e) => e.kind === 'record:end').map((e) => e.data.reason)).toEqual(['release', 'release', 'track-ended', 'release']);
+  expect(events.filter((e) => e.kind === 'record:saved')).toHaveLength(3);
+  expect(events.filter((e) => e.kind === 'record:blocked')).toHaveLength(0);
+});

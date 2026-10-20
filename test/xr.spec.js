@@ -105,9 +105,11 @@ test('with hands tracked, speaking starts a clip, the gesture is stored and repl
       if (dt > 1900) { clearInterval(id); done(); }
     }, 50);
   }));
-  await page.evaluate(() => window.__glossy.endRecording());    // the pause that would end it; the looping fake voice never pauses
+  // the pause that would end it; the looping fake voice never pauses, so the clip is ended here and the status is read
+  // in the same breath: with speech continuing, voice start may open the next clip a moment after the save
+  const savedStatus = await page.evaluate(async () => { await window.__glossy.endRecording(); return window.__glossy.status; });
+  expect(savedStatus).toMatch(/^saved .* with gesture/);
   await expect.poll(() => markerCount(page), { timeout: 10_000 }).toBe(1);
-  await expect.poll(() => status(page)).toMatch(/^saved .* with gesture/);
   const [a] = await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json();
   fs.writeFileSync('test-results/xr-hands-trace.json', JSON.stringify(a.hands));   // the emulated trace, for looking at when the geometry below disagrees
   expect(a.poseSource).toBe('xr');

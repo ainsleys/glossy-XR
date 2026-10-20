@@ -83,7 +83,7 @@ hud.consent.addEventListener('change', () => { ls.set('glossy.consent', hud.cons
 // consent: a permission prompt that first appears inside an immersive session
 // may not be seen (Quest Browser), and the first clip would be lost to it. With
 // consent already ticked from an earlier visit, the first click on the page does it.
-let micState = 'unasked';            // unasked | asking | ready | blocked
+let micState = 'unasked';            // unasked | asking | ready | blocked | ended
 async function readyMic() {
   if (micState === 'ready' || micState === 'asking') return;
   micState = 'asking';
@@ -185,7 +185,7 @@ function updateXrPanel() {
   const hands = handsPresent();
   const act = hands ? (hud.voiceStart.checked ? 'pinch, or just speak, to answer' : 'pinch and hold to answer') : 'hold the trigger to answer';
   let hint = q ? (VISITOR && !hands ? 'squeeze: hear the question · ' + act : act) : hands && hud.voiceStart.checked ? 'speak to leave a clip where you look · pinch to hold one' : '';
-  if (micState !== 'ready' && !recorder.isRecording) hint = micState === 'blocked' ? 'microphone blocked: leave VR and allow it in the browser' : 'microphone not yet allowed: tick consent on the page before entering VR';
+  if (micState !== 'ready' && !recorder.isRecording) hint = micState === 'blocked' ? 'microphone blocked: leave VR and allow it in the browser' : micState === 'ended' ? 'microphone stopped while the headset slept: pinch, or speak, to open it again' : 'microphone not yet allowed: tick consent on the page before entering VR';
   xrPanel.draw(question, hud.status.textContent, hint, hud.rec.classList.contains('on'), level);
 }
 
@@ -1049,7 +1049,10 @@ function attachLevel(stream) {
     }
   } catch {}
 }
-recorder.onstart = (stream) => { attachLevel(stream); if (micState !== 'ready') { micState = 'ready'; log('mic:ready', { via: 'first clip' }); } };
+recorder.onstart = (stream) => { attachLevel(stream); if (micState !== 'ready') { log('mic:ready', { via: micState === 'ended' ? 'reacquired' : 'first clip' }); micState = 'ready'; } };
+// The browser ended the microphone track (headset asleep, device unplugged). A clip in flight is
+// closed by the loop's track-ended check; the next clip, or the hands reconnecting, asks again.
+recorder.onended = () => { micState = 'ended'; log('mic:ended', { recording: !!anchorSource }); if (!anchorSource) setStatus('microphone stopped; it is asked for again on the next clip', { hold: 3000 }); };
 const cursor = new THREE.Mesh(new THREE.SphereGeometry(MARKER_RADIUS * 1.2, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff3333, wireframe: true }));
 cursor.visible = false;
 scene.add(cursor);
@@ -1089,7 +1092,11 @@ async function beginRecording(source, opts = {}) {
   if ('speechSynthesis' in window) speechSynthesis.cancel();   // never record over our own voice
   starting = source; releasedEarly = false; recOpts = { ...opts, projectId: project.id, via };
   setStatus('starting microphone…');
-  try { await recorder.start(); } catch (e) { starting = null; log('record:blocked', { reason: 'mic', via, error: e.message }); return setStatus('mic blocked: ' + e.message); }
+  try { await recorder.start(); }
+  catch (e) {
+    try { recorder.release(); await recorder.start(); }   // a stream the browser ended under us (headset asleep, device gone): ask once more before giving up
+    catch (e2) { starting = null; micState = 'blocked'; log('record:blocked', { reason: 'mic', via, error: e2.message }); return setStatus('mic blocked: ' + e2.message); }
+  }
   starting = null;
   log('record:start', { source: via, question: currentQuestion() ? qIndex : undefined, layer: hud.layer.value, presenting: renderer.xr.isPresenting, hands: handsPresent() });
   anchorSource = source;
@@ -1463,7 +1470,7 @@ renderer.setAnimationLoop(() => {
 
   handTrace.tick();                                          // hand joints into the clip at HAND_HZ, from the frames they were posed in
   if (recorder.isRecording && anchorSource) cursor.position.copy(aimPoint(anchorSource).point);
-  else if (anchorSource && !starting && !recorder.isRecording) { log('record:end', { reason: 'track-ended', source: recOpts.via }); resetRecordingUi(); setStatus('microphone stopped; nothing saved'); }   // the track ended under us
+  else if (anchorSource && !starting && !recorder.isRecording) { log('record:end', { reason: 'track-ended', source: recOpts.via }); resetRecordingUi(); setStatus('microphone stopped; nothing saved', { hold: 3000 }); }   // the track ended under us (a hold, or the hover text replaces it in the same frame)
   updateHover();
   scaleMarkers();
   updateLevel();
