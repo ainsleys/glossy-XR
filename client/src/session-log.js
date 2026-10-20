@@ -11,6 +11,7 @@
 //   xr:start / xr:end  {}
 //   input:connected    { kind: 'controller' | 'hand', handedness, profiles }
 //   input:disconnected { kind, handedness }
+//   input:microgesture { hand, gesture: 'swipe-left' | 'swipe-right' | 'swipe-forward' | 'swipe-backward' | 'tap-thumb' }   observed only, for now
 //   mic:ready          { via?: 'first clip' | 'reacquired' }   mic:error { error }   mic:ended { recording }
 //   record:start       { source: 'trigger' | 'pinch' | 'voice' | 'mouse' | 'key' | 'reply', question, layer }
 //   record:blocked     { reason: 'no name' | 'no consent' | 'mic' | 'no project' }
@@ -30,7 +31,7 @@ const FLUSH_MS = 2000, FLUSH_AT = 50;
 export function createSessionLog({ fetchImpl = fetch } = {}) {
   const session = (crypto.randomUUID?.() || String(Math.random()).slice(2)).slice(0, 8);
   const queue = [];
-  let projectId = null, timer = null, sending = false, dropped = 0;
+  let projectId = null, timer = null, sending = null, dropped = 0;   // sending: the promise of the batch in flight
   const now = () => Math.round(performance.now());
 
   function log(kind, data) {
@@ -38,20 +39,24 @@ export function createSessionLog({ fetchImpl = fetch } = {}) {
     if (queue.length >= FLUSH_AT) flush();
     else if (!timer) timer = setTimeout(flush, FLUSH_MS);
   }
+  /** Send what is queued. Resolves when everything queued at the time of the call has been sent (or dropped). */
   async function flush({ beacon = false } = {}) {
     clearTimeout(timer); timer = null;
-    if (!projectId || !queue.length || sending) return;
+    if (!projectId || !queue.length) return;
+    if (sending) { await sending; return flush({ beacon }); }   // a batch is in flight: send the rest after it, never silently skip it
     const events = queue.splice(0, FLUSH_AT * 4);
     const body = JSON.stringify({ session, events });
     const url = `/api/projects/${projectId}/events`;
     if (beacon && navigator.sendBeacon) { navigator.sendBeacon(url, new Blob([body], { type: 'application/json' })); return; }
-    sending = true;
-    try {
-      const res = await fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true });
-      if (!res.ok) dropped += events.length;
-    } catch { dropped += events.length; }                  // the log never gets in the way of the room; a lost batch is lost
-    sending = false;
-    if (queue.length) flush();
+    sending = (async () => {
+      try {
+        const res = await fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true });
+        if (!res.ok) dropped += events.length;
+      } catch { dropped += events.length; }                  // the log never gets in the way of the room; a lost batch is lost
+    })();
+    await sending;
+    sending = null;
+    if (queue.length) return flush();
   }
   /** Events logged before a project is open wait for it. */
   log.setProject = (id) => { projectId = id; if (queue.length) flush(); };

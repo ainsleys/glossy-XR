@@ -1285,6 +1285,23 @@ for (let i = 0; i < 2; i++) {
   rig.add(hand);
 }
 const handsPresent = () => Object.keys(xrHands).length > 0;
+// Microgestures (Quest Browser, oculus-hand profile): the thumb swiping along the side of the index
+// finger, or tapping it, arrives as extra gamepad buttons 5–9 on the hand's input source. For now
+// only observed and logged, so a session shows whether this headset and browser report them.
+const MICRO = { 5: 'swipe-left', 6: 'swipe-right', 7: 'swipe-forward', 8: 'swipe-backward', 9: 'tap-thumb' };
+const microDown = { left: new Set(), right: new Set() };
+function pollMicrogestures() {
+  const session = renderer.xr.getSession(); if (!session) return;
+  for (const src of session.inputSources) {
+    if (!src.hand || !src.gamepad) continue;
+    const down = microDown[src.handedness]; if (!down) continue;
+    src.gamepad.buttons.forEach((b, i) => {
+      if (!MICRO[i]) return;
+      if (b.pressed && !down.has(i)) { down.add(i); log('input:microgesture', { hand: src.handedness, gesture: MICRO[i] }); setStatus(`${src.handedness} hand: ${MICRO[i]}`, { hold: 1500 }); }
+      else if (!b.pressed && down.has(i)) down.delete(i);
+    });
+  }
+}
 const handTrace = new HandTrace(() => xrHands);
 // how the ghost hands are drawn: a setting, persisted, and overridable from the URL (?ghost=solid&trail=1) so a headset can switch without the laptop
 const urlq = new URLSearchParams(location.search);
@@ -1518,6 +1535,7 @@ renderer.setAnimationLoop(() => {
   // once a second while presenting or recording: frame rate, hand tracking coverage, microphone level
   stats.frame(); stats.level(recorder.isRecording ? level : levelNode ? measureLevel() : 0);   // the room's level is only kept while recording; the log wants it whenever the microphone is open
   for (const [side, key] of [['l', 'left'], ['r', 'right']]) { const h = xrHands[key]; stats.hand(side, !!h, !!h?.joints?.wrist?.visible); }
+  pollMicrogestures();
   if (stats.due) { const line = stats.take(); if (renderer.xr.isPresenting || recorder.isRecording) log('stats', { presenting: renderer.xr.isPresenting, recording: recorder.isRecording, ...line }); }
 
   renderer.render(scene, camera);
