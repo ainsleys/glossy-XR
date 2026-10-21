@@ -161,6 +161,13 @@
           <option value="mesh">hand mesh</option>
         </select>
         <div class="row" style="margin-top:4px"><input type="checkbox" id="ghostTrail" /><label for="ghostTrail" style="margin:0" title="A ribbon behind each wrist for the last second or so, so the path of a gesture is visible as well as the hand">Trail behind the wrist</label></div>
+        <label for="locoHand" title="Headset with hand tracking: the thumb swiped along the side of the index finger steps you forward or back and turns you left or right">Thumb moves me</label>
+        <select id="locoHand">
+          <option value="left">left hand</option>
+          <option value="right">right hand</option>
+          <option value="both">either hand</option>
+          <option value="off">off</option>
+        </select>
         <div class="row" style="margin-top:4px"><input type="checkbox" id="voiceStart" checked /><label for="voiceStart" style="margin:0" title="Headset with hand tracking and no controller: speaking starts a clip anchored where you look, a pause of about a second ends it. Off: pinch and hold to record.">Start a clip when I speak (hands, headset)</label></div>
       </details>
 

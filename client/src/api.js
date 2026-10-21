@@ -59,6 +59,12 @@ export const annotations = {
   },
 };
 
+export const chat = {
+  list: (project, after = 0) => fetch(`/api/projects/${project}/chat?after=${after}`).then(json),
+  send: (project, body) => fetch(`/api/projects/${project}/chat`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(json),
+  sendAudio: (project, blob, fields = {}) => { const fd = new FormData(); fd.append('audio', blob, 'message.webm'); for (const [k, v] of Object.entries(fields)) if (v != null) fd.append(k, v); return fetch(`/api/projects/${project}/chat/audio`, { method: 'POST', body: fd }).then(json); },
+};
+
 export function connect(handlers) {
   const socket = io({ transports: ['websocket', 'polling'] });
   socket.on('connect', () => handlers.onStatus?.('connected'));
@@ -71,5 +77,6 @@ export function connect(handlers) {
   socket.on('project:created', handlers.onProjectsChanged);
   socket.on('project:deleted', handlers.onProjectsChanged);
   socket.on('control', (c) => handlers.onControl?.(c));
+  socket.on('chat', (m) => handlers.onChat?.(m));
   return { socket, join: (project) => socket.emit('join', { project }) };
 }

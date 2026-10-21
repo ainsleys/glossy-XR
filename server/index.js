@@ -427,6 +427,31 @@ app.post('/api/projects/:id/events', projectOr404, (req, res) => {
   const n = db.events.add(req.params.id, session, events);
   res.status(202).json({ stored: n });
 });
+// Operator chat: a conversation between the person in a headset and someone at
+// a laptop (or a script). Operator messages are text; the visitor's are spoken
+// in the headset, stored as audio and transcribed like clips. `session`
+// addresses one page; without it everyone on the project sees the message.
+app.get('/api/projects/:id/chat', projectOr404, (req, res) => res.json(db.chat.list(req.params.id, { after: Number(req.query.after) || 0, limit: Math.min(500, Number(req.query.limit) || 100) })));
+app.post('/api/projects/:id/chat', projectOr404, (req, res) => {
+  const text = String(req.body?.text || '').trim().slice(0, 2000);
+  if (!text) return res.status(400).json({ error: 'text is required' });
+  const row = db.chat.add(req.params.id, { session: req.body?.session ? String(req.body.session).slice(0, 40) : null, role: req.body?.role === 'visitor' ? 'visitor' : 'operator', text, status: 'done' });
+  io.to(req.params.id).emit('chat', row);
+  res.status(201).json(row);
+});
+app.post('/api/projects/:id/chat/audio', projectOr404, audioUpload.single('audio'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'audio file is required' });
+  const row = db.chat.add(req.params.id, { session: req.body?.session ? String(req.body.session).slice(0, 40) : null, role: 'visitor', text: '', audioUrl: `/audio/${req.file.filename}`, status: transcriber.enabled ? 'pending' : 'failed' });
+  io.to(req.params.id).emit('chat', row);
+  res.status(202).json(row);
+  if (!transcriber.enabled) return;
+  const language = req.body?.language || db.projects.get(req.params.id)?.language || undefined;
+  transcriber.enqueue(`chat-${row.id}`, req.file.path, { language }, (err, result) => {
+    const updated = db.chat.setText(row.id, err ? { text: '', status: 'failed' } : { text: result.text, status: 'done' });
+    io.to(req.params.id).emit('chat', updated);
+  });
+});
+
 // Operator control: a message to the pages of a project (or one page, by its
 // session id): say something on the panel, play or stop a clip, switch the
 // ghost-hand drawing, the project, settings, or reload. For a headset that

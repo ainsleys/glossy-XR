@@ -116,6 +116,10 @@ Every page keeps a log of what happened to it and posts it to the server in smal
 
 `GET /api/projects/:id/sessions` lists sessions (start, end, event count, client); `GET /api/projects/:id/events?session=…` returns the events, `&format=ndjson` one per line; `POST /api/projects/:id/events` is what the client calls. `node scripts/session-report.mjs --project <id>` prints a summary per session (recordings by source and outcome, clip lengths, placement times, false voice starts, hand loss per hand, frame rate, microphone level), `--events` the full trail. The vocabulary is listed at the top of `client/src/session-log.js`.
 
+**Talking with the person in the headset.** A second panel in VR, left of the status panel, carries a conversation with the laptop. `POST /api/projects/:id/chat {text, session?}` puts a line on it. A pinch on the panel starts a spoken message; a pause of 1.5 s, or another pinch, sends it; the server stores the audio apart from the clips, transcribes it with the same engine, and the text appears on the panel and at `GET /api/projects/:id/chat?after=<id>` for whoever is at the laptop. While a message records, voice start and pinch-to-record stand down. The session log records that an exchange happened (`chat:listen`, `chat:sent`, `chat:received`), never the words.
+
+**Moving with the thumb (hands, headset).** On the Quest Browser a thumb swiped along the side of the index finger arrives as a microgesture. On the hand chosen under Settings (*Thumb moves me*, left by default) a forward or back swipe steps one metre along the gaze, shortened by walls, landing on the floor there; a left or right swipe turns 30° in place. Each move is a short glide. The other hand's swipes are shown and logged, nothing more. Moves are logged as `move` events.
+
 **Driving a page from the laptop.** `POST /api/projects/:id/control` with `{action, args, session?}` reaches every page open on that project (or one page, by the `session` id the session log gives it): `say {text, holdMs}` puts a line on the status bar and so on the headset panel, `play {id}` / `stop`, `ghost {style, trail}`, `voiceStart {on}`, `interview {on}`, `ask`, `step {by}`, `project {id}`, `reload`, `exitVR`. Nothing that needs a user gesture (entering VR, the microphone) can be done this way. It is for a headset nobody can type into, and for an operator steering a visitor's headset in an exhibition; the page logs each message as a `control` event.
 
 
@@ -195,6 +199,7 @@ Headless Chromium refuses the Pointer Lock API, so the client falls back to a so
 | GET / POST | `/api/projects` | list; create `{name}` |
 | GET / PATCH / DELETE | `/api/projects/:id` | read (includes `assets[]`, `language`, `script`); update `{name, transform, language, script}`; delete with files |
 | POST | `/api/projects/:id/control` | steer the pages open on a project: `{action, args, session?}` (see Session log) |
+| GET / POST | `/api/projects/:id/chat` | the conversation with the headset: list `?after=<id>`; send `{text, session?}` · `POST …/chat/audio` (multipart `audio`, `session`) is what the headset sends, transcribed on arrival |
 | GET / POST | `/api/projects/:id/assets` | list; add (multipart `model` plus optional `files` sidecars; `mode=sphere` for a panorama) |
 | PATCH / DELETE | `/api/projects/:id/assets/:aid` | update `{name, transform, options, visible, sort}`; remove |
 | GET / POST | `/api/projects/:id/annotations` | list; create (multipart `audio`, `x`, `y`, `z`, `author`, `layer`, `consent=true`; optional `objectId`, `durationMs`, `parent`, `period` (JSON), `pose` (JSON), `prompt`, `mode`, `language`) |

@@ -521,3 +521,32 @@ test('an operator can steer a page over the control channel: a panel message, pl
   const events = await (await request.get(`${API}/api/projects/${project.id}/events`)).json();
   expect(events.filter((e) => e.kind === 'control').map((e) => e.data.action)).toEqual(['say', 'play', 'stop', 'ghost', 'voiceStart', 'say']);
 });
+
+test('a spoken message to the laptop: the page records it, the server transcribes it, and the laptop answers on the chat panel', async ({ page, request }) => {
+  const project = await openProject(page, request, 'chat');
+  await prepareRecording(page, 'Tester');
+  // laptop → page: a text message, shown on the panel and kept
+  expect((await request.post(`${API}/api/projects/${project.id}/chat`, { data: { text: 'look at the pot' } })).status()).toBe(201);
+  await expect.poll(() => page.evaluate(() => window.__glossy.chat.messages.map((m) => [m.role, m.text]))).toEqual([['operator', 'look at the pot']]);
+  // page → laptop: spoken (the fake microphone is talking), recorded apart from the clips, transcribed by the server
+  await page.evaluate(() => window.__glossy.chat.begin());
+  await expect.poll(() => page.evaluate(() => window.__glossy.chat.listening)).toBe(true);
+  await expect.poll(() => status(page)).toMatch(/listening to you/);
+  await page.waitForTimeout(2500);
+  await page.evaluate(() => window.__glossy.chat.end());
+  await expect.poll(async () => (await (await request.get(`${API}/api/projects/${project.id}/chat`)).json()).filter((m) => m.role === 'visitor').map((m) => m.status), { timeout: 40_000 }).toEqual(['done']);
+  const visitor = (await (await request.get(`${API}/api/projects/${project.id}/chat`)).json()).find((m) => m.role === 'visitor');
+  expect(visitor.text.length).toBeGreaterThan(5);
+  expect(visitor.audioUrl).toMatch(/^\/audio\//);
+  expect(await listAnnotations(request, project.id)).toHaveLength(0);                       // a message is not a clip
+  await expect.poll(() => page.evaluate(() => window.__glossy.chat.messages.find((m) => m.role === 'visitor')?.text)).toBe(visitor.text);
+  // a message for another page is not shown; an empty one is refused; the log notes the exchange without its words
+  await request.post(`${API}/api/projects/${project.id}/chat`, { data: { text: 'not for you', session: 'someone-else' } });
+  await page.waitForTimeout(400);
+  expect(await page.evaluate(() => window.__glossy.chat.messages.some((m) => m.text === 'not for you'))).toBe(false);
+  expect((await request.post(`${API}/api/projects/${project.id}/chat`, { data: {} })).status()).toBe(400);
+  await page.evaluate(() => window.__glossy.log.flush());
+  const events = await (await request.get(`${API}/api/projects/${project.id}/events`)).json();
+  expect(events.map((e) => e.kind)).toEqual(expect.arrayContaining(['chat:received', 'chat:listen', 'chat:sent']));
+  expect(JSON.stringify(events)).not.toContain('look at the pot');
+});

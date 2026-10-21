@@ -23,7 +23,7 @@ import { createSessionLog, createStatsSampler } from './session-log.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { VoiceRecorder } from './recorder.js';
-import { connect, projects as projectsApi, assets as assetsApi, annotations as annotationsApi } from './api.js';
+import { connect, projects as projectsApi, assets as assetsApi, annotations as annotationsApi, chat as chatApi } from './api.js';
 import { loadModel, SUPPORTED_EXTENSIONS } from './loaders.js';
 import { unclearReason, UNCLEAR_TEXT, langName } from '../../shared/text.js';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
@@ -69,7 +69,7 @@ const hud = {
   assetList: $('assetList'), assetFile: $('assetFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), edmLink: $('edmLink'), annList: $('annList'),
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
-  walk: $('walk'), autoplay: $('autoplay'), voiceStart: $('voiceStart'), ghostStyle: $('ghostStyle'), ghostTrail: $('ghostTrail'), reviewLink: $('reviewLink'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
+  walk: $('walk'), autoplay: $('autoplay'), voiceStart: $('voiceStart'), locoHand: $('locoHand'), ghostStyle: $('ghostStyle'), ghostTrail: $('ghostTrail'), reviewLink: $('reviewLink'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
   interview: $('interview'), visitorLink: $('visitorLink'), question: $('question'), level: $('level'), levelBar: $('levelBar'), hint: $('hint'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
 };
 const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
@@ -96,6 +96,8 @@ hud.walk.addEventListener('change', () => ls.set('glossy.walk', hud.walk.checked
 hud.autoplay.checked = ls.get('glossy.autoplay', '0') === '1';
 hud.voiceStart.checked = ls.get('glossy.voiceStart', '1') === '1';
 hud.voiceStart.addEventListener('change', () => ls.set('glossy.voiceStart', hud.voiceStart.checked ? '1' : '0'));
+hud.locoHand.value = ls.get('glossy.locoHand', 'left');
+hud.locoHand.addEventListener('change', () => { ls.set('glossy.locoHand', hud.locoHand.value); log('setting', { locoHand: hud.locoHand.value }); });
 hud.autoplay.addEventListener('change', () => ls.set('glossy.autoplay', hud.autoplay.checked ? '1' : '0'));
 hud.interview.checked = ls.get('glossy.interview', '0') === '1';
 hud.interview.addEventListener('change', () => { ls.set('glossy.interview', hud.interview.checked ? '1' : '0'); renderInterview(); });
@@ -178,8 +180,63 @@ const xrPanel = (() => {
   }
   return { mesh, draw, get text() { return shown; } };
 })();
+// The chat panel: a second board in the headset, to the left of the status
+// panel, carrying the conversation with the laptop. A pinch on it starts a
+// spoken message; a pause, or another pinch, sends it. The laptop's lines
+// arrive over the socket (POST /api/projects/:id/chat) and appear here.
+const chatPanel = (() => {
+  const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 1024;
+  const ctx = canvas.getContext('2d');
+  const tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.5), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false }));
+  mesh.position.set(-0.52, -0.02, -0.85); mesh.rotation.y = 0.45; mesh.renderOrder = 998; mesh.visible = false; mesh.name = 'chat-panel';
+  camera.add(mesh);
+  const messages = [];
+  let shown = '', hot = false;
+  const wrap = (text, max) => { const lines = []; let cur = ''; for (const w of String(text).split(/\s+/)) { const t = cur ? cur + ' ' + w : w; if (cur && ctx.measureText(t).width > max) { lines.push(cur); cur = w; } else cur = t; } if (cur) lines.push(cur); return lines; };
+  function draw(state, hovered) {
+    const key = messages.map((m) => m.id + ':' + m.status + ':' + m.text).join('|') + '\n' + state + (hovered ? 'H' : '');
+    if (key === shown) return;
+    shown = key;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = state === 'listening' ? 'rgba(60,20,0,0.78)' : 'rgba(0,0,0,0.7)';
+    ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(0, 0, canvas.width, canvas.height, 28); else ctx.rect(0, 0, canvas.width, canvas.height); ctx.fill();
+    if (hovered) { ctx.strokeStyle = '#9fd3ff'; ctx.lineWidth = 8; ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(4, 4, canvas.width - 8, canvas.height - 8, 26); else ctx.rect(4, 4, canvas.width - 8, canvas.height - 8); ctx.stroke(); }
+    // messages, newest at the bottom, as many as fit
+    const lines = [];
+    for (const m of messages) {
+      const who = m.role === 'operator' ? 'laptop' : 'you';
+      const text = m.status === 'pending' ? '…' : m.status === 'failed' ? '(not understood)' : m.text;
+      ctx.font = '36px system-ui, sans-serif';
+      const ws = wrap(text, canvas.width - 100);
+      lines.push({ who, first: true, text: ws[0] || '', role: m.role });
+      for (const l of ws.slice(1)) lines.push({ who, first: false, text: l, role: m.role });
+      lines.push(null);
+    }
+    const bottom = canvas.height - 110, lh = 44;
+    let y = bottom;
+    for (let i = lines.length - 1; i >= 0 && y > 70; i--) {
+      const l = lines[i];
+      if (l === null) { y -= 18; continue; }
+      ctx.fillStyle = l.role === 'operator' ? '#9fd3ff' : '#fff';
+      ctx.font = '36px system-ui, sans-serif';
+      ctx.fillText(l.text, 100, y);
+      if (l.first) { ctx.fillStyle = '#8a9bb0'; ctx.font = '600 26px system-ui, sans-serif'; ctx.fillText(l.who, 24, y); }
+      y -= lh;
+    }
+    // state line
+    ctx.fillStyle = state === 'listening' ? '#ff9b6b' : '#9ab'; ctx.font = '30px system-ui, sans-serif';
+    const line = state === 'listening' ? 'listening… pause, or pinch here again, to send' : state === 'sending' ? 'sending…' : state === 'transcribing' ? 'the laptop is reading it…' : 'pinch this panel to talk to the laptop';
+    ctx.fillText(line, 24, canvas.height - 40);
+    tex.needsUpdate = true;
+  }
+  return { mesh, messages, draw, get hot() { return hot; }, set hot(v) { hot = v; } };
+})();
+
 function updateXrPanel() {
-  if (!renderer.xr.isPresenting) { if (xrPanel.mesh.visible) xrPanel.draw('', '', '', false); return; }
+  if (!renderer.xr.isPresenting) { if (xrPanel.mesh.visible) xrPanel.draw('', '', '', false); chatPanel.mesh.visible = false; return; }
+  chatPanel.mesh.visible = chatPanel.messages.length > 0 || !!messaging || chatPanel.hot;
+  if (chatPanel.mesh.visible) chatPanel.draw(messaging ? 'listening' : chatPanel.messages.some((m) => m.role === 'visitor' && m.status === 'pending' && m.mine) ? 'transcribing' : 'idle', chatPanel.hot);
   const qs = questions(), q = currentQuestion();
   const question = q ? `${qIndex + 1}/${qs.length} · ${q.text}` : qs.length && qIndex >= qs.length ? 'all questions answered' : '';
   const hands = handsPresent();
@@ -531,6 +588,7 @@ async function openProject(id) {
   hud.visitorLink.href = `?project=${id}&mode=visitor`;
   hud.reviewLink.href = `/review.html?project=${id}`;
   log.setProject(id); log('project:open', { id, name: project.name, assets: (project.assets || []).length });
+  chatPanel.messages.length = 0; chatApi.list(id).then((rows) => { for (const m of rows.slice(-20)) onChat(m); }).catch(() => {});
   selectedId = null;
   clearMarkers();
   net.join(id);
@@ -1084,7 +1142,7 @@ function poseSample() {
 function poseStop() { clearInterval(pose.timer); pose.timer = null; poseSample(); return pose.samples; }
 
 async function beginRecording(source, opts = {}) {
-  if (recorder.isRecording || starting) return;
+  if (recorder.isRecording || starting || messaging) return;
   const via = opts.voice ? 'voice' : opts.parent ? 'reply' : source === camera ? (opts.via || 'key') : handsPresent() ? 'pinch' : 'trigger';
   if (!project) { log('record:blocked', { reason: 'no project', via }); return setStatus('no project'); }
   if (!hud.author.value.trim()) { log('record:blocked', { reason: 'no name', via }); return setStatus('enter your name first'); }
@@ -1250,6 +1308,7 @@ for (let i = 0; i < 2; i++) {
     new THREE.LineBasicMaterial({ color: 0x88ccff, transparent: true, opacity: 0.5 }),
   ));
   ctrl.addEventListener('selectstart', () => {
+    if (aimChat(ctrl)) return toggleMessage();              // the chat panel is a big target: a pinch on it talks to the laptop
     const hit = aimMarker(ctrl);
     if (hit) play(hit); else beginRecording(ctrl);
   });
@@ -1286,8 +1345,116 @@ for (let i = 0; i < 2; i++) {
 }
 const handsPresent = () => Object.keys(xrHands).length > 0;
 // Microgestures (Quest Browser, oculus-hand profile): the thumb swiping along the side of the index
-// finger, or tapping it, arrives as extra gamepad buttons 5–9 on the hand's input source. For now
-// only observed and logged, so a session shows whether this headset and browser report them.
+// finger, or tapping it, arrives as extra gamepad buttons 5–9 on the hand's input source. Confirmed on
+// a Quest 2 on 21 Oct 2026. The hand chosen under Settings ("Thumb moves me", left by default) moves
+// the person: forward and back swipes step a metre along the gaze, left and right swipes turn 30°;
+// each move is a short glide, not a cut, and nothing is drawn or armed first. The other hand's
+// gestures are logged and shown, nothing more, until the right hand has a job.
+// A spoken message to the laptop: recorded with the clip recorder but kept out
+// of the annotations, posted as audio, transcribed by the server, shown on the
+// chat panel. While one records, clips stand down (no voice start, no pinch).
+let messaging = null, msgQuiet = 0;
+const MSG_STOP_MS = 1500, MSG_MIN_MS = 700;
+function onChat(m) {
+  if (m.session && m.session !== log.session) return;          // for another page
+  const i = chatPanel.messages.findIndex((x) => x.id === m.id);
+  if (i >= 0) chatPanel.messages[i] = { ...chatPanel.messages[i], ...m }; else chatPanel.messages.push(m);
+  if (chatPanel.messages.length > 40) chatPanel.messages.splice(0, chatPanel.messages.length - 40);
+  if (m.role === 'operator') { log('chat:received', { id: m.id }); setStatus('message from the laptop', { hold: 2500 }); }
+}
+async function beginMessage() {
+  if (messaging || recorder.isRecording || starting) return;
+  messaging = { startedAt: performance.now() }; msgQuiet = 0;
+  try { await recorder.start(); } catch (e) { messaging = null; setStatus('mic blocked: ' + e.message, { hold: 3000 }); return; }
+  if (!messaging) { recorder.stop(); return; }                 // ended before the mic was ready
+  messaging.startedAt = performance.now();
+  recStatusBase = 'listening to you…'; recSecs = -1;
+  setStatus('listening to you…');
+  log('chat:listen');
+}
+async function endMessage() {
+  if (!messaging) return;
+  const started = messaging.startedAt; messaging = null;
+  const clip = await recorder.stop();
+  if (!clip) { setStatus('nothing heard', { hold: 2000 }); return; }
+  const local = { id: 'local-' + Date.now(), role: 'visitor', text: '', status: 'pending', mine: true };
+  chatPanel.messages.push(local);
+  setStatus('sent', { hold: 1500 });
+  try {
+    const row = await chatApi.sendAudio(project.id, clip.blob, { session: log.session });
+    Object.assign(local, row, { mine: true });
+    log('chat:sent', { id: row.id, ms: clip.durationMs });
+  } catch (e) { local.status = 'failed'; setStatus('message not sent: ' + e.message, { hold: 3000 }); }
+}
+const toggleMessage = () => (messaging ? endMessage() : beginMessage());
+function updateMessage(now) {
+  if (!messaging || !recorder.isRecording || !levelNode) return;
+  const lvl = measureLevel();
+  if (lvl < VOICE_STOP) { if (!msgQuiet) msgQuiet = now; else if (now - msgQuiet > MSG_STOP_MS && now - messaging.startedAt > MSG_MIN_MS) endMessage(); }
+  else msgQuiet = 0;
+}
+function aimChat(source) {
+  if (!chatPanel.mesh.visible) return false;
+  aimRay(source);
+  return raycaster.intersectObject(chatPanel.mesh, false).length > 0;
+}
+
+const STEP_M = 1.0, TURN_DEG = 30, GLIDE_MS = 220;
+let glide = null;
+const _head = new THREE.Vector3(), _fwd = new THREE.Vector3(), _probe = new THREE.Vector3();
+function headWorld() {
+  const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
+  cam.getWorldPosition(_head); cam.getWorldDirection(_fwd); _fwd.y = 0;
+  if (_fwd.lengthSq() < 1e-6) _fwd.set(0, 0, -1);
+  _fwd.normalize();
+}
+function startGlide(toPos, toRotY) { glide = { fromPos: rig.position.clone(), toPos, fromRot: rig.rotation.y, toRot: toRotY, t0: performance.now() }; }
+function updateGlide() {
+  if (!glide) return;
+  const k = Math.min(1, (performance.now() - glide.t0) / GLIDE_MS), e = k * (2 - k);   // ease out
+  rig.position.lerpVectors(glide.fromPos, glide.toPos, e);
+  rig.rotation.y = glide.fromRot + (glide.toRot - glide.fromRot) * e;
+  if (k >= 1) glide = null;
+}
+/** One step along the gaze (sign +1 forward, -1 back), shortened by whatever is in the way, landing on the floor there. */
+function stepRig(sign) {
+  if (glide) return;
+  headWorld();
+  const dir = _fwd.clone().multiplyScalar(sign);
+  let dist = STEP_M;
+  const targets = collidables();
+  if (targets.length) {
+    walkRay.set(_probe.set(_head.x, rig.position.y + 1.0, _head.z), dir); walkRay.far = STEP_M + BODY_RADIUS;   // at hip height, from where the person stands
+    const hit = walkRay.intersectObjects(targets, true).find((h) => h.object.type !== 'GridHelper');
+    if (hit) dist = Math.max(0, hit.distance - BODY_RADIUS);
+  }
+  if (dist < 0.05) { setStatus('something in the way', { hold: 1000 }); log('move', { kind: 'step', by: 0, blocked: true }); return; }
+  const to = rig.position.clone().addScaledVector(dir, dist);
+  const floor = floorBelow(_probe.set(_head.x + dir.x * dist, rig.position.y + EYE_HEIGHT, _head.z + dir.z * dist));
+  if (floor !== null) to.y = floor;
+  startGlide(to, rig.rotation.y);
+  log('move', { kind: 'step', by: +(sign * dist).toFixed(2) });
+}
+/** Turn in place: the rig rotates about the vertical axis through the head, so the person pivots where they stand. */
+function turnRig(deg) {
+  if (glide) return;
+  headWorld();
+  const a = THREE.MathUtils.degToRad(deg), c = Math.cos(a), s = Math.sin(a);
+  const dx = rig.position.x - _head.x, dz = rig.position.z - _head.z;
+  const to = new THREE.Vector3(_head.x + dx * c + dz * s, rig.position.y, _head.z - dx * s + dz * c);
+  startGlide(to, rig.rotation.y + a);
+  log('move', { kind: 'turn', by: deg });
+}
+function onMicrogesture(hand, gesture) {
+  log('input:microgesture', { hand, gesture });
+  const which = hud.locoHand.value;
+  if (which === 'off' || (which !== 'both' && which !== hand)) { setStatus(`${hand} hand: ${gesture}`, { hold: 1200 }); return; }
+  if (gesture === 'swipe-forward') stepRig(1);
+  else if (gesture === 'swipe-backward') stepRig(-1);
+  else if (gesture === 'swipe-left') turnRig(TURN_DEG);
+  else if (gesture === 'swipe-right') turnRig(-TURN_DEG);
+  else setStatus(`${hand} hand: ${gesture}`, { hold: 1200 });
+}
 const MICRO = { 5: 'swipe-left', 6: 'swipe-right', 7: 'swipe-forward', 8: 'swipe-backward', 9: 'tap-thumb' };
 const microDown = { left: new Set(), right: new Set() };
 function pollMicrogestures() {
@@ -1297,7 +1464,7 @@ function pollMicrogestures() {
     const down = microDown[src.handedness]; if (!down) continue;
     src.gamepad.buttons.forEach((b, i) => {
       if (!MICRO[i]) return;
-      if (b.pressed && !down.has(i)) { down.add(i); log('input:microgesture', { hand: src.handedness, gesture: MICRO[i] }); setStatus(`${src.handedness} hand: ${MICRO[i]}`, { hold: 1500 }); }
+      if (b.pressed && !down.has(i)) { down.add(i); onMicrogesture(src.handedness, MICRO[i]); }
       else if (!b.pressed && down.has(i)) down.delete(i);
     });
   }
@@ -1316,6 +1483,7 @@ const VOICE_START = 0.1, VOICE_START_MS = 250, VOICE_STOP = 0.06, VOICE_STOP_MS 
 let voiceAbove = 0, voiceQuiet = 0, voiceArmed = true;   // armed: a quiet moment has passed since the last clip, so speech may start a new one
 function voiceStart(now) {
   if (!renderer.xr.isPresenting || !handsPresent() || !hud.voiceStart.checked || !levelNode) return;
+  if (messaging) { voiceAbove = 0; return; }                                                 // talking to the laptop is not a clip
   if ('speechSynthesis' in window && speechSynthesis.speaking) { voiceAbove = 0; return; }   // the Ask voice is not the visitor
   if (playingId && !recorder.isRecording) { voiceAbove = 0; return; }                        // nor is a clip being listened to
   const lvl = measureLevel();
@@ -1399,6 +1567,7 @@ const net = connect({
     if (focusId && markers.has(focusId)) { focusMarker(focusId); if (assetsReady) focusId = null; }   // opened from the review page: stand in front of that clip (again once the assets have framed the view)
   },
   onNew: (a) => a.project === project?.id && addMarker(a),
+  onChat,
   onControl: (c) => {                 // an operator at a laptop (POST /api/projects/:id/control) steering this page; see the README
     if (c.session && c.session !== log.session) return;
     const a = c.args || {};
@@ -1461,7 +1630,8 @@ if (import.meta.env.DEV) window.__glossy = {
   get pending() { return pendingMarkers.size; },
   get interview() { return { on: hud.interview.checked, index: qIndex, question: currentQuestion()?.text || null, total: questions().length }; },
   autoFit, frameAll, applyTransform, aimPoint, aimMarker, floorBelow, spawnInside, focusMarker, play, endRecording,
-  ghost, xrHands, get handsPresent() { return handsPresent(); }, log,
+  ghost, xrHands, get handsPresent() { return handsPresent(); }, log, microgesture: onMicrogesture,
+  chat: { begin: beginMessage, end: endMessage, toggle: toggleMessage, get listening() { return !!messaging; }, get messages() { return chatPanel.messages; }, panel: chatPanel },
 };
 
 // ---- boot ------------------------------------------------------------------
@@ -1530,12 +1700,15 @@ renderer.setAnimationLoop(() => {
   }
   setNear(bestId);
   voiceStart(performance.now());
+  updateMessage(performance.now());
+  if (renderer.xr.isPresenting) { let h = false; for (const c of xrControllers) if (aimChat(c)) { h = true; break; } chatPanel.hot = h; }
   if (ghost.visible) ghost.update(performance.now() - playStartedAt);
 
   // once a second while presenting or recording: frame rate, hand tracking coverage, microphone level
   stats.frame(); stats.level(recorder.isRecording ? level : levelNode ? measureLevel() : 0);   // the room's level is only kept while recording; the log wants it whenever the microphone is open
   for (const [side, key] of [['l', 'left'], ['r', 'right']]) { const h = xrHands[key]; stats.hand(side, !!h, !!h?.joints?.wrist?.visible); }
   pollMicrogestures();
+  updateGlide();
   if (stats.due) { const line = stats.take(); if (renderer.xr.isPresenting || recorder.isRecording) log('stats', { presenting: renderer.xr.isPresenting, recording: recorder.isRecording, ...line }); }
 
   renderer.render(scene, camera);

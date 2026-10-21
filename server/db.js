@@ -61,6 +61,17 @@ export function openDb(dataDir) {
       data        TEXT                     -- JSON
     );
     CREATE INDEX IF NOT EXISTS events_session ON events(project_id, session, id);
+    CREATE TABLE IF NOT EXISTS chat (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      session     TEXT,                    -- the page it is for or from; NULL = everyone on the project
+      role        TEXT NOT NULL,           -- 'operator' (laptop) | 'visitor' (headset)
+      text        TEXT,                    -- the message, or the transcript once it exists
+      audio_url   TEXT,
+      status      TEXT NOT NULL,           -- done | pending | failed
+      created     TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS chat_project ON chat(project_id, id);
   `);
   // columns added after the first release
   const addCols = (table, defs) => {
@@ -124,6 +135,10 @@ export function openDb(dataDir) {
     updateAsset: db.prepare(`UPDATE assets SET name = ?, transform = ?, options = ?, visible = ?, sort = ? WHERE id = ? AND project_id = ?`),
     deleteAsset: db.prepare(`DELETE FROM assets WHERE id = ? AND project_id = ?`),
     countAssets: db.prepare(`SELECT COUNT(*) AS n FROM assets WHERE project_id = ?`),
+    insertChat: db.prepare(`INSERT INTO chat (project_id, session, role, text, audio_url, status, created) VALUES (?, ?, ?, ?, ?, ?, ?)`),
+    getChat: db.prepare(`SELECT * FROM chat WHERE id = ?`),
+    listChat: db.prepare(`SELECT * FROM chat WHERE project_id = ? AND id > ? ORDER BY id LIMIT ?`),
+    setChatText: db.prepare(`UPDATE chat SET text = ?, status = ? WHERE id = ?`),
     insertEvent: db.prepare(`INSERT INTO events (project_id, session, t, at, received, kind, data) VALUES (?, ?, ?, ?, ?, ?, ?)`),
     listEvents: db.prepare(`SELECT * FROM events WHERE project_id = ? AND (? IS NULL OR session = ?) AND id > ? ORDER BY id LIMIT ?`),
     listSessions: db.prepare(`
@@ -240,6 +255,16 @@ export function openDb(dataDir) {
       },
     },
     // Session log: what the clients did, as events (shared/events in the README). Append-only; cascades with the project.
+    /** Operator chat: text from the laptop, spoken messages from the headset (transcribed like clips). */
+    chat: {
+      add: (projectId, { session = null, role, text = '', audioUrl = null, status = 'done' }) => {
+        const r = q.insertChat.run(projectId, session, role, text, audioUrl, status, now());
+        return api.chat.get(r.lastInsertRowid);
+      },
+      get: (id) => { const r = q.getChat.get(id); return r ? { id: r.id, project: r.project_id, session: r.session, role: r.role, text: r.text, audioUrl: r.audio_url, status: r.status, created: r.created } : null; },
+      list: (projectId, { after = 0, limit = 100 } = {}) => q.listChat.all(projectId, after, limit).map((r) => api.chat.get(r.id)),
+      setText: (id, { text, status }) => { q.setChatText.run(text, status, id); return api.chat.get(id); },
+    },
     events: {
       add: (projectId, session, events) => {
         const received = now();

@@ -11,7 +11,9 @@
 //   xr:start / xr:end  {}
 //   input:connected    { kind: 'controller' | 'hand', handedness, profiles }
 //   input:disconnected { kind, handedness }
-//   input:microgesture { hand, gesture: 'swipe-left' | 'swipe-right' | 'swipe-forward' | 'swipe-backward' | 'tap-thumb' }   observed only, for now
+//   input:microgesture { hand, gesture: 'swipe-left' | 'swipe-right' | 'swipe-forward' | 'swipe-backward' | 'tap-thumb' }
+//   move               { kind: 'step' | 'turn', by, blocked? }   a thumb-swipe step (metres) or turn (degrees)
+//   chat:listen / chat:sent { id, ms } / chat:received { id }   the spoken conversation with the laptop (text lives in the chat table, not here)
 //   mic:ready          { via?: 'first clip' | 'reacquired' }   mic:error { error }   mic:ended { recording }
 //   record:start       { source: 'trigger' | 'pinch' | 'voice' | 'mouse' | 'key' | 'reply', question, layer }
 //   record:blocked     { reason: 'no name' | 'no consent' | 'mic' | 'no project' }
@@ -42,8 +44,8 @@ export function createSessionLog({ fetchImpl = fetch } = {}) {
   /** Send what is queued. Resolves when everything queued at the time of the call has been sent (or dropped). */
   async function flush({ beacon = false } = {}) {
     clearTimeout(timer); timer = null;
+    while (sending) await sending;                           // a batch in flight (and any it chains) lands first; a caller's flush() resolves only when nothing is in the air
     if (!projectId || !queue.length) return;
-    if (sending) { await sending; return flush({ beacon }); }   // a batch is in flight: send the rest after it, never silently skip it
     const events = queue.splice(0, FLUSH_AT * 4);
     const body = JSON.stringify({ session, events });
     const url = `/api/projects/${projectId}/events`;
