@@ -11,7 +11,8 @@
 //   xr:start / xr:end  {}
 //   input:connected    { kind: 'controller' | 'hand', handedness, profiles }
 //   input:disconnected { kind, handedness }
-//   input:microgesture { hand, gesture: 'swipe-left' | 'swipe-right' | 'swipe-forward' | 'swipe-backward' | 'tap-thumb' }
+//   input:thumb        { hand, intent: 'push' | 'brake', along, ms, off, source: 'ours' }   a thumb slide the room read from the tracked joints
+//   input:microgesture { hand, gesture: 'swipe-left' | 'swipe-right' | 'swipe-forward' | 'swipe-backward' | 'tap-thumb', intent, thumb }   the headset's label, with what the thumb did
 //   move               { kind: 'step' | 'turn', by, blocked? }   a thumb-swipe step (metres) or turn (degrees)
 //   chat:listen / chat:sent { id, ms } / chat:received { id }   the spoken conversation with the laptop (text lives in the chat table, not here)
 //   mic:ready          { via?: 'first clip' | 'reacquired' }   mic:error { error }   mic:ended { recording }

@@ -266,6 +266,7 @@ test('the wrist microphone: raise it to the mouth and a clip starts on what you 
   await page.waitForFunction(() => window.__glossy.renderer.xr.isPresenting, null, { timeout: 15_000 });
   await expect.poll(() => page.evaluate(() => window.__glossy.handsPresent), { timeout: 10_000 }).toBe(true);
   await expect.poll(() => page.evaluate(() => window.__glossy.wristMic.group.visible)).toBe(true);
+  await page.evaluate(() => { window.__xr.hands.left.position.set(-0.3, 1.0, 0.4); });   // the left hand hangs by the side to begin with
   // the fake microphone is already talking, yet nothing records: voice start stands down in this mode
   await page.waitForTimeout(1500);
   expect(await page.evaluate(() => window.__glossy.recorder.isRecording)).toBe(false);
@@ -276,8 +277,10 @@ test('the wrist microphone: raise it to the mouth and a clip starts on what you 
   await page.evaluate(() => window.__xr.hands.right.updatePinchValue(0));
   // look at the pot, raise the left hand to the mouth
   await page.evaluate(() => { const d = window.__xr; d.position.set(0, 1.6, 0.6); const a = Math.atan2(0, 1.8), p = -0.35; d.quaternion.set(Math.sin(p / 2), 0, 0, Math.cos(p / 2)); });
+  const before = await page.evaluate(() => [window.__glossy.rig.position.x, window.__glossy.rig.position.z]);
   await page.evaluate(() => { const h = window.__xr.hands.left; h.position.set(-0.03, 1.5, 0.52); });
   await expect.poll(() => status(page), { timeout: 5000 }).toMatch(/talking about pot/);
+  expect(await page.evaluate(() => [window.__glossy.rig.position.x, window.__glossy.rig.position.z])).toEqual(before);   // raising the hand is not a thumb slide: nobody moved
   await expect.poll(() => page.evaluate(() => window.__glossy.recorder.isRecording)).toBe(true);
   await page.waitForTimeout(1500);
   // lower it: saved, anchored on the pot, source mic

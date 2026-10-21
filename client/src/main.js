@@ -69,7 +69,7 @@ const hud = {
   assetList: $('assetList'), assetFile: $('assetFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), edmLink: $('edmLink'), annList: $('annList'),
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
-  walk: $('walk'), autoplay: $('autoplay'), voiceStart: $('voiceStart'), locoHand: $('locoHand'), locoMode: $('locoMode'), recordMode: $('recordMode'), ghostStyle: $('ghostStyle'), ghostTrail: $('ghostTrail'), reviewLink: $('reviewLink'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
+  walk: $('walk'), autoplay: $('autoplay'), voiceStart: $('voiceStart'), locoHand: $('locoHand'), locoMode: $('locoMode'), recordMode: $('recordMode'), thumbSource: $('thumbSource'), ghostStyle: $('ghostStyle'), ghostTrail: $('ghostTrail'), reviewLink: $('reviewLink'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
   interview: $('interview'), visitorLink: $('visitorLink'), question: $('question'), level: $('level'), levelBar: $('levelBar'), hint: $('hint'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
 };
 const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
@@ -98,6 +98,8 @@ hud.voiceStart.checked = ls.get('glossy.voiceStart', '1') === '1';
 hud.voiceStart.addEventListener('change', () => ls.set('glossy.voiceStart', hud.voiceStart.checked ? '1' : '0'));
 hud.locoHand.value = ls.get('glossy.locoHand', 'both');
 hud.recordMode.value = ls.get('glossy.recordMode', 'mic');
+hud.thumbSource.value = ls.get('glossy.thumbSource', 'ours');
+hud.thumbSource.addEventListener('change', () => { ls.set('glossy.thumbSource', hud.thumbSource.value); log('setting', { thumbSource: hud.thumbSource.value }); });
 hud.recordMode.addEventListener('change', () => { ls.set('glossy.recordMode', hud.recordMode.value); log('setting', { recordMode: hud.recordMode.value }); });
 const recordMode = () => hud.recordMode.value;   // mic | pinch | voice (hands in a headset; controllers and the desktop keep their own ways)
 hud.locoMode.value = ls.get('glossy.locoMode', 'scooter');
@@ -1434,14 +1436,14 @@ const wristMic = (() => {
   live.position.y = 0.045; live.visible = false;
   g.add(body, head, live);
   scene.add(g);
-  return { group: g, live, near: 0, far: 0 };
+  return { group: g, live, near: 0, far: 0, armed: false };   // armed: the microphone has been away from the mouth since the hand appeared, so a hand that shows up near the face does not record by itself
 })();
 const _mouth = new THREE.Vector3(), _micPos = new THREE.Vector3(), _wq = new THREE.Quaternion();
 function updateWristMic(now) {
   const h = xrHands.left, wrist = h?.joints?.wrist;
   const on = renderer.xr.isPresenting && recordMode() === 'mic' && wrist && wrist.visible;
   wristMic.group.visible = !!on;
-  if (!on) { if (recOpts.via === 'mic' && recorder.isRecording) { releaseAt = now; endRecording('release'); } wristMic.near = wristMic.far = 0; return; }
+  if (!on) { if (recOpts.via === 'mic' && recorder.isRecording) { releaseAt = now; endRecording('release'); } wristMic.near = wristMic.far = 0; wristMic.armed = false; return; }
   // sit on the inside of the wrist, pointing along the forearm away from the hand
   wrist.getWorldPosition(_micPos); wrist.getWorldQuaternion(_wq);
   wristMic.group.position.copy(_micPos).add(_probe.set(0, -0.02, 0.03).applyQuaternion(_wq));
@@ -1453,8 +1455,9 @@ function updateWristMic(now) {
   _mouth.copy(cam.position).applyQuaternion(rig.quaternion).add(rig.position);
   _mouth.add(_probe.set(0, -0.09, -0.06).applyQuaternion(cam.quaternion).applyQuaternion(rig.quaternion));
   const d = _micPos.distanceTo(_mouth);
+  if (d > MIC_OFF_M) wristMic.armed = true;
   if (!recorder.isRecording && !starting) {
-    if (d < MIC_ON_M) { if (!wristMic.near) wristMic.near = now; else if (now - wristMic.near > MIC_DWELL_MS) { wristMic.near = 0; const aim = aimPoint(camera); beginRecording(camera, { via: 'mic', anchor: aim }); setStatus(aim.objectId ? `talking about ${aim.objectId}…` : 'talking…'); } }
+    if (d < MIC_ON_M && wristMic.armed) { if (!wristMic.near) wristMic.near = now; else if (now - wristMic.near > MIC_DWELL_MS) { wristMic.near = 0; const aim = aimPoint(camera); beginRecording(camera, { via: 'mic', anchor: aim }); setStatus(aim.objectId ? `talking about ${aim.objectId}…` : 'talking…'); } }
     else wristMic.near = 0;
   } else if (recOpts.via === 'mic') {
     if (d > MIC_OFF_M) { if (!wristMic.far) wristMic.far = now; else if (now - wristMic.far > MIC_DWELL_MS) { wristMic.far = 0; releaseAt = now; endRecording('release'); } }
@@ -1562,9 +1565,13 @@ function updateCruise(dt) {
   const floor = floorBelow(_probe.set(_head.x + _vel.x, rig.position.y + EYE_HEIGHT, _head.z + _vel.z));
   if (floor !== null) rig.position.y += (floor - rig.position.y) * Math.min(1, dt * 10);
 }
-function onMicrogesture(hand, gesture) {
+function onMicrogesture(hand, gesture, injected = false) {
   const intent = THUMB[hand]?.[gesture] || gesture;
-  log('input:microgesture', { hand, gesture, intent });
+  log('input:microgesture', { hand, gesture, intent, thumb: thumbSummary(hand, performance.now()) });
+  if (hud.thumbSource.value !== 'meta' && !injected) return;   // the headset's labels are logged for comparison; the room's own reading drives
+  onThumbIntent(hand, intent, injected ? 'injected' : 'meta');
+}
+function onThumbIntent(hand, intent, source) {
   const which = hud.locoHand.value;
   if (which === 'off' || (which !== 'both' && which !== hand)) { setStatus(`${hand} thumb: ${intent}`, { hold: 1200 }); return; }
   if (hud.locoMode.value === 'scooter') {
@@ -1589,9 +1596,59 @@ const THUMB = {
   right: { 'swipe-left': 'push', 'swipe-right': 'brake', 'swipe-forward': 'turn-right', 'swipe-backward': 'turn-left', 'tap-thumb': 'brake' },
 };
 const microDown = { left: new Set(), right: new Set() };
+// What the thumb actually did: for each hand, the thumb tip in the index finger's frame, sampled every
+// frame and kept for 400 ms, attached to each reported gesture. `along` is metres along the index
+// finger from its proximal joint toward the tip (positive = toward the tip), `off` the distance from
+// that axis. Logged so a worn session shows which motions the recogniser turned into which labels.
+const thumbTrail = { left: [], right: [] };
+const thumbSeen = { left: 0, right: 0 };               // when the hand's joints last became visible: a hand that just (re)appeared is not read for 300 ms
+const THUMB_SETTLE_MS = 300, THUMB_JUMP_M = 0.03;      // and a jump of 3 cm between frames is a tracking glitch, not a thumb
+const _ia = new THREE.Vector3(), _ib = new THREE.Vector3(), _tt = new THREE.Vector3(), _ax = new THREE.Vector3();
+function sampleThumb(now) {
+  for (const side of ['left', 'right']) {
+    const j = xrHands[side]?.joints; const buf = thumbTrail[side];
+    if (!j || !j['thumb-tip']?.visible || !j['index-finger-tip']?.visible || !j['index-finger-phalanx-proximal']?.visible) { buf.length = 0; thumbSeen[side] = 0; continue; }
+    if (!thumbSeen[side]) thumbSeen[side] = now;
+    if (now - thumbSeen[side] < THUMB_SETTLE_MS) { buf.length = 0; continue; }
+    j['index-finger-phalanx-proximal'].getWorldPosition(_ia); j['index-finger-tip'].getWorldPosition(_ib); j['thumb-tip'].getWorldPosition(_tt);
+    _ax.copy(_ib).sub(_ia); const len = _ax.length() || 1; _ax.divideScalar(len);
+    _tt.sub(_ia); const along = _tt.dot(_ax); const off = Math.sqrt(Math.max(0, _tt.lengthSq() - along * along));
+    if (buf.length && Math.abs(along - buf[buf.length - 1][1]) > THUMB_JUMP_M) { buf.length = 0; thumbSeen[side] = now; continue; }   // a glitch: start over
+    buf.push([now, along, off]);
+    while (buf.length && now - buf[0][0] > 400) buf.shift();
+  }
+}
+// Our own detector (21 Oct): Meta's recogniser fired on about one slide in four of Ainsley's, and the
+// slides it did label matched the along-axis sign, so the geometry is enough. A slide is the thumb tip
+// moving along the index finger by SLIDE_M within SLIDE_MS while staying within SLIDE_OFF_M of the
+// finger's axis; toward the tip = push, toward the knuckle = brake. One event per slide (SLIDE_GAP_MS).
+const SLIDE_M = 0.018, SLIDE_MS = 320, SLIDE_OFF_M = 0.045, SLIDE_GAP_MS = 350;
+const slideState = { left: { lastAt: 0 }, right: { lastAt: 0 } };
+function detectSlides(now) {
+  for (const side of ['left', 'right']) {
+    const buf = thumbTrail[side], st = slideState[side];
+    if (buf.length < 3 || now - st.lastAt < SLIDE_GAP_MS) continue;
+    const last = buf[buf.length - 1];
+    if (last[2] > SLIDE_OFF_M) continue;
+    let i = buf.length - 1; while (i > 0 && last[0] - buf[i - 1][0] <= SLIDE_MS) i--;   // the oldest sample within the window
+    const d = last[1] - buf[i][1];
+    if (Math.abs(d) < SLIDE_M) continue;
+    st.lastAt = now;
+    const intent = d > 0 ? 'push' : 'brake';
+    log('input:thumb', { hand: side, intent, along: +d.toFixed(3), ms: Math.round(last[0] - buf[i][0]), off: +last[2].toFixed(3), source: 'ours' });
+    if (hud.thumbSource.value === 'ours') onThumbIntent(side, intent, 'ours');
+  }
+}
+function thumbSummary(side, now) {
+  const buf = thumbTrail[side]; if (buf.length < 2) return undefined;
+  const a0 = buf[0][1], a1 = buf[buf.length - 1][1];
+  return { ms: Math.round(now - buf[0][0]), along: +(a1 - a0).toFixed(3), from: +a0.toFixed(3), off: +(buf.reduce((m, s) => m + s[2], 0) / buf.length).toFixed(3), pts: buf.filter((_, i) => i % 3 === 0).map((s) => [Math.round(s[0] - buf[0][0]), +s[1].toFixed(3), +s[2].toFixed(3)]) };
+}
 const queuedMicro = [];
 function pollMicrogestures() {
-  while (queuedMicro.length) { const [h, g] = queuedMicro.shift(); onMicrogesture(h, g); }   // from the dev handle, handled inside the frame like the real ones
+  const now = performance.now();
+  sampleThumb(now); detectSlides(now);
+  while (queuedMicro.length) { const [h, g] = queuedMicro.shift(); onMicrogesture(h, g, true); }   // from the dev handle, handled inside the frame like the real ones
   const session = renderer.xr.getSession(); if (!session) return;
   for (const src of session.inputSources) {
     if (!src.hand || !src.gamepad) continue;
@@ -1848,7 +1905,7 @@ renderer.setAnimationLoop(() => {
   updateGlide();
   updateCruise(dt);
   updateWristMic(performance.now());
-  if (stats.due) { const line = stats.take(); if (renderer.xr.isPresenting || recorder.isRecording) log('stats', { presenting: renderer.xr.isPresenting, recording: recorder.isRecording, ...line }); }
+  if (stats.due) { const line = stats.take(); if (renderer.xr.isPresenting || recorder.isRecording) log('stats', { presenting: renderer.xr.isPresenting, recording: recorder.isRecording, ...line, thumb: thumbTrail.left.length ? thumbTrail.left.filter((_, i) => i % 3 === 0).map((s) => [Math.round(s[1] * 1000), Math.round(s[2] * 1000)]) : undefined }); }   // thumb: the left thumb tip along / off the index finger, mm, ~7 Hz, while a hand is seen
 
   renderer.render(scene, camera);
 });

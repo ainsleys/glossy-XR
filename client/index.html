@@ -168,6 +168,11 @@
           <option value="right">right hand</option>
           <option value="off">off</option>
         </select>
+        <label for="thumbSource" title="Where thumb swipes come from. Ours: the room watches the tracked thumb slide along the index finger (fires on every slide, tested on recorded motions). Headset: Meta's microgesture labels. Both are logged either way.">Thumb read by</label>
+        <select id="thumbSource">
+          <option value="ours">the room (tracked joints)</option>
+          <option value="meta">the headset (microgestures)</option>
+        </select>
         <label for="locoMode" title="Steps: each forward swipe is one metre along the gaze. Vehicle: a forward swipe starts you moving where you look and keeps you moving, turning with your head; swipe back to slow, stop, reverse.">Moving</label>
         <select id="locoMode">
           <option value="scooter">scooter: swipes push you where you look</option>
