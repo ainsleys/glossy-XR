@@ -231,16 +231,16 @@ test('a thumb swiped along the index finger steps and turns the person, on the c
   const drift = Math.hypot(d1.x - d0.x, d1.z - d0.z);
   expect(((d1.x - d0.x) * hc.dx + (d1.z - d0.z) * hc.dz) / (drift * Math.hypot(hc.dx, hc.dz))).toBeGreaterThan(0.99);
   await page.evaluate(() => { window.__xr.quaternion.set(0, 0, 0, 1); });
-  // a left swipe does nothing in scooter mode; a back swipe brakes
+  // across the finger turns at once in scooter mode too; a second swipe the same way within 700 ms tops it up to 45°
   const r0 = await pose();
   await page.evaluate((g) => window.__glossy.microgesture('left', g), L.turnLeft);
-  await page.waitForTimeout(900);                                                                  // one swipe: nothing (the arming window passes)
-  expect((await pose()).rot).toBe(r0.rot);
+  await page.waitForTimeout(900);                                                                  // one swipe: 30°
+  expect((await pose()).rot - r0.rot).toBeCloseTo(30, 0);
   await page.evaluate((g) => window.__glossy.microgesture('left', g), L.turnLeft);
   await page.waitForTimeout(150);
   await page.evaluate((g) => window.__glossy.microgesture('left', g), L.turnLeft);
   await page.waitForTimeout(400);
-  expect((await pose()).rot - r0.rot).toBeCloseTo(45, 0);                                         // two within 700 ms: a 45° turn
+  expect((await pose()).rot - r0.rot).toBeCloseTo(75, 0);                                         // 30 + (30 + 15): the pair makes 45°
   await page.evaluate((g) => window.__glossy.microgesture('left', g), L.brake);   // brake
   await page.waitForTimeout(100);
   const c3 = await pose();
@@ -254,8 +254,8 @@ test('a thumb swiped along the index finger steps and turns the person, on the c
   expect(events.filter((e) => e.kind === 'input:microgesture')).toHaveLength(10);
   const moves = events.filter((e) => e.kind === 'move').map((e) => [e.data.kind, e.data.by]);
   expect(moves.slice(0, 3)).toEqual([['step', 1], ['turn', 30], ['step', -1]]);
-  expect(moves.slice(3).map((m) => m[0])).toEqual(['push', 'push', 'turn', 'push']);
-  expect(moves[3][1]).toBe(1.2); expect(moves[4][1]).toBeGreaterThanOrEqual(1.2); expect(moves[5][1]).toBe(45); expect(moves[6][1]).toBe(0);
+  expect(moves.slice(3).map((m) => m[0])).toEqual(['push', 'push', 'turn', 'turn', 'turn', 'push']);
+  expect(moves[3][1]).toBe(1.2); expect(moves[4][1]).toBeGreaterThanOrEqual(1.2); expect(moves.slice(5, 8).map((m) => m[1])).toEqual([30, 30, 15]); expect(moves[8][1]).toBe(0);
 });
 
 test('the wrist microphone: raise it to the mouth and a clip starts on what you were looking at; lower it and the clip is saved; the pinch no longer records', async ({ page, request }) => {

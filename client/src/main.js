@@ -1428,7 +1428,7 @@ function aimChat(source) {
 // microphone sits on the inside of the left wrist. Raise it to your mouth and a clip starts, anchored
 // to what you were looking at as you raised it, and the panel says so; lower it and the clip is saved.
 // Deliberate, visible, and it ends the pinch's double life.
-const MIC_ON_M = 0.19, MIC_OFF_M = 0.28, MIC_NEAR_M = 0.38, MIC_DWELL_MS = 150;   // measured from the palm (index metacarpal): in Ainsley's recording the wrist never came within 23 cm of the mouth while the hand did; NEAR shows a 'closer…' hint
+const MIC_ON_M = 0.19, MIC_OFF_M = 0.28, MIC_NEAR_M = 0.38, MIC_DWELL_MS = 150, MIC_RELEASE_MS = 400, MIC_LOST_MS = 1500;   // measured from the palm (index metacarpal): in Ainsley's recording the wrist never came within 23 cm of the mouth while the hand did; NEAR shows a 'closer…' hint
 const wristMic = (() => {
   const g = new THREE.Group(); g.name = 'wrist-mic'; g.visible = false;
   const body = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.013, 0.07, 12), new THREE.MeshStandardMaterial({ color: 0x2b2f36, roughness: 0.5, metalness: 0.3 }));
@@ -1445,7 +1445,17 @@ function updateWristMic(now) {
   const h = xrHands.left, wrist = h?.joints?.wrist;
   const on = renderer.xr.isPresenting && recordMode() === 'mic' && wrist && wrist.visible;
   wristMic.group.visible = !!on;
-  if (!on) { if (recOpts.via === 'mic' && recorder.isRecording) { releaseAt = now; endRecording('release'); } wristMic.near = wristMic.far = 0; wristMic.armed = false; return; }
+  if (!on) {
+    // The hand vanishes for a moment at the mouth (Quest 3S, 21 Oct: a 204 ms clip, hands lost at 16 cm).
+    // A live recording rides that out; it ends only if the hand stays gone.
+    if (recOpts.via === 'mic' && recorder.isRecording) {
+      if (!wristMic.lost) wristMic.lost = now;
+      else if (now - wristMic.lost > MIC_LOST_MS) { wristMic.lost = 0; releaseAt = now; endRecording('release'); }
+      return;
+    }
+    wristMic.near = wristMic.far = wristMic.lost = 0; wristMic.armed = false; return;
+  }
+  wristMic.lost = 0;
   // drawn on the inside of the wrist; the trigger is measured from the palm, which is what people bring to the mouth
   wrist.getWorldPosition(_micPos); wrist.getWorldQuaternion(_wq);
   const palm = h.joints['index-finger-metacarpal'];
@@ -1465,7 +1475,7 @@ function updateWristMic(now) {
     if (d < MIC_ON_M && wristMic.armed) { if (!wristMic.near) wristMic.near = now; else if (now - wristMic.near > MIC_DWELL_MS) { wristMic.near = 0; const aim = aimPoint(camera); beginRecording(camera, { via: 'mic', anchor: aim }); setStatus(aim.objectId ? `talking about ${aim.objectId}…` : 'talking…'); } }
     else wristMic.near = 0;
   } else if (recOpts.via === 'mic') {
-    if (d > MIC_OFF_M) { if (!wristMic.far) wristMic.far = now; else if (now - wristMic.far > MIC_DWELL_MS) { wristMic.far = 0; releaseAt = now; endRecording('release'); } }
+    if (d > MIC_OFF_M) { if (!wristMic.far) wristMic.far = now; else if (now - wristMic.far > MIC_RELEASE_MS) { wristMic.far = 0; releaseAt = now; endRecording('release'); } }
     else wristMic.far = 0;
   }
 }
@@ -1572,19 +1582,27 @@ function turnRig(deg) {
 // misreport, so a single stray left or right no longer spins anyone.
 const TURN2_DEG = 45, TURN2_MS = 700;
 let armedTurn = null;                                   // { gesture, at }
-function doubleSwipeTurn(intent) {
+function acrossTurn(intent) {
+  // One swipe across the finger turns 30° at once. A second one the same way within TURN2_MS tops it up
+  // to 45°. (Until 21 Oct a single swipe only armed and waited for a second; Ainsley's swipes come 2–5 s
+  // apart on the Quest 3S, so nine turn intents produced one turn: "I still seem to be unable to turn".)
   const now = performance.now();
-  if (armedTurn && armedTurn.gesture === intent && now - armedTurn.at < TURN2_MS) { armedTurn = null; turnRig(intent === 'turn-left' ? TURN2_DEG : -TURN2_DEG); return; }
+  const sign = intent === 'turn-left' ? 1 : -1;
+  if (armedTurn && armedTurn.gesture === intent && now - armedTurn.at < TURN2_MS) { armedTurn = null; turnRig(sign * (TURN2_DEG - TURN_DEG)); return; }
   armedTurn = { gesture: intent, at: now };
-  setStatus(`across again to ${intent === 'turn-left' ? 'turn left' : 'turn right'}`, { hold: TURN2_MS });
+  turnRig(sign * TURN_DEG);
 }
 const PUSH = 1.2, PUSH_MAX = 2.0, PUSH_TAU = 1.5;      // m/s per swipe, cap, decay time constant
 let push = 0;                                           // current speed, m/s
 const _pushDir = new THREE.Vector3(0, 0, -1);
+const BACKUP_REST_MS = 800;                             // a brake backs you up only once you have been still this long
+let stoppedAt = 0;
 function kick(dir) {
-  if (dir > 0) { headWorld(); _pushDir.copy(_fwd); push = Math.min(PUSH_MAX, Math.max(0, push) + PUSH); }
-  else if (Math.abs(push) > 0.05) push = 0;               // moving: brake
-  else { headWorld(); _pushDir.copy(_fwd); push = -0.8; }  // at rest: back up a little, the way you are facing (Ainsley, 21 Oct: "I should be able to back up")
+  const now = performance.now();
+  if (dir > 0) { headWorld(); _pushDir.copy(_fwd); push = Math.min(PUSH_MAX, Math.max(0, push) + PUSH); stoppedAt = 0; }
+  else if (Math.abs(push) > 0.05) { push = 0; stoppedAt = now; }   // moving: brake
+  else if (stoppedAt && now - stoppedAt < BACKUP_REST_MS) { log('input:ignored', { intent: 'brake', reason: 'just stopped', afterMs: Math.round(now - stoppedAt) }); return; }   // the recogniser fires brakes in bursts (21 Oct: five in 1.5 s); a burst stops you, it does not bounce you back
+  else { headWorld(); _pushDir.copy(_fwd); push = -0.8; stoppedAt = 0; }  // at rest: back up a little, the way you are facing (Ainsley, 21 Oct: "I should be able to back up")
   log('move', { kind: 'push', by: +push.toFixed(2), dir: [+_pushDir.x.toFixed(2), +_pushDir.z.toFixed(2)] });
 }
 const _vel = new THREE.Vector3();
@@ -1611,13 +1629,23 @@ function onMicrogesture(hand, gesture, injected = false) {
   if (hud.thumbSource.value !== 'meta' && !injected) return;   // the headset's labels are logged for comparison; the room's own reading drives
   onThumbIntent(hand, intent, injected ? 'injected' : 'meta');
 }
+const OPPOSITE = { push: 'brake', brake: 'push', 'turn-left': 'turn-right', 'turn-right': 'turn-left' };
+const RETURN_MS = 900;                                  // a stroke's way back, read by the recogniser as the opposite swipe
+let lastIntent = null;                                  // { hand, intent, at }
 function onThumbIntent(hand, intent, source) {
   const which = hud.locoHand.value;
   if (which === 'off' || (which !== 'both' && which !== hand)) { setStatus(`${hand} thumb: ${intent}`, { hold: 1200 }); return; }
+  // Ainsley slides out slowly and snaps back fast; the headset reports the snap as the opposite swipe
+  // (21 Oct, Quest 3S: push 11:36:09, brake 11:36:10, and so on). The way back is not a command.
+  const now = performance.now();
+  if (source !== 'ours' && lastIntent && lastIntent.hand === hand && OPPOSITE[lastIntent.intent] === intent && now - lastIntent.at < RETURN_MS) {
+    log('input:ignored', { hand, intent, reason: 'return stroke', afterMs: Math.round(now - lastIntent.at) }); return;
+  }
+  lastIntent = { hand, intent, at: now };
   if (hud.locoMode.value === 'scooter') {
     if (intent === 'push') kick(1);
     else if (intent === 'brake') kick(-1);
-    else if (intent === 'turn-left' || intent === 'turn-right') doubleSwipeTurn(intent);
+    else if (intent === 'turn-left' || intent === 'turn-right') acrossTurn(intent);
     return;
   }
   if (intent === 'push') stepRig(1);
@@ -1644,6 +1672,7 @@ const thumbTrail = { left: [], right: [] };
 const thumbSeen = { left: 0, right: 0 };               // when the hand's joints last became visible: a hand that just (re)appeared is not read for 300 ms
 const THUMB_SETTLE_MS = 300, THUMB_JUMP_M = 0.03;      // and a jump of 3 cm between frames is a tracking glitch, not a thumb
 const _ia = new THREE.Vector3(), _ib = new THREE.Vector3(), _tt = new THREE.Vector3(), _ax = new THREE.Vector3();
+const _pk = new THREE.Vector3(), _pn = new THREE.Vector3();   // pinky direction, palm normal (sampleThumb)
 function sampleThumb(now) {
   for (const side of ['left', 'right']) {
     const j = xrHands[side]?.joints; const buf = thumbTrail[side];
@@ -1653,8 +1682,13 @@ function sampleThumb(now) {
     j['index-finger-phalanx-proximal'].getWorldPosition(_ia); j['index-finger-tip'].getWorldPosition(_ib); j['thumb-tip'].getWorldPosition(_tt);
     _ax.copy(_ib).sub(_ia); const len = _ax.length() || 1; _ax.divideScalar(len);
     _tt.sub(_ia); const along = _tt.dot(_ax); const off = Math.sqrt(Math.max(0, _tt.lengthSq() - along * along));
+    // across: the thumb's offset normal to the palm plane (finger axis × pinky direction), so a swipe
+    // over the finger and a swipe along it can be told apart in the log (21 Oct: "it gets confused
+    // between turning and going forward"). Positive = out of the back of the hand.
+    let across = 0;
+    if (j['pinky-finger-metacarpal']?.visible) { j['pinky-finger-metacarpal'].getWorldPosition(_pk); _pk.sub(_ia); _pn.crossVectors(_ax, _pk).normalize(); across = _tt.dot(_pn); }
     if (buf.length && Math.abs(along - buf[buf.length - 1][1]) > THUMB_JUMP_M) { buf.length = 0; thumbSeen[side] = now; slide[side].reset(); continue; }   // a glitch: start over
-    buf.push([now, along, off]);
+    buf.push([now, along, off, across]);
     while (buf.length && now - buf[0][0] > 1100) buf.shift();   // a little over a second: the stats line takes the last second
   }
 }
@@ -1699,7 +1733,7 @@ function detectSlides(now) {
 function thumbSummary(side, now) {
   const buf = thumbTrail[side]; if (buf.length < 2) return undefined;
   const a0 = buf[0][1], a1 = buf[buf.length - 1][1];
-  return { ms: Math.round(now - buf[0][0]), along: +(a1 - a0).toFixed(3), from: +a0.toFixed(3), off: +(buf.reduce((m, s) => m + s[2], 0) / buf.length).toFixed(3), pts: buf.filter((_, i) => i % 3 === 0).map((s) => [Math.round(s[0] - buf[0][0]), +s[1].toFixed(3), +s[2].toFixed(3)]) };
+  return { ms: Math.round(now - buf[0][0]), along: +(a1 - a0).toFixed(3), across: +((buf[buf.length - 1][3] || 0) - (buf[0][3] || 0)).toFixed(3), from: +a0.toFixed(3), off: +(buf.reduce((m, s) => m + s[2], 0) / buf.length).toFixed(3), pts: buf.filter((_, i) => i % 3 === 0).map((s) => [Math.round(s[0] - buf[0][0]), +s[1].toFixed(3), +s[2].toFixed(3)]) };
 }
 const queuedMicro = [];
 function pollMicrogestures() {

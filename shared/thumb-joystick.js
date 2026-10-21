@@ -18,31 +18,37 @@ export const EXC_M = 0.022, HOME_M = 0.011, OFF_MAX = 0.10, STILL_V = 0.035, DWE
 // point that merely follows the thumb can settle at either end, and the same stroke reads as tip one
 // time and knuckle the next (seen on the 21 Oct recording when the off-axis limit was changed).
 export class ThumbJoystick {
-  constructor() { this.reset(); }
+  /** @param {{excM?:number, homeM?:number, offMax?:number, stillV?:number, dwellMs?:number, resetMs?:number, alongDeg?:number}} [opts] */
+  constructor(opts = {}) {
+    this.excM = opts.excM ?? EXC_M; this.homeM = opts.homeM ?? HOME_M; this.offMax = opts.offMax ?? OFF_MAX;
+    this.stillV = opts.stillV ?? STILL_V; this.dwellMs = opts.dwellMs ?? DWELL_MS; this.resetMs = opts.resetMs ?? RESET_MS;
+    this.alongDeg = opts.alongDeg ?? 45;                                   // half-angle of the tip/knuckle sectors
+    this.reset();
+  }
   reset() { this.rest = null; this.away = false; this.peak = null; this.lastT = 0; this.last = null; this.stillSince = 0; }
   /** @returns {{dir: 'tip'|'knuckle'|'across+'|'across-', size: number, angle: number} | null} once per excursion */
   sample(now, along, across, off) {
-    if (off > OFF_MAX || !Number.isFinite(along) || !Number.isFinite(across)) return null;   // too far from the finger: skip the sample, keep the state
-    if (this.lastT && now - this.lastT > RESET_MS) this.reset();
+    if (off > this.offMax || !Number.isFinite(along) || !Number.isFinite(across)) return null;   // too far from the finger: skip the sample, keep the state
+    if (this.lastT && now - this.lastT > this.resetMs) this.reset();
     this.lastT = now;
     const prev = this.last; this.last = [now, along, across];
     const v = prev ? Math.hypot(along - prev[1], across - prev[2]) / Math.max(1e-3, (now - prev[0]) / 1000) : 0;
-    if (v < STILL_V) { if (!this.stillSince) this.stillSince = now; } else this.stillSince = 0;
-    const dwelling = this.stillSince && now - this.stillSince >= DWELL_MS;
+    if (v < this.stillV) { if (!this.stillSince) this.stillSince = now; } else this.stillSince = 0;
+    const dwelling = this.stillSince && now - this.stillSince >= this.dwellMs;
     if (!this.rest) { if (dwelling) this.rest = [along, across]; return null; }   // the first rest is the first dwell
     const dx = along - this.rest[0], dy = across - this.rest[1], m = Math.hypot(dx, dy);
-    if (dwelling && m >= HOME_M) { this.rest = [along, across]; this.away = false; return null; }   // dwelling somewhere else: that is the new rest, no event
+    if (dwelling && m >= this.homeM) { this.rest = [along, across]; this.away = false; return null; }   // dwelling somewhere else: that is the new rest, no event
     if (!this.away) {
-      if (m >= EXC_M) {
+      if (m >= this.excM) {
         this.away = true; this.peak = { m, dx, dy };
         const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
-        const dir = Math.abs(angle) <= 45 ? 'tip' : Math.abs(angle) >= 135 ? 'knuckle' : angle > 0 ? 'across+' : 'across-';
+        const dir = Math.abs(angle) <= this.alongDeg ? 'tip' : Math.abs(angle) >= 180 - this.alongDeg ? 'knuckle' : angle > 0 ? 'across+' : 'across-';
         return { dir, size: m, angle };
       }
       return null;
     }
     if (m > this.peak.m) this.peak = { m, dx, dy };
-    if (m < HOME_M) this.away = false;                                    // home again: re-armed
+    if (m < this.homeM) this.away = false;                                    // home again: re-armed
     return null;
   }
 }
