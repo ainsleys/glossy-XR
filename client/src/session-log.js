@@ -15,7 +15,7 @@
 //   move               { kind: 'step' | 'turn', by, blocked? }   a thumb-swipe step (metres) or turn (degrees)
 //   chat:listen / chat:sent { id, ms } / chat:received { id }   the spoken conversation with the laptop (text lives in the chat table, not here)
 //   mic:ready          { via?: 'first clip' | 'reacquired' }   mic:error { error }   mic:ended { recording }
-//   record:start       { source: 'trigger' | 'pinch' | 'voice' | 'mouse' | 'key' | 'reply', question, layer }
+//   record:start       { source: 'trigger' | 'pinch' | 'voice' | 'mic' | 'mouse' | 'key' | 'reply', question, layer }   mic = the wrist microphone
 //   record:blocked     { reason: 'no name' | 'no consent' | 'mic' | 'no project' }
 //   record:end         { reason: 'release' | 'voice-pause' | 'project-changed' | 'track-ended', durationMs, hands }
 //   record:saved       { id, durationMs, placementMs, quiet, objectId, hands }

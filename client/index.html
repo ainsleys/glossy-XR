@@ -173,6 +173,12 @@
           <option value="scooter">scooter: swipes push you where you look</option>
           <option value="steps">one step per swipe</option>
         </select>
+        <label for="recordMode" title="Hands in a headset. Microphone: a small microphone sits on your left wrist; raise it to your mouth to record, lower it to save; the clip lands on what you were looking at when you raised it. Pinch: pinch and hold to record. Speak: talking starts a clip.">Recording</label>
+        <select id="recordMode">
+          <option value="mic">wrist microphone</option>
+          <option value="pinch">pinch and hold</option>
+          <option value="voice">speak to start</option>
+        </select>
         <div class="row" style="margin-top:4px"><input type="checkbox" id="voiceStart" checked /><label for="voiceStart" style="margin:0" title="Headset with hand tracking and no controller: speaking starts a clip anchored where you look, a pause of about a second ends it. Off: pinch and hold to record.">Start a clip when I speak (hands, headset)</label></div>
       </details>
 

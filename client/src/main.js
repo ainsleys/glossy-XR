@@ -69,7 +69,7 @@ const hud = {
   assetList: $('assetList'), assetFile: $('assetFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), edmLink: $('edmLink'), annList: $('annList'),
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
-  walk: $('walk'), autoplay: $('autoplay'), voiceStart: $('voiceStart'), locoHand: $('locoHand'), locoMode: $('locoMode'), ghostStyle: $('ghostStyle'), ghostTrail: $('ghostTrail'), reviewLink: $('reviewLink'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
+  walk: $('walk'), autoplay: $('autoplay'), voiceStart: $('voiceStart'), locoHand: $('locoHand'), locoMode: $('locoMode'), recordMode: $('recordMode'), ghostStyle: $('ghostStyle'), ghostTrail: $('ghostTrail'), reviewLink: $('reviewLink'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
   interview: $('interview'), visitorLink: $('visitorLink'), question: $('question'), level: $('level'), levelBar: $('levelBar'), hint: $('hint'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
 };
 const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
@@ -97,6 +97,9 @@ hud.autoplay.checked = ls.get('glossy.autoplay', '0') === '1';
 hud.voiceStart.checked = ls.get('glossy.voiceStart', '1') === '1';
 hud.voiceStart.addEventListener('change', () => ls.set('glossy.voiceStart', hud.voiceStart.checked ? '1' : '0'));
 hud.locoHand.value = ls.get('glossy.locoHand', 'both');
+hud.recordMode.value = ls.get('glossy.recordMode', 'mic');
+hud.recordMode.addEventListener('change', () => { ls.set('glossy.recordMode', hud.recordMode.value); log('setting', { recordMode: hud.recordMode.value }); });
+const recordMode = () => hud.recordMode.value;   // mic | pinch | voice (hands in a headset; controllers and the desktop keep their own ways)
 hud.locoMode.value = ls.get('glossy.locoMode', 'scooter');
 if (hud.locoMode.value === 'vehicle') hud.locoMode.value = 'scooter';   // the 21 Oct morning's name
 hud.locoMode.addEventListener('change', () => { ls.set('glossy.locoMode', hud.locoMode.value); push = 0; log('setting', { locoMode: hud.locoMode.value }); });
@@ -243,8 +246,8 @@ function updateXrPanel() {
   const qs = questions(), q = currentQuestion();
   const question = q ? `${qIndex + 1}/${qs.length} · ${q.text}` : qs.length && qIndex >= qs.length ? 'all questions answered' : '';
   const hands = handsPresent();
-  const act = hands ? (hud.voiceStart.checked ? 'pinch, or just speak, to answer' : 'pinch and hold to answer') : 'hold the trigger to answer';
-  let hint = q ? (VISITOR && !hands ? 'squeeze: hear the question · ' + act : act) : hands && hud.voiceStart.checked ? 'speak to leave a clip where you look · pinch to hold one' : '';
+  const act = hands ? (recordMode() === 'mic' ? 'raise the microphone on your left wrist to answer' : recordMode() === 'voice' && hud.voiceStart.checked ? 'pinch, or just speak, to answer' : 'pinch and hold to answer') : 'hold the trigger to answer';
+  let hint = q ? (VISITOR && !hands ? 'squeeze: hear the question · ' + act : act) : hands ? (recordMode() === 'mic' ? 'look at a thing, raise the microphone on your left wrist, talk, lower it' : recordMode() === 'voice' && hud.voiceStart.checked ? 'speak to leave a clip where you look · pinch to hold one' : 'pinch and hold to leave a clip where you look') : '';
   if (micState !== 'ready' && !recorder.isRecording) hint = micState === 'blocked' ? 'microphone blocked: leave VR and allow it in the browser' : micState === 'ended' ? 'microphone stopped while the headset slept: pinch, or speak, to open it again' : 'microphone not yet allowed: tick consent on the page before entering VR';
   xrPanel.draw(question, hud.status.textContent, hint, hud.rec.classList.contains('on'), level);
 }
@@ -1167,7 +1170,7 @@ async function beginRecording(source, opts = {}) {
   hud.rec.classList.add('on'); crosshair.classList.add('rec');
   const q = currentQuestion();
   recPeak = 0;
-  recStatusBase = opts.parent ? 'recording a reply…' : q ? `recording answer ${qIndex + 1}…` : VISITOR ? 'recording…' : 'recording… (' + hud.layer.value + ')';
+  recStatusBase = opts.parent ? 'recording a reply…' : opts.via === 'mic' ? (opts.anchor?.objectId ? `talking about ${opts.anchor.objectId}…` : 'talking…') : q ? `recording answer ${qIndex + 1}…` : VISITOR ? 'recording…' : 'recording… (' + hud.layer.value + ')';
   recSecs = -1;
   setStatus(recStatusBase + ' 0s');
   if (releasedEarly) endRecording();  // the first press on a cold mic: honour the release that already happened
@@ -1214,7 +1217,7 @@ async function endRecording(reason = 'release') {
   const parentRec = opts.parent ? markers.get(opts.parent)?.record : null;
   const { point: anchor, objectId } = parentRec
     ? { point: new THREE.Vector3(parentRec.anchor.x, parentRec.anchor.y, parentRec.anchor.z), objectId: parentRec.anchor.objectId }
-    : aimPoint(anchorSource);
+    : opts.anchor || aimPoint(anchorSource);                // the wrist microphone fixes the anchor when it is raised, not where the eyes end up
   const provisional = placeProvisional(anchor);
   anchorSource = null; saving = true;                        // from here the clip is ending on purpose: the loop's "track ended" check and voice start both stand down until it is saved
   const samples = poseStop();
@@ -1327,7 +1330,7 @@ for (let i = 0; i < 2; i++) {
     if (aimChat(ctrl)) return toggleMessage();              // a pinch on the chat panel talks to the laptop
     if (xrHands.left === ctrl || ctrl.userData.handedness === 'left') return toggleMessage();   // hands: the left pinch talks, anywhere; the right pinch selects or records (Ainsley, 21 Oct: aiming at the box was hard)
     const hit = aimMarker(ctrl);
-    if (hit) play(hit); else beginRecording(ctrl);
+    if (hit) play(hit); else if (!handsPresent() || recordMode() === 'pinch') beginRecording(ctrl);   // with hands, the pinch records only when that is the chosen way
   });
   ctrl.addEventListener('connected', (e) => { ctrl.userData.handedness = e.data?.handedness; });
   ctrl.addEventListener('selectend', () => releaseRecording(ctrl));
@@ -1417,6 +1420,48 @@ function aimChat(source) {
   return raycaster.intersectObject(chatPanel.mesh, false).length > 0;
 }
 
+// The wrist microphone (Ainsley, 21 Oct: chosen over arm-then-talk and touch-the-thing). A small
+// microphone sits on the inside of the left wrist. Raise it to your mouth and a clip starts, anchored
+// to what you were looking at as you raised it, and the panel says so; lower it and the clip is saved.
+// Deliberate, visible, and it ends the pinch's double life.
+const MIC_ON_M = 0.14, MIC_OFF_M = 0.24, MIC_DWELL_MS = 150;
+const wristMic = (() => {
+  const g = new THREE.Group(); g.name = 'wrist-mic'; g.visible = false;
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.013, 0.07, 12), new THREE.MeshStandardMaterial({ color: 0x2b2f36, roughness: 0.5, metalness: 0.3 }));
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.018, 14, 10), new THREE.MeshStandardMaterial({ color: 0x9aa3ad, roughness: 0.9, metalness: 0.1 }));
+  head.position.y = 0.045;
+  const live = new THREE.Mesh(new THREE.TorusGeometry(0.024, 0.003, 8, 24), new THREE.MeshBasicMaterial({ color: 0xff4d4d }));
+  live.position.y = 0.045; live.visible = false;
+  g.add(body, head, live);
+  scene.add(g);
+  return { group: g, live, near: 0, far: 0 };
+})();
+const _mouth = new THREE.Vector3(), _micPos = new THREE.Vector3(), _wq = new THREE.Quaternion();
+function updateWristMic(now) {
+  const h = xrHands.left, wrist = h?.joints?.wrist;
+  const on = renderer.xr.isPresenting && recordMode() === 'mic' && wrist && wrist.visible;
+  wristMic.group.visible = !!on;
+  if (!on) { if (recOpts.via === 'mic' && recorder.isRecording) { releaseAt = now; endRecording('release'); } wristMic.near = wristMic.far = 0; return; }
+  // sit on the inside of the wrist, pointing along the forearm away from the hand
+  wrist.getWorldPosition(_micPos); wrist.getWorldQuaternion(_wq);
+  wristMic.group.position.copy(_micPos).add(_probe.set(0, -0.02, 0.03).applyQuaternion(_wq));
+  wristMic.group.quaternion.copy(_wq);
+  wristMic.group.rotateX(Math.PI / 2);
+  wristMic.live.visible = recorder.isRecording && recOpts.via === 'mic';
+  // the mouth: a little below and in front of the head
+  const cam = renderer.xr.getCamera();
+  _mouth.copy(cam.position).applyQuaternion(rig.quaternion).add(rig.position);
+  _mouth.add(_probe.set(0, -0.09, -0.06).applyQuaternion(cam.quaternion).applyQuaternion(rig.quaternion));
+  const d = _micPos.distanceTo(_mouth);
+  if (!recorder.isRecording && !starting) {
+    if (d < MIC_ON_M) { if (!wristMic.near) wristMic.near = now; else if (now - wristMic.near > MIC_DWELL_MS) { wristMic.near = 0; const aim = aimPoint(camera); beginRecording(camera, { via: 'mic', anchor: aim }); setStatus(aim.objectId ? `talking about ${aim.objectId}…` : 'talking…'); } }
+    else wristMic.near = 0;
+  } else if (recOpts.via === 'mic') {
+    if (d > MIC_OFF_M) { if (!wristMic.far) wristMic.far = now; else if (now - wristMic.far > MIC_DWELL_MS) { wristMic.far = 0; releaseAt = now; endRecording('release'); } }
+    else wristMic.far = 0;
+  }
+}
+
 const STEP_M = 1.0, TURN_DEG = 30, GLIDE_MS = 220;
 let glide = null;
 const _head = new THREE.Vector3(), _fwd = new THREE.Vector3(), _probe = new THREE.Vector3();
@@ -1484,25 +1529,26 @@ function turnRig(deg) {
 // misreport, so a single stray left or right no longer spins anyone.
 const TURN2_DEG = 45, TURN2_MS = 700;
 let armedTurn = null;                                   // { gesture, at }
-function doubleSwipeTurn(gesture) {
+function doubleSwipeTurn(intent) {
   const now = performance.now();
-  if (armedTurn && armedTurn.gesture === gesture && now - armedTurn.at < TURN2_MS) { armedTurn = null; turnRig(gesture === 'swipe-left' ? TURN2_DEG : -TURN2_DEG); return; }
-  armedTurn = { gesture, at: now };
-  setStatus(`swipe ${gesture === 'swipe-left' ? 'left' : 'right'} again to turn`, { hold: TURN2_MS });
+  if (armedTurn && armedTurn.gesture === intent && now - armedTurn.at < TURN2_MS) { armedTurn = null; turnRig(intent === 'turn-left' ? TURN2_DEG : -TURN2_DEG); return; }
+  armedTurn = { gesture: intent, at: now };
+  setStatus(`across again to ${intent === 'turn-left' ? 'turn left' : 'turn right'}`, { hold: TURN2_MS });
 }
 const PUSH = 1.2, PUSH_MAX = 2.0, PUSH_TAU = 1.5;      // m/s per swipe, cap, decay time constant
 let push = 0;                                           // current speed, m/s
 const _pushDir = new THREE.Vector3(0, 0, -1);
 function kick(dir) {
-  if (dir > 0) { headWorld(); _pushDir.copy(_fwd); push = Math.min(PUSH_MAX, push + PUSH); }
-  else push = 0;                                          // brake
-  log('move', { kind: 'push', by: +push.toFixed(2), dir: dir > 0 ? [+_pushDir.x.toFixed(2), +_pushDir.z.toFixed(2)] : undefined });
+  if (dir > 0) { headWorld(); _pushDir.copy(_fwd); push = Math.min(PUSH_MAX, Math.max(0, push) + PUSH); }
+  else if (Math.abs(push) > 0.05) push = 0;               // moving: brake
+  else { headWorld(); _pushDir.copy(_fwd); push = -0.8; }  // at rest: back up a little, the way you are facing (Ainsley, 21 Oct: "I should be able to back up")
+  log('move', { kind: 'push', by: +push.toFixed(2), dir: [+_pushDir.x.toFixed(2), +_pushDir.z.toFixed(2)] });
 }
 const _vel = new THREE.Vector3();
 function updateCruise(dt) {
   if (!push || !renderer.xr.isPresenting) return;
   push *= Math.exp(-dt / PUSH_TAU);
-  if (push < 0.03) { push = 0; return; }
+  if (Math.abs(push) < 0.03) { push = 0; return; }
   headWorld();
   const v = push;
   _vel.copy(_pushDir).multiplyScalar(v * dt);
@@ -1517,22 +1563,31 @@ function updateCruise(dt) {
   if (floor !== null) rig.position.y += (floor - rig.position.y) * Math.min(1, dt * 10);
 }
 function onMicrogesture(hand, gesture) {
-  log('input:microgesture', { hand, gesture });
+  const intent = THUMB[hand]?.[gesture] || gesture;
+  log('input:microgesture', { hand, gesture, intent });
   const which = hud.locoHand.value;
-  if (which === 'off' || (which !== 'both' && which !== hand)) { setStatus(`${hand} hand: ${gesture}`, { hold: 1200 }); return; }
+  if (which === 'off' || (which !== 'both' && which !== hand)) { setStatus(`${hand} thumb: ${intent}`, { hold: 1200 }); return; }
   if (hud.locoMode.value === 'scooter') {
-    if (gesture === 'swipe-forward') kick(1);
-    else if (gesture === 'swipe-backward' || gesture === 'tap-thumb') kick(-1);
-    else if (gesture === 'swipe-left' || gesture === 'swipe-right') doubleSwipeTurn(gesture);
+    if (intent === 'push') kick(1);
+    else if (intent === 'brake') kick(-1);
+    else if (intent === 'turn-left' || intent === 'turn-right') doubleSwipeTurn(intent);
     return;
   }
-  if (gesture === 'swipe-forward') stepRig(1);
-  else if (gesture === 'swipe-backward') stepRig(-1);
-  else if (gesture === 'swipe-left') turnRig(TURN_DEG);
-  else if (gesture === 'swipe-right') turnRig(-TURN_DEG);
-  else setStatus(`${hand} hand: ${gesture}`, { hold: 1200 });
+  if (intent === 'push') stepRig(1);
+  else if (intent === 'brake') stepRig(-1);
+  else if (intent === 'turn-left') turnRig(TURN_DEG);
+  else if (intent === 'turn-right') turnRig(-TURN_DEG);
 }
 const MICRO = { 5: 'swipe-left', 6: 'swipe-right', 7: 'swipe-forward', 8: 'swipe-backward', 9: 'tap-thumb' };
+// What the labels mean on the hand (Meta's definition, confirmed on Ainsley's left hand 21 Oct): on the
+// LEFT hand, thumb sliding along the index finger toward the fingertip = swipe-right, toward the knuckle
+// = swipe-left; mirrored on the right hand. forward / backward are swipes ACROSS the finger. The room
+// works in intents so both hands feel the same: push = along, to the tip; brake = along, to the knuckle
+// (or a tap); turn-right / turn-left = across the finger, away from / toward the palm.
+const THUMB = {
+  left: { 'swipe-right': 'push', 'swipe-left': 'brake', 'swipe-forward': 'turn-right', 'swipe-backward': 'turn-left', 'tap-thumb': 'brake' },
+  right: { 'swipe-left': 'push', 'swipe-right': 'brake', 'swipe-forward': 'turn-right', 'swipe-backward': 'turn-left', 'tap-thumb': 'brake' },
+};
 const microDown = { left: new Set(), right: new Set() };
 const queuedMicro = [];
 function pollMicrogestures() {
@@ -1562,6 +1617,7 @@ const VOICE_START = 0.1, VOICE_START_MS = 250, VOICE_STOP = 0.06, VOICE_STOP_MS 
 let voiceAbove = 0, voiceQuiet = 0, voiceArmed = true;   // armed: a quiet moment has passed since the last clip, so speech may start a new one
 function voiceStart(now) {
   if (!renderer.xr.isPresenting || !handsPresent() || !hud.voiceStart.checked || !levelNode) return;
+  if (recordMode() !== 'voice') return;                                                       // the wrist microphone or the pinch is the arming now
   if (messaging) { voiceAbove = 0; return; }                                                 // talking to the laptop is not a clip
   if ('speechSynthesis' in window && speechSynthesis.speaking) { voiceAbove = 0; return; }   // the Ask voice is not the visitor
   if (playingId && !recorder.isRecording) { voiceAbove = 0; return; }                        // nor is a clip being listened to
@@ -1711,6 +1767,7 @@ if (import.meta.env.DEV) window.__glossy = {
   autoFit, frameAll, applyTransform, aimPoint, aimMarker, floorBelow, spawnInside, focusMarker, play, endRecording,
   ghost, xrHands, get handsPresent() { return handsPresent(); }, log, microgesture: (hand, gesture) => queuedMicro.push([hand, gesture]),
   chat: { begin: beginMessage, end: endMessage, toggle: toggleMessage, get listening() { return !!messaging; }, get messages() { return chatPanel.messages; }, panel: chatPanel },
+  wristMic,
   debugHead() { headWorld(); const xr = renderer.xr.getCamera(); const d1 = new THREE.Vector3(); xr.getWorldDirection(d1); const d2 = new THREE.Vector3(); camera.getWorldDirection(d2); const d3 = new THREE.Vector3(); camera.updateWorldMatrix(true, false); camera.getWorldDirection(d3); return { fwd: [+_fwd.x.toFixed(3), +_fwd.z.toFixed(3)], xrCam: [+d1.x.toFixed(3), +d1.z.toFixed(3)], userCam: [+d2.x.toFixed(3), +d2.z.toFixed(3)], userCamUpdated: [+d3.x.toFixed(3), +d3.z.toFixed(3)], rigYaw: +((rig.rotation.y * 180) / Math.PI).toFixed(1), xrParent: xr.parent?.type || null, camParent: camera.parent?.type || null }; },
 };
 
@@ -1790,6 +1847,7 @@ renderer.setAnimationLoop(() => {
   pollMicrogestures();
   updateGlide();
   updateCruise(dt);
+  updateWristMic(performance.now());
   if (stats.due) { const line = stats.take(); if (renderer.xr.isPresenting || recorder.isRecording) log('stats', { presenting: renderer.xr.isPresenting, recording: recorder.isRecording, ...line }); }
 
   renderer.render(scene, camera);

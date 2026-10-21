@@ -84,7 +84,7 @@ test('a visitor in the headset sees the question and squeeze reads it aloud', as
 test('with hands tracked, speaking starts a clip, the gesture is stored and replays as ghost hands', async ({ page, request }) => {
   const project = await openProject(page, request, 'xr-hands');
   await prepareRecording(page, 'HandTester');
-  await page.evaluate(() => { window.__xr.primaryInputMode = 'hand'; });   // hands, no controllers
+  await page.evaluate(() => { window.__xr.primaryInputMode = 'hand'; document.querySelector('#recordMode').value = 'voice'; });   // hands, no controllers; this test is about speaking to start
   const btn = page.locator('#VRButton');
   await expect(btn).toHaveText(/ENTER VR/i);
   await btn.click();
@@ -170,6 +170,9 @@ test('with hands tracked, speaking starts a clip, the gesture is stored and repl
   expect(sessions[0].events).toBe(events.length);
 });
 
+// Meta's labels on the LEFT hand: along the finger to the tip = swipe-right (our push), to the knuckle = swipe-left (brake),
+// across the finger = swipe-forward / swipe-backward (turn right / turn left). The test speaks the labels the headset sends.
+const L = { push: 'swipe-right', brake: 'swipe-left', turnLeft: 'swipe-backward', turnRight: 'swipe-forward' };
 test('a thumb swiped along the index finger steps and turns the person, on the chosen hand only', async ({ page, request }) => {
   await openProject(page, request, 'xr-thumb');
   await prepareRecording(page, 'Walker');
@@ -181,7 +184,7 @@ test('a thumb swiped along the index finger steps and turns the person, on the c
   const head = () => page.evaluate(() => { const c = window.__glossy.renderer.xr.getCamera(); const p = new (c.position.constructor)(); c.getWorldPosition(p); const d = new (c.position.constructor)(); c.getWorldDirection(d); return { x: p.x, z: p.z, dx: d.x, dz: d.z }; });
   const p0 = await pose(), h0 = await head();
   // the emulated hands report no microgestures; the room exposes the handler the poller calls
-  await page.evaluate(() => window.__glossy.microgesture('left', 'swipe-forward'));
+  await page.evaluate((g) => window.__glossy.microgesture('left', g), L.push);
   await page.waitForTimeout(400);
   const p1 = await pose();
   const moved = Math.hypot(p1.x - p0.x, p1.z - p0.z);
@@ -191,26 +194,26 @@ test('a thumb swiped along the index finger steps and turns the person, on the c
   expect(p1.rot).toBe(p0.rot);
   // a left swipe turns left by 30°, pivoting where the head is: the head stays put
   const hBefore = await head();
-  await page.evaluate(() => window.__glossy.microgesture('left', 'swipe-left'));
+  await page.evaluate((g) => window.__glossy.microgesture('left', g), L.turnLeft);
   await page.waitForTimeout(400);
   const p2 = await pose(), hAfter = await head();
   expect(p2.rot - p1.rot).toBeCloseTo(30, 0);
   expect(Math.hypot(hAfter.x - hBefore.x, hAfter.z - hBefore.z)).toBeLessThan(0.02);
   // a back swipe returns along the new gaze; the right hand does nothing while the setting says left
-  await page.evaluate(() => window.__glossy.microgesture('left', 'swipe-backward'));
+  await page.evaluate((g) => window.__glossy.microgesture('left', g), L.brake);
   await page.waitForTimeout(400);
   const p3 = await pose(), h3 = await head();
   const back = Math.hypot(p3.x - p2.x, p3.z - p2.z);
   expect(back).toBeGreaterThan(0.9);
   expect(((p3.x - p2.x) * h3.dx + (p3.z - p2.z) * h3.dz) / (back * Math.hypot(h3.dx, h3.dz))).toBeLessThan(-0.99);   // straight back along the turned gaze, handled inside the frame
-  await page.evaluate(() => window.__glossy.microgesture('right', 'swipe-forward'));
+  await page.evaluate(() => window.__glossy.microgesture('right', 'swipe-left'));
   await page.waitForTimeout(400);
   expect(await pose()).toEqual(p3);
-  await expect.poll(() => status(page)).toMatch(/right hand: swipe-forward/);
+  await expect.poll(() => status(page)).toMatch(/right thumb: push/);
   // scooter mode: a forward swipe is a push along the gaze that fades out; a back swipe brakes
   await page.evaluate(() => { const s = document.querySelector('#locoMode'); s.value = 'scooter'; s.dispatchEvent(new Event('change')); });
   const c0 = await pose(), hc = await head();
-  await page.evaluate(() => window.__glossy.microgesture('left', 'swipe-forward'));
+  await page.evaluate((g) => window.__glossy.microgesture('left', g), L.push);
   await page.waitForTimeout(600);
   const c1 = await pose();
   await page.waitForTimeout(4000);
@@ -219,7 +222,7 @@ test('a thumb swiped along the index finger steps and turns the person, on the c
   expect(went).toBeGreaterThan(0.4); expect(total).toBeGreaterThan(1.3); expect(total).toBeLessThan(2.1);   // one push carries about 1.8 m and has faded by four seconds
   expect(((c1.x - c0.x) * hc.dx + (c1.z - c0.z) * hc.dz) / (went * Math.hypot(hc.dx, hc.dz))).toBeGreaterThan(0.99);   // along the gaze at the push, after the turn
   // between pushes the head does not steer: turn the emulated head 90° and the course holds
-  await page.evaluate(() => window.__glossy.microgesture('left', 'swipe-forward'));
+  await page.evaluate((g) => window.__glossy.microgesture('left', g), L.push);
   await page.waitForTimeout(200);
   const d0 = await pose();
   await page.evaluate(() => { const s = Math.sin(Math.PI / 4), c = Math.cos(Math.PI / 4); window.__xr.quaternion.set(0, s, 0, c); });
@@ -230,15 +233,15 @@ test('a thumb swiped along the index finger steps and turns the person, on the c
   await page.evaluate(() => { window.__xr.quaternion.set(0, 0, 0, 1); });
   // a left swipe does nothing in scooter mode; a back swipe brakes
   const r0 = await pose();
-  await page.evaluate(() => window.__glossy.microgesture('left', 'swipe-left'));
+  await page.evaluate((g) => window.__glossy.microgesture('left', g), L.turnLeft);
   await page.waitForTimeout(900);                                                                  // one swipe: nothing (the arming window passes)
   expect((await pose()).rot).toBe(r0.rot);
-  await page.evaluate(() => window.__glossy.microgesture('left', 'swipe-left'));
+  await page.evaluate((g) => window.__glossy.microgesture('left', g), L.turnLeft);
   await page.waitForTimeout(150);
-  await page.evaluate(() => window.__glossy.microgesture('left', 'swipe-left'));
+  await page.evaluate((g) => window.__glossy.microgesture('left', g), L.turnLeft);
   await page.waitForTimeout(400);
   expect((await pose()).rot - r0.rot).toBeCloseTo(45, 0);                                         // two within 700 ms: a 45° turn
-  await page.evaluate(() => window.__glossy.microgesture('left', 'swipe-backward'));   // brake
+  await page.evaluate((g) => window.__glossy.microgesture('left', g), L.brake);   // brake
   await page.waitForTimeout(100);
   const c3 = await pose();
   await page.waitForTimeout(500);
@@ -253,4 +256,38 @@ test('a thumb swiped along the index finger steps and turns the person, on the c
   expect(moves.slice(0, 3)).toEqual([['step', 1], ['turn', 30], ['step', -1]]);
   expect(moves.slice(3).map((m) => m[0])).toEqual(['push', 'push', 'turn', 'push']);
   expect(moves[3][1]).toBe(1.2); expect(moves[4][1]).toBeGreaterThanOrEqual(1.2); expect(moves[5][1]).toBe(45); expect(moves[6][1]).toBe(0);
+});
+
+test('the wrist microphone: raise it to the mouth and a clip starts on what you were looking at; lower it and the clip is saved; the pinch no longer records', async ({ page, request }) => {
+  const project = await openProject(page, request, 'xr-mic');
+  await prepareRecording(page, 'Speaker');
+  await page.evaluate(() => { window.__xr.primaryInputMode = 'hand'; document.querySelector('#recordMode').value = 'mic'; });
+  await page.locator('#VRButton').click();
+  await page.waitForFunction(() => window.__glossy.renderer.xr.isPresenting, null, { timeout: 15_000 });
+  await expect.poll(() => page.evaluate(() => window.__glossy.handsPresent), { timeout: 10_000 }).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.__glossy.wristMic.group.visible)).toBe(true);
+  // the fake microphone is already talking, yet nothing records: voice start stands down in this mode
+  await page.waitForTimeout(1500);
+  expect(await page.evaluate(() => window.__glossy.recorder.isRecording)).toBe(false);
+  // a right pinch on empty space does not record either
+  await page.evaluate(() => window.__xr.hands.right.updatePinchValue(1));
+  await page.waitForTimeout(400);
+  expect(await page.evaluate(() => window.__glossy.recorder.isRecording)).toBe(false);
+  await page.evaluate(() => window.__xr.hands.right.updatePinchValue(0));
+  // look at the pot, raise the left hand to the mouth
+  await page.evaluate(() => { const d = window.__xr; d.position.set(0, 1.6, 0.6); const a = Math.atan2(0, 1.8), p = -0.35; d.quaternion.set(Math.sin(p / 2), 0, 0, Math.cos(p / 2)); });
+  await page.evaluate(() => { const h = window.__xr.hands.left; h.position.set(-0.03, 1.5, 0.52); });
+  await expect.poll(() => status(page), { timeout: 5000 }).toMatch(/talking about pot/);
+  await expect.poll(() => page.evaluate(() => window.__glossy.recorder.isRecording)).toBe(true);
+  await page.waitForTimeout(1500);
+  // lower it: saved, anchored on the pot, source mic
+  await page.evaluate(() => { const h = window.__xr.hands.left; h.position.set(-0.3, 1.0, 0.4); });
+  await expect.poll(() => markerCount(page), { timeout: 10_000 }).toBe(1);
+  await expect.poll(() => status(page), { timeout: 10_000 }).toMatch(/^saved .* on pot/);
+  const [a] = await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json();
+  expect(a.anchor.objectId).toBe('pot');
+  await page.evaluate(() => window.__glossy.log.flush());
+  const events = await (await request.get(`${API}/api/projects/${project.id}/events`)).json();
+  expect(events.find((e) => e.kind === 'record:start').data.source).toBe('mic');
+  expect(events.filter((e) => e.kind === 'record:start')).toHaveLength(1);
 });
