@@ -69,7 +69,7 @@ const hud = {
   assetList: $('assetList'), assetFile: $('assetFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), edmLink: $('edmLink'), annList: $('annList'),
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
-  walk: $('walk'), autoplay: $('autoplay'), voiceStart: $('voiceStart'), locoHand: $('locoHand'), ghostStyle: $('ghostStyle'), ghostTrail: $('ghostTrail'), reviewLink: $('reviewLink'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
+  walk: $('walk'), autoplay: $('autoplay'), voiceStart: $('voiceStart'), locoHand: $('locoHand'), locoMode: $('locoMode'), ghostStyle: $('ghostStyle'), ghostTrail: $('ghostTrail'), reviewLink: $('reviewLink'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
   interview: $('interview'), visitorLink: $('visitorLink'), question: $('question'), level: $('level'), levelBar: $('levelBar'), hint: $('hint'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
 };
 const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
@@ -96,7 +96,10 @@ hud.walk.addEventListener('change', () => ls.set('glossy.walk', hud.walk.checked
 hud.autoplay.checked = ls.get('glossy.autoplay', '0') === '1';
 hud.voiceStart.checked = ls.get('glossy.voiceStart', '1') === '1';
 hud.voiceStart.addEventListener('change', () => ls.set('glossy.voiceStart', hud.voiceStart.checked ? '1' : '0'));
-hud.locoHand.value = ls.get('glossy.locoHand', 'left');
+hud.locoHand.value = ls.get('glossy.locoHand', 'both');
+hud.locoMode.value = ls.get('glossy.locoMode', 'scooter');
+if (hud.locoMode.value === 'vehicle') hud.locoMode.value = 'scooter';   // the 21 Oct morning's name
+hud.locoMode.addEventListener('change', () => { ls.set('glossy.locoMode', hud.locoMode.value); push = 0; log('setting', { locoMode: hud.locoMode.value }); });
 hud.locoHand.addEventListener('change', () => { ls.set('glossy.locoHand', hud.locoHand.value); log('setting', { locoHand: hud.locoHand.value }); });
 hud.autoplay.addEventListener('change', () => ls.set('glossy.autoplay', hud.autoplay.checked ? '1' : '0'));
 hud.interview.checked = ls.get('glossy.interview', '0') === '1';
@@ -134,7 +137,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
 renderer.xr.addEventListener('sessionstart', () => log('xr:start'));
-renderer.xr.addEventListener('sessionend', () => log('xr:end'));
+renderer.xr.addEventListener('sessionend', () => { log('xr:end'); push = 0; });
 document.body.appendChild(renderer.domElement);
 const vrButton = VRButton.createButton(renderer, { optionalFeatures: ['hand-tracking'] });   // hands, when the headset tracks them, are part of a clip
 document.body.appendChild(vrButton);
@@ -1321,10 +1324,12 @@ for (let i = 0; i < 2; i++) {
     new THREE.LineBasicMaterial({ color: 0x88ccff, transparent: true, opacity: 0.5 }),
   ));
   ctrl.addEventListener('selectstart', () => {
-    if (aimChat(ctrl)) return toggleMessage();              // the chat panel is a big target: a pinch on it talks to the laptop
+    if (aimChat(ctrl)) return toggleMessage();              // a pinch on the chat panel talks to the laptop
+    if (xrHands.left === ctrl || ctrl.userData.handedness === 'left') return toggleMessage();   // hands: the left pinch talks, anywhere; the right pinch selects or records (Ainsley, 21 Oct: aiming at the box was hard)
     const hit = aimMarker(ctrl);
     if (hit) play(hit); else beginRecording(ctrl);
   });
+  ctrl.addEventListener('connected', (e) => { ctrl.userData.handedness = e.data?.handedness; });
   ctrl.addEventListener('selectend', () => releaseRecording(ctrl));
   ctrl.addEventListener('connected', (e) => log('input:connected', { kind: e.data?.hand ? 'hand' : 'controller', handedness: e.data?.handedness, profiles: (e.data?.profiles || []).slice(0, 3) }));
   ctrl.addEventListener('disconnected', (e) => log('input:disconnected', { kind: e.data?.hand ? 'hand' : 'controller', handedness: e.data?.handedness }));
@@ -1416,8 +1421,12 @@ const STEP_M = 1.0, TURN_DEG = 30, GLIDE_MS = 220;
 let glide = null;
 const _head = new THREE.Vector3(), _fwd = new THREE.Vector3(), _probe = new THREE.Vector3();
 function headWorld() {
+  // Inside an XR frame the XR camera's local pose (reference space = rig space) is fresh but its world
+  // matrix is not yet composed with the rig, so getWorldDirection there ignores any turn we made:
+  // compose by hand. Measured 21 Oct: every move after a turn kept the old heading ("moving sideways").
   const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
-  cam.getWorldPosition(_head); cam.getWorldDirection(_fwd); _fwd.y = 0;
+  _head.copy(cam.position).applyQuaternion(rig.quaternion).add(rig.position);
+  _fwd.set(0, 0, -1).applyQuaternion(cam.quaternion).applyQuaternion(rig.quaternion); _fwd.y = 0;
   if (_fwd.lengthSq() < 1e-6) _fwd.set(0, 0, -1);
   _fwd.normalize();
 }
@@ -1447,7 +1456,7 @@ function stepRig(sign) {
   const floor = floorBelow(_probe.set(_head.x + dir.x * dist, rig.position.y + EYE_HEIGHT, _head.z + dir.z * dist));
   if (floor !== null) to.y = floor;
   startGlide(to, rig.rotation.y);
-  log('move', { kind: 'step', by: +(sign * dist).toFixed(2) });
+  log('move', { kind: 'step', by: +(sign * dist).toFixed(2), gaze: [+_fwd.x.toFixed(2), +_fwd.z.toFixed(2)], yaw: +((rig.rotation.y * 180) / Math.PI).toFixed(0) });
 }
 /** Turn in place: the rig rotates about the vertical axis through the head, so the person pivots where they stand. */
 function turnRig(deg) {
@@ -1459,10 +1468,64 @@ function turnRig(deg) {
   startGlide(to, rig.rotation.y + a);
   log('move', { kind: 'turn', by: deg });
 }
+// Vehicle mode (Ainsley, 21 Oct: "like riding a horse or a motorcycle, you look where you want to
+// go"): a forward swipe sets a cruising speed and you move along the gaze, re-aimed every frame by
+// the head; another forward swipe goes faster, a back swipe slows, stops, then reverses. Walls stop
+// you, the floor is followed. Speeds are gentle: 0.7, 1.2, 1.8 m/s.
+// Scooter (Ainsley, 21 Oct: "looking should only control where you're going while you're actively
+// steering"): a forward swipe is a push along where you are looking at that moment; the push fades
+// over a couple of seconds and carries you about two metres; swipe again to keep going or to change
+// course (the new push takes the new gaze). Between pushes looking around does not steer. A back
+// swipe, or a thumb tap, brakes. Left and right swipes do nothing here: with the head steering they
+// are not needed, and on the Quest 2 they were the most often misreported gesture (21 Oct: 62 right
+// swipes in a stretch where few were meant), each one then a 30° spin.
+// Turning without a body turn (seated, or a cramped room): two swipes the same way within 700 ms
+// turn 45°. One swipe does nothing but say so. A misreported swipe is rarely followed by the same
+// misreport, so a single stray left or right no longer spins anyone.
+const TURN2_DEG = 45, TURN2_MS = 700;
+let armedTurn = null;                                   // { gesture, at }
+function doubleSwipeTurn(gesture) {
+  const now = performance.now();
+  if (armedTurn && armedTurn.gesture === gesture && now - armedTurn.at < TURN2_MS) { armedTurn = null; turnRig(gesture === 'swipe-left' ? TURN2_DEG : -TURN2_DEG); return; }
+  armedTurn = { gesture, at: now };
+  setStatus(`swipe ${gesture === 'swipe-left' ? 'left' : 'right'} again to turn`, { hold: TURN2_MS });
+}
+const PUSH = 1.2, PUSH_MAX = 2.0, PUSH_TAU = 1.5;      // m/s per swipe, cap, decay time constant
+let push = 0;                                           // current speed, m/s
+const _pushDir = new THREE.Vector3(0, 0, -1);
+function kick(dir) {
+  if (dir > 0) { headWorld(); _pushDir.copy(_fwd); push = Math.min(PUSH_MAX, push + PUSH); }
+  else push = 0;                                          // brake
+  log('move', { kind: 'push', by: +push.toFixed(2), dir: dir > 0 ? [+_pushDir.x.toFixed(2), +_pushDir.z.toFixed(2)] : undefined });
+}
+const _vel = new THREE.Vector3();
+function updateCruise(dt) {
+  if (!push || !renderer.xr.isPresenting) return;
+  push *= Math.exp(-dt / PUSH_TAU);
+  if (push < 0.03) { push = 0; return; }
+  headWorld();
+  const v = push;
+  _vel.copy(_pushDir).multiplyScalar(v * dt);
+  const targets = collidables();
+  if (targets.length) {
+    walkRay.set(_probe.set(_head.x, rig.position.y + 1.0, _head.z), _vel.clone().normalize()); walkRay.far = Math.abs(v * dt) + BODY_RADIUS;
+    const hit = walkRay.intersectObjects(targets, true).find((h) => h.object.type !== 'GridHelper');
+    if (hit) { push = 0; setStatus('something in the way', { hold: 1000 }); return; }
+  }
+  rig.position.add(_vel);
+  const floor = floorBelow(_probe.set(_head.x + _vel.x, rig.position.y + EYE_HEIGHT, _head.z + _vel.z));
+  if (floor !== null) rig.position.y += (floor - rig.position.y) * Math.min(1, dt * 10);
+}
 function onMicrogesture(hand, gesture) {
   log('input:microgesture', { hand, gesture });
   const which = hud.locoHand.value;
   if (which === 'off' || (which !== 'both' && which !== hand)) { setStatus(`${hand} hand: ${gesture}`, { hold: 1200 }); return; }
+  if (hud.locoMode.value === 'scooter') {
+    if (gesture === 'swipe-forward') kick(1);
+    else if (gesture === 'swipe-backward' || gesture === 'tap-thumb') kick(-1);
+    else if (gesture === 'swipe-left' || gesture === 'swipe-right') doubleSwipeTurn(gesture);
+    return;
+  }
   if (gesture === 'swipe-forward') stepRig(1);
   else if (gesture === 'swipe-backward') stepRig(-1);
   else if (gesture === 'swipe-left') turnRig(TURN_DEG);
@@ -1471,7 +1534,9 @@ function onMicrogesture(hand, gesture) {
 }
 const MICRO = { 5: 'swipe-left', 6: 'swipe-right', 7: 'swipe-forward', 8: 'swipe-backward', 9: 'tap-thumb' };
 const microDown = { left: new Set(), right: new Set() };
+const queuedMicro = [];
 function pollMicrogestures() {
+  while (queuedMicro.length) { const [h, g] = queuedMicro.shift(); onMicrogesture(h, g); }   // from the dev handle, handled inside the frame like the real ones
   const session = renderer.xr.getSession(); if (!session) return;
   for (const src of session.inputSources) {
     if (!src.hand || !src.gamepad) continue;
@@ -1644,8 +1709,9 @@ if (import.meta.env.DEV) window.__glossy = {
   get pending() { return pendingMarkers.size; },
   get interview() { return { on: hud.interview.checked, index: qIndex, question: currentQuestion()?.text || null, total: questions().length }; },
   autoFit, frameAll, applyTransform, aimPoint, aimMarker, floorBelow, spawnInside, focusMarker, play, endRecording,
-  ghost, xrHands, get handsPresent() { return handsPresent(); }, log, microgesture: onMicrogesture,
+  ghost, xrHands, get handsPresent() { return handsPresent(); }, log, microgesture: (hand, gesture) => queuedMicro.push([hand, gesture]),
   chat: { begin: beginMessage, end: endMessage, toggle: toggleMessage, get listening() { return !!messaging; }, get messages() { return chatPanel.messages; }, panel: chatPanel },
+  debugHead() { headWorld(); const xr = renderer.xr.getCamera(); const d1 = new THREE.Vector3(); xr.getWorldDirection(d1); const d2 = new THREE.Vector3(); camera.getWorldDirection(d2); const d3 = new THREE.Vector3(); camera.updateWorldMatrix(true, false); camera.getWorldDirection(d3); return { fwd: [+_fwd.x.toFixed(3), +_fwd.z.toFixed(3)], xrCam: [+d1.x.toFixed(3), +d1.z.toFixed(3)], userCam: [+d2.x.toFixed(3), +d2.z.toFixed(3)], userCamUpdated: [+d3.x.toFixed(3), +d3.z.toFixed(3)], rigYaw: +((rig.rotation.y * 180) / Math.PI).toFixed(1), xrParent: xr.parent?.type || null, camParent: camera.parent?.type || null }; },
 };
 
 // ---- boot ------------------------------------------------------------------
@@ -1723,6 +1789,7 @@ renderer.setAnimationLoop(() => {
   for (const [side, key] of [['l', 'left'], ['r', 'right']]) { const h = xrHands[key]; stats.hand(side, !!h, !!h?.joints?.wrist?.visible); }
   pollMicrogestures();
   updateGlide();
+  updateCruise(dt);
   if (stats.due) { const line = stats.take(); if (renderer.xr.isPresenting || recorder.isRecording) log('stats', { presenting: renderer.xr.isPresenting, recording: recorder.isRecording, ...line }); }
 
   renderer.render(scene, camera);

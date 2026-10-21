@@ -163,10 +163,15 @@
         <div class="row" style="margin-top:4px"><input type="checkbox" id="ghostTrail" /><label for="ghostTrail" style="margin:0" title="A ribbon behind each wrist for the last second or so, so the path of a gesture is visible as well as the hand">Trail behind the wrist</label></div>
         <label for="locoHand" title="Headset with hand tracking: the thumb swiped along the side of the index finger steps you forward or back and turns you left or right">Thumb moves me</label>
         <select id="locoHand">
+          <option value="both">either hand</option>
           <option value="left">left hand</option>
           <option value="right">right hand</option>
-          <option value="both">either hand</option>
           <option value="off">off</option>
+        </select>
+        <label for="locoMode" title="Steps: each forward swipe is one metre along the gaze. Vehicle: a forward swipe starts you moving where you look and keeps you moving, turning with your head; swipe back to slow, stop, reverse.">Moving</label>
+        <select id="locoMode">
+          <option value="scooter">scooter: swipes push you where you look</option>
+          <option value="steps">one step per swipe</option>
         </select>
         <div class="row" style="margin-top:4px"><input type="checkbox" id="voiceStart" checked /><label for="voiceStart" style="margin:0" title="Headset with hand tracking and no controller: speaking starts a clip anchored where you look, a pause of about a second ends it. Off: pinch and hold to record.">Start a clip when I speak (hands, headset)</label></div>
       </details>

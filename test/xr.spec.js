@@ -173,7 +173,7 @@ test('with hands tracked, speaking starts a clip, the gesture is stored and repl
 test('a thumb swiped along the index finger steps and turns the person, on the chosen hand only', async ({ page, request }) => {
   await openProject(page, request, 'xr-thumb');
   await prepareRecording(page, 'Walker');
-  await page.evaluate(() => { window.__xr.primaryInputMode = 'hand'; document.querySelector('#voiceStart').checked = false; });   // hands, and no voice clips during the walk
+  await page.evaluate(() => { window.__xr.primaryInputMode = 'hand'; document.querySelector('#voiceStart').checked = false; document.querySelector('#locoMode').value = 'steps'; document.querySelector('#locoHand').value = 'left'; });   // hands, no voice clips during the walk, one step per swipe, left hand only
   await page.locator('#VRButton').click();
   await page.waitForFunction(() => window.__glossy.renderer.xr.isPresenting, null, { timeout: 15_000 });
   await expect.poll(() => page.evaluate(() => window.__glossy.handsPresent), { timeout: 10_000 }).toBe(true);
@@ -199,16 +199,58 @@ test('a thumb swiped along the index finger steps and turns the person, on the c
   // a back swipe returns along the new gaze; the right hand does nothing while the setting says left
   await page.evaluate(() => window.__glossy.microgesture('left', 'swipe-backward'));
   await page.waitForTimeout(400);
-  const p3 = await pose();
-  expect(Math.hypot(p3.x - p2.x, p3.z - p2.z)).toBeGreaterThan(0.9);
+  const p3 = await pose(), h3 = await head();
+  const back = Math.hypot(p3.x - p2.x, p3.z - p2.z);
+  expect(back).toBeGreaterThan(0.9);
+  expect(((p3.x - p2.x) * h3.dx + (p3.z - p2.z) * h3.dz) / (back * Math.hypot(h3.dx, h3.dz))).toBeLessThan(-0.99);   // straight back along the turned gaze, handled inside the frame
   await page.evaluate(() => window.__glossy.microgesture('right', 'swipe-forward'));
   await page.waitForTimeout(400);
   expect(await pose()).toEqual(p3);
   await expect.poll(() => status(page)).toMatch(/right hand: swipe-forward/);
+  // scooter mode: a forward swipe is a push along the gaze that fades out; a back swipe brakes
+  await page.evaluate(() => { const s = document.querySelector('#locoMode'); s.value = 'scooter'; s.dispatchEvent(new Event('change')); });
+  const c0 = await pose(), hc = await head();
+  await page.evaluate(() => window.__glossy.microgesture('left', 'swipe-forward'));
+  await page.waitForTimeout(600);
+  const c1 = await pose();
+  await page.waitForTimeout(4000);
+  const c2 = await pose();
+  const went = Math.hypot(c1.x - c0.x, c1.z - c0.z), total = Math.hypot(c2.x - c0.x, c2.z - c0.z);
+  expect(went).toBeGreaterThan(0.4); expect(total).toBeGreaterThan(1.3); expect(total).toBeLessThan(2.1);   // one push carries about 1.8 m and has faded by four seconds
+  expect(((c1.x - c0.x) * hc.dx + (c1.z - c0.z) * hc.dz) / (went * Math.hypot(hc.dx, hc.dz))).toBeGreaterThan(0.99);   // along the gaze at the push, after the turn
+  // between pushes the head does not steer: turn the emulated head 90° and the course holds
+  await page.evaluate(() => window.__glossy.microgesture('left', 'swipe-forward'));
+  await page.waitForTimeout(200);
+  const d0 = await pose();
+  await page.evaluate(() => { const s = Math.sin(Math.PI / 4), c = Math.cos(Math.PI / 4); window.__xr.quaternion.set(0, s, 0, c); });
+  await page.waitForTimeout(600);
+  const d1 = await pose();
+  const drift = Math.hypot(d1.x - d0.x, d1.z - d0.z);
+  expect(((d1.x - d0.x) * hc.dx + (d1.z - d0.z) * hc.dz) / (drift * Math.hypot(hc.dx, hc.dz))).toBeGreaterThan(0.99);
+  await page.evaluate(() => { window.__xr.quaternion.set(0, 0, 0, 1); });
+  // a left swipe does nothing in scooter mode; a back swipe brakes
+  const r0 = await pose();
+  await page.evaluate(() => window.__glossy.microgesture('left', 'swipe-left'));
+  await page.waitForTimeout(900);                                                                  // one swipe: nothing (the arming window passes)
+  expect((await pose()).rot).toBe(r0.rot);
+  await page.evaluate(() => window.__glossy.microgesture('left', 'swipe-left'));
+  await page.waitForTimeout(150);
+  await page.evaluate(() => window.__glossy.microgesture('left', 'swipe-left'));
+  await page.waitForTimeout(400);
+  expect((await pose()).rot - r0.rot).toBeCloseTo(45, 0);                                         // two within 700 ms: a 45° turn
+  await page.evaluate(() => window.__glossy.microgesture('left', 'swipe-backward'));   // brake
+  await page.waitForTimeout(100);
+  const c3 = await pose();
+  await page.waitForTimeout(500);
+  const c4 = await pose();
+  expect(Math.hypot(c4.x - c3.x, c4.z - c3.z)).toBeLessThan(0.02);                                   // stopped
   // the log has the gestures and the moves
   await page.evaluate(() => window.__glossy.log.flush());
   const project = (await (await request.get(`${API}/api/projects`)).json()).find((p) => p.name === 'xr-thumb');
   const events = await (await request.get(`${API}/api/projects/${project.id}/events`)).json();
-  expect(events.filter((e) => e.kind === 'input:microgesture')).toHaveLength(4);
-  expect(events.filter((e) => e.kind === 'move').map((e) => [e.data.kind, e.data.by])).toEqual([['step', 1], ['turn', 30], ['step', -1]]);
+  expect(events.filter((e) => e.kind === 'input:microgesture')).toHaveLength(10);
+  const moves = events.filter((e) => e.kind === 'move').map((e) => [e.data.kind, e.data.by]);
+  expect(moves.slice(0, 3)).toEqual([['step', 1], ['turn', 30], ['step', -1]]);
+  expect(moves.slice(3).map((m) => m[0])).toEqual(['push', 'push', 'turn', 'push']);
+  expect(moves[3][1]).toBe(1.2); expect(moves[4][1]).toBeGreaterThanOrEqual(1.2); expect(moves[5][1]).toBe(45); expect(moves[6][1]).toBe(0);
 });
