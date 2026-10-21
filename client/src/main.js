@@ -1428,7 +1428,7 @@ function aimChat(source) {
 // microphone sits on the inside of the left wrist. Raise it to your mouth and a clip starts, anchored
 // to what you were looking at as you raised it, and the panel says so; lower it and the clip is saved.
 // Deliberate, visible, and it ends the pinch's double life.
-const MIC_ON_M = 0.14, MIC_OFF_M = 0.24, MIC_DWELL_MS = 150;
+const MIC_ON_M = 0.19, MIC_OFF_M = 0.28, MIC_NEAR_M = 0.38, MIC_DWELL_MS = 150;   // measured from the palm (index metacarpal): in Ainsley's recording the wrist never came within 23 cm of the mouth while the hand did; NEAR shows a 'closer…' hint
 const wristMic = (() => {
   const g = new THREE.Group(); g.name = 'wrist-mic'; g.visible = false;
   const body = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.013, 0.07, 12), new THREE.MeshStandardMaterial({ color: 0x2b2f36, roughness: 0.5, metalness: 0.3 }));
@@ -1440,14 +1440,16 @@ const wristMic = (() => {
   scene.add(g);
   return { group: g, live, near: 0, far: 0, armed: false };   // armed: the microphone has been away from the mouth since the hand appeared, so a hand that shows up near the face does not record by itself
 })();
-const _mouth = new THREE.Vector3(), _micPos = new THREE.Vector3(), _wq = new THREE.Quaternion();
+const _mouth = new THREE.Vector3(), _micPos = new THREE.Vector3(), _palmPos = new THREE.Vector3(), _wq = new THREE.Quaternion();
 function updateWristMic(now) {
   const h = xrHands.left, wrist = h?.joints?.wrist;
   const on = renderer.xr.isPresenting && recordMode() === 'mic' && wrist && wrist.visible;
   wristMic.group.visible = !!on;
   if (!on) { if (recOpts.via === 'mic' && recorder.isRecording) { releaseAt = now; endRecording('release'); } wristMic.near = wristMic.far = 0; wristMic.armed = false; return; }
-  // sit on the inside of the wrist, pointing along the forearm away from the hand
+  // drawn on the inside of the wrist; the trigger is measured from the palm, which is what people bring to the mouth
   wrist.getWorldPosition(_micPos); wrist.getWorldQuaternion(_wq);
+  const palm = h.joints['index-finger-metacarpal'];
+  if (palm?.visible) palm.getWorldPosition(_palmPos); else _palmPos.copy(_micPos);
   wristMic.group.position.copy(_micPos).add(_probe.set(0, -0.02, 0.03).applyQuaternion(_wq));
   wristMic.group.quaternion.copy(_wq);
   wristMic.group.rotateX(Math.PI / 2);
@@ -1456,15 +1458,51 @@ function updateWristMic(now) {
   const cam = renderer.xr.getCamera();
   _mouth.copy(cam.position).applyQuaternion(rig.quaternion).add(rig.position);
   _mouth.add(_probe.set(0, -0.09, -0.06).applyQuaternion(cam.quaternion).applyQuaternion(rig.quaternion));
-  const d = _micPos.distanceTo(_mouth);
+  const d = _palmPos.distanceTo(_mouth);
   if (d > MIC_OFF_M) wristMic.armed = true;
   if (!recorder.isRecording && !starting) {
+    if (d < MIC_NEAR_M && d >= MIC_ON_M && wristMic.armed && !messaging) setStatus('closer…', { idle: true });   // feedback on the way up
     if (d < MIC_ON_M && wristMic.armed) { if (!wristMic.near) wristMic.near = now; else if (now - wristMic.near > MIC_DWELL_MS) { wristMic.near = 0; const aim = aimPoint(camera); beginRecording(camera, { via: 'mic', anchor: aim }); setStatus(aim.objectId ? `talking about ${aim.objectId}…` : 'talking…'); } }
     else wristMic.near = 0;
   } else if (recOpts.via === 'mic') {
     if (d > MIC_OFF_M) { if (!wristMic.far) wristMic.far = now; else if (now - wristMic.far > MIC_DWELL_MS) { wristMic.far = 0; releaseAt = now; endRecording('release'); } }
     else wristMic.far = 0;
   }
+}
+
+// Controllers: the thumbsticks move you the way every headset app does. Left stick glides you on the
+// floor relative to where you look (1.2 m/s, walls stop you, the floor is followed); right stick
+// snap-turns 30° per flick. This is the known-good fallback while hand locomotion stays a research thread.
+const STICK_SPEED = 1.2, STICK_DEAD = 0.15, SNAP_ON = 0.7, SNAP_OFF = 0.3;
+const stick = { snapArmed: true, movingSince: 0, lastLog: 0 };
+const _sv = new THREE.Vector3(), _sr = new THREE.Vector3();
+function updateSticks(dt, now) {
+  const session = renderer.xr.getSession(); if (!session) return;
+  let lx = 0, ly = 0, rx = 0;
+  for (const src of session.inputSources) {
+    if (src.hand || !src.gamepad || src.gamepad.axes.length < 4) continue;
+    const [, , x, y] = src.gamepad.axes;                                          // xr-standard: 2,3 = thumbstick
+    if (src.handedness === 'left') { lx = x; ly = y; } else if (src.handedness === 'right') rx = x;
+  }
+  // right stick: snap turn on a flick past SNAP_ON, re-armed when it comes back under SNAP_OFF
+  if (stick.snapArmed && Math.abs(rx) > SNAP_ON) { stick.snapArmed = false; turnRig(rx < 0 ? TURN_DEG : -TURN_DEG); }
+  else if (!stick.snapArmed && Math.abs(rx) < SNAP_OFF) stick.snapArmed = true;
+  // left stick: glide, head-relative
+  const mag = Math.hypot(lx, ly);
+  if (mag < STICK_DEAD) { if (stick.movingSince) { log('move', { kind: 'stick', ms: Math.round(now - stick.movingSince) }); stick.movingSince = 0; } return; }
+  if (!stick.movingSince) stick.movingSince = now;
+  headWorld();
+  _sr.set(-_fwd.z, 0, _fwd.x);                                                    // right of the gaze on the floor
+  _sv.copy(_fwd).multiplyScalar(-ly).addScaledVector(_sr, lx).multiplyScalar(STICK_SPEED * Math.min(1, mag) * dt / Math.max(mag, 1e-6));
+  const targets = collidables();
+  if (targets.length && _sv.lengthSq() > 0) {
+    walkRay.set(_probe.set(_head.x, rig.position.y + 1.0, _head.z), _sv.clone().normalize()); walkRay.far = _sv.length() + BODY_RADIUS;
+    const hit = walkRay.intersectObjects(targets, true).find((h) => h.object.type !== 'GridHelper');
+    if (hit) return;
+  }
+  rig.position.add(_sv);
+  const floor = floorBelow(_probe.set(_head.x + _sv.x, rig.position.y + EYE_HEIGHT, _head.z + _sv.z));
+  if (floor !== null) rig.position.y += (floor - rig.position.y) * Math.min(1, dt * 10);
 }
 
 const STEP_M = 1.0, TURN_DEG = 30, GLIDE_MS = 220;
@@ -1924,6 +1962,7 @@ renderer.setAnimationLoop(() => {
   pollMicrogestures();
   updateGlide();
   updateCruise(dt);
+  updateSticks(dt, performance.now());
   updateWristMic(performance.now());
   traceTick(performance.now());
   if (stats.due) { const line = stats.take(); if (renderer.xr.isPresenting || recorder.isRecording) log('stats', { presenting: renderer.xr.isPresenting, recording: recorder.isRecording, ...line, thumb: thumbTrail.left.length ? thumbTrail.left.filter((s, i, a) => i === a.length - 1 || i % Math.max(1, Math.round(a.length / 15)) === 0).map((s) => [Math.round(s[1] * 1000), Math.round(s[2] * 1000)]) : undefined }); }   // thumb: the left thumb tip along / off the index finger, mm, ~15 Hz over the last second, while a hand is seen

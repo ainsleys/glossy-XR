@@ -294,3 +294,31 @@ test('the wrist microphone: raise it to the mouth and a clip starts on what you 
   expect(events.find((e) => e.kind === 'record:start').data.source).toBe('mic');
   expect(events.filter((e) => e.kind === 'record:start')).toHaveLength(1);
 });
+
+test('with controllers, the left thumbstick glides you where you look and the right one snap-turns', async ({ page, request }) => {
+  await openProject(page, request, 'xr-sticks');
+  await prepareRecording(page, 'Driver');
+  await page.locator('#VRButton').click();
+  await page.waitForFunction(() => window.__glossy.renderer.xr.isPresenting, null, { timeout: 15_000 });
+  await page.waitForTimeout(500);
+  const pose = () => page.evaluate(() => { const r = window.__glossy.rig; return { x: r.position.x, z: r.position.z, rot: Math.round((r.rotation.y * 180) / Math.PI) }; });
+  const p0 = await pose();
+  await page.evaluate(() => window.__xr.controllers.left.updateAxes('thumbstick', 0, -1));   // pushed forward
+  await page.waitForTimeout(1000);
+  await page.evaluate(() => window.__xr.controllers.left.updateAxes('thumbstick', 0, 0));
+  const p1 = await pose();
+  const went = Math.hypot(p1.x - p0.x, p1.z - p0.z);
+  expect(went).toBeGreaterThan(0.8); expect(went).toBeLessThan(1.5);                      // about 1.2 m/s for a second
+  expect(p1.z - p0.z).toBeLessThan(-0.8);                                                // along the gaze, which looks down -Z at the start
+  await page.evaluate(() => window.__xr.controllers.right.updateAxes('thumbstick', 1, 0));   // flick right
+  await page.waitForTimeout(400);
+  await page.evaluate(() => window.__xr.controllers.right.updateAxes('thumbstick', 0, 0));
+  await page.waitForTimeout(300);
+  const p2 = await pose();
+  expect(p2.rot - p1.rot).toBe(-30);                                                       // one snap, not a spin
+  await page.evaluate(() => window.__xr.controllers.right.updateAxes('thumbstick', 1, 0));
+  await page.waitForTimeout(400);
+  await page.evaluate(() => window.__xr.controllers.right.updateAxes('thumbstick', 0, 0));
+  await page.waitForTimeout(300);
+  expect((await pose()).rot - p1.rot).toBe(-60);
+});
