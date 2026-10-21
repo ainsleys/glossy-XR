@@ -180,16 +180,16 @@ const xrPanel = (() => {
   }
   return { mesh, draw, get text() { return shown; } };
 })();
-// The chat panel: a second board in the headset, to the left of the status
-// panel, carrying the conversation with the laptop. A pinch on it starts a
+// The chat panel: a second board in the headset, above the status panel,
+// carrying the conversation with the laptop. A pinch on it starts a
 // spoken message; a pause, or another pinch, sends it. The laptop's lines
 // arrive over the socket (POST /api/projects/:id/chat) and appear here.
 const chatPanel = (() => {
-  const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 1024;
+  const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 716;
   const ctx = canvas.getContext('2d');
   const tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace;
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.5), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false }));
-  mesh.position.set(-0.52, -0.02, -0.85); mesh.rotation.y = 0.45; mesh.renderOrder = 998; mesh.visible = false; mesh.name = 'chat-panel';
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.35), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false }));
+  mesh.position.set(0, 0.09, -0.9); mesh.renderOrder = 998; mesh.visible = false; mesh.name = 'chat-panel';   // centred, just above the status line: Ainsley, 21 Oct, could not read it off to one side
   camera.add(mesh);
   const messages = [];
   let shown = '', hot = false;
@@ -1219,7 +1219,7 @@ async function endRecording(reason = 'release') {
   const clip = await recorder.stop();
   resetRecordingUi();
   log('record:end', { reason, source: opts.via, durationMs: heldMs, hands: handsSummary(hands) });
-  if (!clip) { clearProvisional(provisional); saving = false; log('record:discarded', { reason: 'too short', source: opts.via, durationMs: heldMs }); return setStatus('too short, discarded'); }
+  if (!clip) { clearProvisional(provisional); saving = false; log('record:discarded', { reason: 'too short', source: opts.via, durationMs: heldMs }); return setStatus(''); }   // quietly: a slipped pinch is not worth a message (Ainsley, 21 Oct)
   setStatus('saving…');
   const q = currentQuestion();
   try {
@@ -1258,10 +1258,23 @@ function aimRay(source) {
   raycaster.ray.origin.setFromMatrixPosition(source.matrixWorld);
   raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tmpMat);
 }
+const PICK_CONE = THREE.MathUtils.degToRad(4), PICK_FAR = 8;
+const _toM = new THREE.Vector3();
 function aimMarker(source) {
   aimRay(source);
   const hit = raycaster.intersectObjects(markerGroup.children, false).find((h) => h.object.visible);   // hidden by the time filter: not a target
-  return hit?.object.userData.id || null;
+  if (hit) return hit.object.userData.id;
+  // No exact hit: a mark is a pea at arm's length and a hand ray jitters more than that. Take the
+  // nearest visible mark within a 4° cone of the ray (an angle, so the tolerance grows with distance).
+  let best = null, bestAng = PICK_CONE;
+  for (const m of markerGroup.children) {
+    if (!m.visible) continue;
+    _toM.copy(m.position).sub(raycaster.ray.origin);
+    const d = _toM.length(); if (d > PICK_FAR || d < 0.2) continue;
+    const ang = Math.acos(THREE.MathUtils.clamp(_toM.divideScalar(d).dot(raycaster.ray.direction), -1, 1));
+    if (ang < bestAng) { bestAng = ang; best = m; }
+  }
+  return best?.userData.id || null;
 }
 function aimPoint(source) {
   aimRay(source);
@@ -1417,8 +1430,9 @@ function updateGlide() {
   if (k >= 1) glide = null;
 }
 /** One step along the gaze (sign +1 forward, -1 back), shortened by whatever is in the way, landing on the floor there. */
+function settleGlide() { if (!glide) return; rig.position.copy(glide.toPos); rig.rotation.y = glide.toRot; glide = null; }   // a swipe mid-glide: land, then move again, never drop it
 function stepRig(sign) {
-  if (glide) return;
+  settleGlide();
   headWorld();
   const dir = _fwd.clone().multiplyScalar(sign);
   let dist = STEP_M;
@@ -1437,7 +1451,7 @@ function stepRig(sign) {
 }
 /** Turn in place: the rig rotates about the vertical axis through the head, so the person pivots where they stand. */
 function turnRig(deg) {
-  if (glide) return;
+  settleGlide();
   headWorld();
   const a = THREE.MathUtils.degToRad(deg), c = Math.cos(a), s = Math.sin(a);
   const dx = rig.position.x - _head.x, dz = rig.position.z - _head.z;
