@@ -171,12 +171,13 @@ test('with hands tracked, speaking starts a clip, the gesture is stored and repl
 });
 
 // Meta's labels on the LEFT hand: along the finger to the tip = swipe-right (our push), to the knuckle = swipe-left (brake),
-// across the finger = swipe-forward / swipe-backward (turn right / turn left). The test speaks the labels the headset sends.
-const L = { push: 'swipe-right', brake: 'swipe-left', turnLeft: 'swipe-backward', turnRight: 'swipe-forward' };
+// The test speaks the labels the headset sends. Speed is the left thumb, heading the right thumb, both
+// along the finger: on the right hand toward the knuckle (swipe-right) turns left, toward the tip turns right.
+const L = { push: 'swipe-right', brake: 'swipe-left', turnLeft: 'swipe-right', turnRight: 'swipe-left' };
 test('a thumb swiped along the index finger steps and turns the person, on the chosen hand only', async ({ page, request }) => {
   await openProject(page, request, 'xr-thumb');
   await prepareRecording(page, 'Walker');
-  await page.evaluate(() => { window.__xr.primaryInputMode = 'hand'; document.querySelector('#voiceStart').checked = false; document.querySelector('#locoMode').value = 'steps'; document.querySelector('#locoHand').value = 'left'; });   // hands, no voice clips during the walk, one step per swipe, left hand only
+  await page.evaluate(() => { window.__xr.primaryInputMode = 'hand'; document.querySelector('#voiceStart').checked = false; document.querySelector('#locoMode').value = 'steps'; document.querySelector('#locoHand').value = 'both'; });   // hands, no voice clips during the walk, one step per swipe, left hand only
   await page.locator('#VRButton').click();
   await page.waitForFunction(() => window.__glossy.renderer.xr.isPresenting, null, { timeout: 15_000 });
   await expect.poll(() => page.evaluate(() => window.__glossy.handsPresent), { timeout: 10_000 }).toBe(true);
@@ -194,7 +195,7 @@ test('a thumb swiped along the index finger steps and turns the person, on the c
   expect(p1.rot).toBe(p0.rot);
   // a left swipe turns left by 30°, pivoting where the head is: the head stays put
   const hBefore = await head();
-  await page.evaluate((g) => window.__glossy.microgesture('left', g), L.turnLeft);
+  await page.evaluate((g) => window.__glossy.microgesture('right', g), L.turnLeft);
   await page.waitForTimeout(400);
   const p2 = await pose(), hAfter = await head();
   expect(p2.rot - p1.rot).toBeCloseTo(30, 0);
@@ -206,10 +207,13 @@ test('a thumb swiped along the index finger steps and turns the person, on the c
   const back = Math.hypot(p3.x - p2.x, p3.z - p2.z);
   expect(back).toBeGreaterThan(0.9);
   expect(((p3.x - p2.x) * h3.dx + (p3.z - p2.z) * h3.dz) / (back * Math.hypot(h3.dx, h3.dz))).toBeLessThan(-0.99);   // straight back along the turned gaze, handled inside the frame
+  // locoHand limits which hand drives: with the left only, a right-thumb turn is named and ignored
+  await page.evaluate(() => { const s = document.querySelector('#locoHand'); s.value = 'left'; s.dispatchEvent(new Event('change')); });
   await page.evaluate(() => window.__glossy.microgesture('right', 'swipe-left'));
   await page.waitForTimeout(400);
   expect(await pose()).toEqual(p3);
-  await expect.poll(() => status(page)).toMatch(/right thumb: push/);
+  await expect.poll(() => status(page)).toMatch(/right thumb: turn-right/);
+  await page.evaluate(() => { const s = document.querySelector('#locoHand'); s.value = 'both'; s.dispatchEvent(new Event('change')); });
   // scooter mode: a forward swipe is a push along the gaze that fades out; a back swipe brakes
   await page.evaluate(() => { const s = document.querySelector('#locoMode'); s.value = 'scooter'; s.dispatchEvent(new Event('change')); });
   const c0 = await pose(), hc = await head();
@@ -233,12 +237,12 @@ test('a thumb swiped along the index finger steps and turns the person, on the c
   await page.evaluate(() => { window.__xr.quaternion.set(0, 0, 0, 1); });
   // across the finger turns at once in scooter mode too; a second swipe the same way within 700 ms tops it up to 45°
   const r0 = await pose();
-  await page.evaluate((g) => window.__glossy.microgesture('left', g), L.turnLeft);
+  await page.evaluate((g) => window.__glossy.microgesture('right', g), L.turnLeft);
   await page.waitForTimeout(900);                                                                  // one swipe: 30°
   expect((await pose()).rot - r0.rot).toBeCloseTo(30, 0);
-  await page.evaluate((g) => window.__glossy.microgesture('left', g), L.turnLeft);
+  await page.evaluate((g) => window.__glossy.microgesture('right', g), L.turnLeft);
   await page.waitForTimeout(150);
-  await page.evaluate((g) => window.__glossy.microgesture('left', g), L.turnLeft);
+  await page.evaluate((g) => window.__glossy.microgesture('right', g), L.turnLeft);
   await page.waitForTimeout(400);
   expect((await pose()).rot - r0.rot).toBeCloseTo(75, 0);                                         // 30 + (30 + 15): the pair makes 45°
   await page.evaluate((g) => window.__glossy.microgesture('left', g), L.brake);   // brake

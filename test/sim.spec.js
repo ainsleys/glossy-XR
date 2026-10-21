@@ -40,13 +40,13 @@ async function runTask(page, { mode, noise, task, posture }) {
     const rand = (() => { let s = 1234567 + task.id.length * 7919 + (mode === 'steps' ? 11 : 0) + Math.round(noise.pCorrect * 100); return () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; }; })();
     const wrap = (a) => ((a + 540) % 360) - 180;
     // the visitor thinks in intents and the headset reports Meta's labels for a left hand
-    const LABEL = { push: 'swipe-right', brake: 'swipe-left', 'turn-left': 'swipe-backward', 'turn-right': 'swipe-forward' };
+    const LABEL = { push: ['left', 'swipe-right'], brake: ['left', 'swipe-left'], 'turn-left': ['right', 'swipe-right'], 'turn-right': ['right', 'swipe-left'] };   // left thumb: speed; right thumb: heading
     const GESTURES = ['push', 'brake', 'turn-left', 'turn-right'];
     const confuse = (want) => { if (rand() < noise.pCorrect) return want; const others = GESTURES.filter((x) => x !== want); return others[Math.floor(rand() * 3)]; };
     // reset the person
     g.rig.position.set(0, 0, 0); g.rig.rotation.y = 0; dev.quaternion.set(0, 0, 0, 1);
     document.querySelector('#locoMode').value = mode; document.querySelector('#locoMode').dispatchEvent(new Event('change'));
-    document.querySelector('#locoHand').value = 'left';
+    document.querySelector('#locoHand').value = 'both';
     const goals = task.goals || [task.goal];
     const m = { task: task.id, mode, posture: posture.bodyTurn ? 'standing' : 'seated', noise: noise.pCorrect, ms: 0, path: 0, straight: 0, wrongWay: 0, overshoot: 0, intended: {}, reported: {}, collisions: 0, finalDist: null, reached: 0, timedOut: false };
     let headYaw = 0, bodyYawPhys = 0, wantYaw = 0, pitch = -0.1, lastPos = [g.rig.position.x, g.rig.position.z], lastT = performance.now(), speed = 0, t0 = performance.now();
@@ -86,9 +86,8 @@ async function runTask(page, { mode, noise, task, posture }) {
           else if (Math.abs(rel2) > 60) { if (!posture.bodyTurn) want = rel2 > 0 ? 'turn-left' : 'turn-right'; }   // seated: ask the software to turn; standing: the body is already turning
           else if (Math.abs(wrap(rel2 - headYaw)) < 25 && (mode === 'steps' || speed < 0.8)) want = 'push';   // a person pushes again while still rolling
           if (want) {
-            const send = (w) => { const got = confuse(w); m.intended[w] = (m.intended[w] || 0) + 1; m.reported[got] = (m.reported[got] || 0) + 1; g.microgesture('left', LABEL[got]); };
+            const send = (w) => { const got = confuse(w); m.intended[w] = (m.intended[w] || 0) + 1; m.reported[got] = (m.reported[got] || 0) + 1; g.microgesture(...LABEL[got]); };
             send(want);
-            if (mode === 'scooter' && (want === 'turn-left' || want === 'turn-right')) { await new Promise((r) => setTimeout(r, 150)); send(want); }   // the scooter's turn is a double swipe
           }
         }
         if (g.status === 'something in the way' && !seenStatus.has(now >> 10)) { seenStatus.add(now >> 10); m.collisions++; }

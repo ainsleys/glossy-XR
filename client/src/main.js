@@ -1428,7 +1428,7 @@ function aimChat(source) {
 // microphone sits on the inside of the left wrist. Raise it to your mouth and a clip starts, anchored
 // to what you were looking at as you raised it, and the panel says so; lower it and the clip is saved.
 // Deliberate, visible, and it ends the pinch's double life.
-const MIC_ON_M = 0.19, MIC_OFF_M = 0.28, MIC_NEAR_M = 0.38, MIC_DWELL_MS = 150, MIC_RELEASE_MS = 400, MIC_LOST_MS = 1500;   // measured from the palm (index metacarpal): in Ainsley's recording the wrist never came within 23 cm of the mouth while the hand did; NEAR shows a 'closer…' hint
+const MIC_ON_M = 0.19, MIC_OFF_M = 0.28, MIC_NEAR_M = 0.38, MIC_DWELL_MS = 150, MIC_RELEASE_MS = 400, MIC_LOST_QUIET_MS = 1500, MIC_LOST_MAX_MS = 30_000;   // measured from the palm (index metacarpal): in Ainsley's recording the wrist never came within 23 cm of the mouth while the hand did; NEAR shows a 'closer…' hint
 const wristMic = (() => {
   const g = new THREE.Group(); g.name = 'wrist-mic'; g.visible = false;
   const body = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.013, 0.07, 12), new THREE.MeshStandardMaterial({ color: 0x2b2f36, roughness: 0.5, metalness: 0.3 }));
@@ -1449,13 +1449,19 @@ function updateWristMic(now) {
     // The hand vanishes for a moment at the mouth (Quest 3S, 21 Oct: a 204 ms clip, hands lost at 16 cm).
     // A live recording rides that out; it ends only if the hand stays gone.
     if (recOpts.via === 'mic' && recorder.isRecording) {
+      // On the Quest 3S the left hand is out of sight for most of the time it is at the mouth (12:02:
+      // 30 of 35 frames lost; clips cut at 1.7 s). Out of sight, the clip runs on and ends when the
+      // voice stops for a moment, or after a long cap; in sight again, lowering the hand ends it.
       if (!wristMic.lost) wristMic.lost = now;
-      else if (now - wristMic.lost > MIC_LOST_MS) { wristMic.lost = 0; releaseAt = now; endRecording('release'); }
+      const lvl = levelNode ? measureLevel() : 1;
+      if (lvl < VOICE_STOP) { if (!wristMic.quiet) wristMic.quiet = now; } else wristMic.quiet = 0;
+      const quietLong = wristMic.quiet && now - wristMic.quiet > MIC_LOST_QUIET_MS && now - recorder.startedAt > VOICE_MIN_MS;
+      if (quietLong || now - wristMic.lost > MIC_LOST_MAX_MS) { wristMic.lost = wristMic.quiet = 0; releaseAt = now; endRecording('release'); }
       return;
     }
-    wristMic.near = wristMic.far = wristMic.lost = 0; wristMic.armed = false; return;
+    wristMic.near = wristMic.far = wristMic.lost = wristMic.quiet = 0; wristMic.armed = false; return;
   }
-  wristMic.lost = 0;
+  wristMic.lost = wristMic.quiet = 0;
   // drawn on the inside of the wrist; the trigger is measured from the palm, which is what people bring to the mouth
   wrist.getWorldPosition(_micPos); wrist.getWorldQuaternion(_wq);
   const palm = h.joints['index-finger-metacarpal'];
@@ -1633,6 +1639,7 @@ const OPPOSITE = { push: 'brake', brake: 'push', 'turn-left': 'turn-right', 'tur
 const RETURN_MS = 900;                                  // a stroke's way back, read by the recogniser as the opposite swipe
 let lastIntent = null;                                  // { hand, intent, at }
 function onThumbIntent(hand, intent, source) {
+  if (intent === 'none') return;                                             // an across swipe: logged, not a command
   const which = hud.locoHand.value;
   if (which === 'off' || (which !== 'both' && which !== hand)) { setStatus(`${hand} thumb: ${intent}`, { hold: 1200 }); return; }
   // Ainsley slides out slowly and snaps back fast; the headset reports the snap as the opposite swipe
@@ -1656,12 +1663,16 @@ function onThumbIntent(hand, intent, source) {
 const MICRO = { 5: 'swipe-left', 6: 'swipe-right', 7: 'swipe-forward', 8: 'swipe-backward', 9: 'tap-thumb' };
 // What the labels mean on the hand (Meta's definition, confirmed on Ainsley's left hand 21 Oct): on the
 // LEFT hand, thumb sliding along the index finger toward the fingertip = swipe-right, toward the knuckle
-// = swipe-left; mirrored on the right hand. forward / backward are swipes ACROSS the finger. The room
-// works in intents so both hands feel the same: push = along, to the tip; brake = along, to the knuckle
-// (or a tap); turn-right / turn-left = across the finger, away from / toward the palm.
+// = swipe-left; mirrored on the right hand. forward / backward are swipes ACROSS the finger.
+// Only the along-finger swipes are read reliably (Quest 3S, 21 Oct: a 2 cm across stroke came back as
+// an along label, a 4 cm one as forward, and the slow return as backward, so turning right and left
+// cancelled: "this turning business is not working, we need a different technique"). So each hand has
+// one axis, along its own index finger: the LEFT thumb is speed (to the tip = push, to the knuckle =
+// brake or back up), the RIGHT thumb is heading (to the tip = turn right, to the knuckle = turn left).
+// Across swipes are logged and do nothing.
 const THUMB = {
-  left: { 'swipe-right': 'push', 'swipe-left': 'brake', 'swipe-forward': 'turn-right', 'swipe-backward': 'turn-left', 'tap-thumb': 'brake' },
-  right: { 'swipe-left': 'push', 'swipe-right': 'brake', 'swipe-forward': 'turn-right', 'swipe-backward': 'turn-left', 'tap-thumb': 'brake' },
+  left: { 'swipe-right': 'push', 'swipe-left': 'brake', 'swipe-forward': 'none', 'swipe-backward': 'none', 'tap-thumb': 'brake' },
+  right: { 'swipe-left': 'turn-right', 'swipe-right': 'turn-left', 'swipe-forward': 'none', 'swipe-backward': 'none', 'tap-thumb': 'none' },
 };
 const microDown = { left: new Set(), right: new Set() };
 // What the thumb actually did: for each hand, the thumb tip in the index finger's frame, sampled every
