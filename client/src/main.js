@@ -20,6 +20,8 @@ import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
 import { HandTrace, GhostHands, describeHands } from './hands.js';
 import { createSessionLog, createStatsSampler } from './session-log.js';
+import { SlideDetector } from '../../shared/thumb-slide.js';
+import { JOINTS } from './hands.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { VoiceRecorder } from './recorder.js';
@@ -1613,29 +1615,46 @@ function sampleThumb(now) {
     j['index-finger-phalanx-proximal'].getWorldPosition(_ia); j['index-finger-tip'].getWorldPosition(_ib); j['thumb-tip'].getWorldPosition(_tt);
     _ax.copy(_ib).sub(_ia); const len = _ax.length() || 1; _ax.divideScalar(len);
     _tt.sub(_ia); const along = _tt.dot(_ax); const off = Math.sqrt(Math.max(0, _tt.lengthSq() - along * along));
-    if (buf.length && Math.abs(along - buf[buf.length - 1][1]) > THUMB_JUMP_M) { buf.length = 0; thumbSeen[side] = now; continue; }   // a glitch: start over
+    if (buf.length && Math.abs(along - buf[buf.length - 1][1]) > THUMB_JUMP_M) { buf.length = 0; thumbSeen[side] = now; slide[side].reset(); continue; }   // a glitch: start over
     buf.push([now, along, off]);
-    while (buf.length && now - buf[0][0] > 400) buf.shift();
+    while (buf.length && now - buf[0][0] > 1100) buf.shift();   // a little over a second: the stats line takes the last second
   }
 }
 // Our own detector (21 Oct): Meta's recogniser fired on about one slide in four of Ainsley's, and the
 // slides it did label matched the along-axis sign, so the geometry is enough. A slide is the thumb tip
 // moving along the index finger by SLIDE_M within SLIDE_MS while staying within SLIDE_OFF_M of the
 // finger's axis; toward the tip = push, toward the knuckle = brake. One event per slide (SLIDE_GAP_MS).
-const SLIDE_M = 0.018, SLIDE_MS = 320, SLIDE_OFF_M = 0.045, SLIDE_GAP_MS = 350;
-const slideState = { left: { lastAt: 0 }, right: { lastAt: 0 } };
+// The raw trace: both hands' joints (world), head and body, 20 Hz, posted every second while presenting.
+// On by default for now: this is the data the detectors and the simulated visitor are built from. Turn it
+// off with the control action `trace {on:false}`. Nothing here carries audio or text.
+const TRACE_HZ = 20;
+const tracer = { on: new URLSearchParams(location.search).get('trace') !== '0', frames: [], last: 0, lastPost: 0, posted: 0, failed: 0 };
+const _tp = new THREE.Vector3(), _tq = new THREE.Quaternion();
+function traceTick(now) {
+  if (!tracer.on || !renderer.xr.isPresenting || !project) return;
+  if (now - tracer.last < 1000 / TRACE_HZ) return;
+  tracer.last = now;
+  const cam = renderer.xr.getCamera();
+  const one = (side) => { const j = xrHands[side]?.joints; if (!j || !j.wrist?.visible) return null; const out = new Array(JOINTS.length * 3); for (let i = 0; i < JOINTS.length; i++) { const jj = j[JOINTS[i]]; if (!jj) return null; jj.getWorldPosition(_tp); out[3 * i] = +_tp.x.toFixed(3); out[3 * i + 1] = +_tp.y.toFixed(3); out[3 * i + 2] = +_tp.z.toFixed(3); } return out; };
+  tracer.frames.push({ t: Math.round(now), head: [+cam.position.x.toFixed(3), +cam.position.y.toFixed(3), +cam.position.z.toFixed(3), +cam.quaternion.x.toFixed(4), +cam.quaternion.y.toFixed(4), +cam.quaternion.z.toFixed(4), +cam.quaternion.w.toFixed(4)], rig: [+rig.position.x.toFixed(3), +rig.position.y.toFixed(3), +rig.position.z.toFixed(3), +rig.rotation.y.toFixed(4)], l: one('left'), r: one('right'), push: +push.toFixed(2) });
+  if (now - tracer.lastPost >= 1000 && tracer.frames.length) {
+    tracer.lastPost = now;
+    const frames = tracer.frames; tracer.frames = [];
+    fetch(`/api/projects/${project.id}/traces`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session: log.session, frames }), keepalive: true })
+      .then((r) => { if (r.ok) tracer.posted += frames.length; else tracer.failed += frames.length; }).catch(() => { tracer.failed += frames.length; });
+  }
+}
+// The detector itself is shared/thumb-slide.js (pure, unit-tested on traces like Ainsley's).
+const slide = { left: new SlideDetector(), right: new SlideDetector() };
 function detectSlides(now) {
   for (const side of ['left', 'right']) {
-    const buf = thumbTrail[side], st = slideState[side];
-    if (buf.length < 3 || now - st.lastAt < SLIDE_GAP_MS) continue;
+    const buf = thumbTrail[side];
+    if (!buf.length) { slide[side].reset(); continue; }
     const last = buf[buf.length - 1];
-    if (last[2] > SLIDE_OFF_M) continue;
-    let i = buf.length - 1; while (i > 0 && last[0] - buf[i - 1][0] <= SLIDE_MS) i--;   // the oldest sample within the window
-    const d = last[1] - buf[i][1];
-    if (Math.abs(d) < SLIDE_M) continue;
-    st.lastAt = now;
-    const intent = d > 0 ? 'push' : 'brake';
-    log('input:thumb', { hand: side, intent, along: +d.toFixed(3), ms: Math.round(last[0] - buf[i][0]), off: +last[2].toFixed(3), source: 'ours' });
+    if (last[0] !== now) continue;                                              // no fresh sample this frame
+    const intent = slide[side].sample(now, last[1], last[2]);
+    if (!intent) continue;
+    log('input:thumb', { hand: side, intent, along: +last[1].toFixed(3), off: +last[2].toFixed(3), source: 'ours' });
     if (hud.thumbSource.value === 'ours') onThumbIntent(side, intent, 'ours');
   }
 }
@@ -1779,6 +1798,7 @@ const net = connect({
       case 'project': if (a.id && a.id !== project?.id) openProject(a.id); break;
       case 'reload': log.flush().finally(() => location.reload()); break;
       case 'exitVR': renderer.xr.getSession()?.end(); break;
+      case 'trace': tracer.on = a.on !== false; setStatus(tracer.on ? 'tracing hands and head' : 'tracing off', { hold: 1500 }); break;
     }
   },
   onDeleted: (d) => { removeMarker(d); renderList(); },
@@ -1824,7 +1844,7 @@ if (import.meta.env.DEV) window.__glossy = {
   autoFit, frameAll, applyTransform, aimPoint, aimMarker, floorBelow, spawnInside, focusMarker, play, endRecording,
   ghost, xrHands, get handsPresent() { return handsPresent(); }, log, microgesture: (hand, gesture) => queuedMicro.push([hand, gesture]),
   chat: { begin: beginMessage, end: endMessage, toggle: toggleMessage, get listening() { return !!messaging; }, get messages() { return chatPanel.messages; }, panel: chatPanel },
-  wristMic,
+  wristMic, tracer,
   debugHead() { headWorld(); const xr = renderer.xr.getCamera(); const d1 = new THREE.Vector3(); xr.getWorldDirection(d1); const d2 = new THREE.Vector3(); camera.getWorldDirection(d2); const d3 = new THREE.Vector3(); camera.updateWorldMatrix(true, false); camera.getWorldDirection(d3); return { fwd: [+_fwd.x.toFixed(3), +_fwd.z.toFixed(3)], xrCam: [+d1.x.toFixed(3), +d1.z.toFixed(3)], userCam: [+d2.x.toFixed(3), +d2.z.toFixed(3)], userCamUpdated: [+d3.x.toFixed(3), +d3.z.toFixed(3)], rigYaw: +((rig.rotation.y * 180) / Math.PI).toFixed(1), xrParent: xr.parent?.type || null, camParent: camera.parent?.type || null }; },
 };
 
@@ -1905,7 +1925,8 @@ renderer.setAnimationLoop(() => {
   updateGlide();
   updateCruise(dt);
   updateWristMic(performance.now());
-  if (stats.due) { const line = stats.take(); if (renderer.xr.isPresenting || recorder.isRecording) log('stats', { presenting: renderer.xr.isPresenting, recording: recorder.isRecording, ...line, thumb: thumbTrail.left.length ? thumbTrail.left.filter((_, i) => i % 3 === 0).map((s) => [Math.round(s[1] * 1000), Math.round(s[2] * 1000)]) : undefined }); }   // thumb: the left thumb tip along / off the index finger, mm, ~7 Hz, while a hand is seen
+  traceTick(performance.now());
+  if (stats.due) { const line = stats.take(); if (renderer.xr.isPresenting || recorder.isRecording) log('stats', { presenting: renderer.xr.isPresenting, recording: recorder.isRecording, ...line, thumb: thumbTrail.left.length ? thumbTrail.left.filter((s, i, a) => i === a.length - 1 || i % Math.max(1, Math.round(a.length / 15)) === 0).map((s) => [Math.round(s[1] * 1000), Math.round(s[2] * 1000)]) : undefined }); }   // thumb: the left thumb tip along / off the index finger, mm, ~15 Hz over the last second, while a hand is seen
 
   renderer.render(scene, camera);
 });

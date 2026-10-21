@@ -427,6 +427,30 @@ app.post('/api/projects/:id/events', projectOr404, (req, res) => {
   const n = db.events.add(req.params.id, session, events);
   res.status(202).json({ stored: n });
 });
+// Raw traces: both hands' joints, the head and the body, 20 Hz, posted by the
+// page every second while a headset presents and tracing is on. Appended as
+// NDJSON per session under <data>/traces/<project>/<session>.ndjson, so a worn
+// session can be replayed through the detectors and the simulation offline.
+const TRACE_DIR = path.join(DATA_DIR, 'traces');
+app.post('/api/projects/:id/traces', projectOr404, (req, res) => {
+  const { session, frames } = req.body || {};
+  if (!session || !Array.isArray(frames) || !frames.length) return res.status(400).json({ error: 'session and frames are required' });
+  const dir = path.join(TRACE_DIR, req.params.id); fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${String(session).replace(/[^a-z0-9-]/gi, '').slice(0, 40)}.ndjson`);
+  fs.appendFileSync(file, frames.map((f) => JSON.stringify(f)).join('\n') + '\n');
+  res.status(202).json({ stored: frames.length });
+});
+app.get('/api/projects/:id/traces', projectOr404, (req, res) => {
+  const dir = path.join(TRACE_DIR, req.params.id);
+  if (!fs.existsSync(dir)) return res.json([]);
+  res.json(fs.readdirSync(dir).filter((f) => f.endsWith('.ndjson')).map((f) => { const st = fs.statSync(path.join(dir, f)); return { session: f.replace(/\.ndjson$/, ''), bytes: st.size, modified: st.mtime.toISOString() }; }));
+});
+app.get('/api/projects/:id/traces/:session', projectOr404, (req, res) => {
+  const file = path.join(TRACE_DIR, req.params.id, `${String(req.params.session).replace(/[^a-z0-9-]/gi, '').slice(0, 40)}.ndjson`);
+  if (!fs.existsSync(file)) return res.status(404).json({ error: 'no trace for that session' });
+  res.type('application/x-ndjson').sendFile(file);
+});
+
 // Operator chat: a conversation between the person in a headset and someone at
 // a laptop (or a script). Operator messages are text; the visitor's are spoken
 // in the headset, stored as audio and transcribed like clips. `session`
@@ -456,7 +480,7 @@ app.post('/api/projects/:id/chat/audio', projectOr404, audioUpload.single('audio
 // session id): say something on the panel, play or stop a clip, switch the
 // ghost-hand drawing, the project, settings, or reload. For a headset that
 // nobody can type into, driven from a laptop, or by an exhibition operator.
-const CONTROL_ACTIONS = ['say', 'play', 'stop', 'ghost', 'voiceStart', 'interview', 'ask', 'step', 'project', 'reload', 'exitVR'];
+const CONTROL_ACTIONS = ['say', 'play', 'stop', 'ghost', 'voiceStart', 'interview', 'ask', 'step', 'project', 'reload', 'exitVR', 'trace'];
 app.post('/api/projects/:id/control', projectOr404, (req, res) => {
   const { session, action, args } = req.body || {};
   if (!CONTROL_ACTIONS.includes(action)) return res.status(400).json({ error: 'action must be one of ' + CONTROL_ACTIONS.join(' ') });
