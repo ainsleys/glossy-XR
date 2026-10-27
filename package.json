@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "description": "Glossy, rebuilt: spatially anchored, multi-user voice annotation for WebXR (successor to the 2016 BuzzFeed Open Lab WebVR prototype)",
   "type": "module",
-  "license": "MIT",
+  "license": "EUPL-1.2",
   "scripts": {
     "dev": "concurrently -k \"npm:server\" \"npm:client\"",
     "server": "node --disable-warning=ExperimentalWarning server/index.js",
