@@ -10,11 +10,11 @@ The test checks the behaviour that matters (the early release is honoured, the r
 
 ## Requirements
 
-R0. **The microphone must actually be cold.** Ticking consent in `prepareRecording` calls `readyMic()`, which opens the fake microphone; by the time the test presses, `recorder.start()` resolves within microtasks and the release lands on an already-recording clip, so the early-release path (`releasedEarly` in `releaseRecording`/`beginRecording`) is never exercised. The test closes the microphone first with `page.evaluate(() => window.__glossy.recorder.release())`, then dispatches `mousedown` and `mouseup` on the canvas inside one `page.evaluate` (two `MouseEvent`s, button 0, in the same task), so the release is guaranteed to arrive while `starting` is set.
+R0. **The microphone must actually be cold.** Ticking consent in `prepareRecording` calls `readyMic()`, which opens the fake microphone; by the time the test presses, `recorder.start()` resolves within microtasks and the release lands on an already-recording clip, so the early-release path (`releasedEarly` in `releaseRecording`/`beginRecording`) is never exercised. The test waits for `window.__glossy.recorder.live` to be true (so the consent `readyMic()` is not still in flight), then closes the microphone with `page.evaluate(() => window.__glossy.recorder.release())`, then dispatches `mousedown` and `mouseup` on the canvas inside one `page.evaluate` (two `MouseEvent`s, button 0, in the same task), so the release is guaranteed to arrive while `starting` is set.
 
-R1. The test then asserts, in this order: `window.__glossy.recorder.isRecording` becomes false (poll); then, after `window.__glossy.log.flush()`, the session log holds a `record:discarded` event with `reason: 'too short'` and `source: 'mouse'` (poll the events endpoint, `GET /api/projects/:id/events`, the way `test/desktop.spec.js` "the session log records a session…" does; flushing before the event exists sends nothing, so the `isRecording` poll comes first). No "or saved" alternative: with a forced-cold microphone and an instant release the clip is always under the 300 ms minimum.
+R1. The test then asserts, in this order: a poll of `{ live: recorder.live, isRecording: recorder.isRecording }` until it equals `{ live: true, isRecording: false }` (the microphone opened again and the recorder is not recording; `isRecording` on its own proves nothing, because it is already false before the microphone opens, so a plain poll on it passes at once even when the early release is ignored); then `window.__glossy.log.flush()`; then a poll of the events endpoint (`GET /api/projects/:id/events`, the way `test/desktop.spec.js` "the session log records a session…" does) until the `record:discarded`/`record:saved` events for the project are exactly one `record:discarded` with `reason: 'too short'` and `source: 'mouse'`. Flushing before the event exists sends nothing, so the recorder poll comes first. No "or saved" alternative: with a forced-cold microphone and an instant release the clip is always under the 300 ms minimum.
 
-R2. (merged into R1: the `isRecording` poll.)
+R2. (merged into R1: the recorder poll.)
 
 R3. The test keeps its final step: a normal hold (`recordWithMouse`) afterwards produces one marker.
 
@@ -30,11 +30,11 @@ R5. No change to `client/` code. If, while making the test pass, the implementer
 
 ## Design
 
-Replace the `expect.poll(() => status(page)).toMatch(/too short|^saved/)` line with: flush the log, poll the events endpoint until an event of kind `record:discarded` or `record:saved` for this session appears, assert its `reason`/`source`, then `expect.poll(() => isRecording).toBe(false)`. The helpers for events are in the two tests named in R1; factor a small `eventsOf(request, projectId)` helper into `test/helpers.js` only if both existing call sites can use it unchanged; otherwise inline.
+Replace the `expect.poll(() => status(page)).toMatch(/too short|^saved/)` line and the `isRecording` check after it with, in order: the recorder poll on `{ live: true, isRecording: false }`, a log flush, and a poll of the events endpoint, filtered to `record:discarded` and `record:saved` (inline as `clipEvents`), until it equals one `record:discarded` with `reason: 'too short'` and `source: 'mouse'`. The events request is inlined; no helper was factored into `test/helpers.js`.
 
 ## Tests
 
-T1. The rewritten test itself. Primary mutation, matching the test's title: in `releaseRecording`, delete the line that sets `releasedEarly = true` (so an early release is ignored and the recorder stays recording). The test must fail at the `isRecording` poll. Restore. Secondary mutation (optional): in `endRecording`, remove the `record:discarded` log call; the test must fail at the events poll. Restore.
+T1. The rewritten test itself. Primary mutation, matching the test's title: in `releaseRecording`, remove only the statement `releasedEarly = true;` (it shares a line with the `if (starting === source)` guard, which stays), so an early release is ignored and the recorder stays recording. The test must fail at the recorder poll (received `{ live: true, isRecording: true }`). Restore. Secondary mutation: in `endRecording`'s too-short branch, remove the `record:discarded` log call; the test must fail at the events poll. Restore.
 
 T2. Stability: run the test with `--repeat-each=5`; 5/5 must pass.
 
@@ -51,3 +51,4 @@ T2. Stability: run the test with `--repeat-each=5`; 5/5 must pass.
 3. Order of assertions fixed (`isRecording` first, then flush, then events), because a flush before the event exists sends nothing and the poll would then wait on the 2 s timer.
 4. The mutation that proves the test is the one that breaks the early release, not the one that removes a log line.
 5. Noted, out of scope: `recorder.start()` racing a `readyMic()` still in flight opens a second stream and never stops the first (an orphaned track). Not a block, not this change.
+6. A third mutation, removing `if (releasedEarly) endRecording();` from `beginRecording`, also fails the test at the recorder poll (received `{ live: true, isRecording: true }`), as does the primary one.
