@@ -152,9 +152,9 @@ test('with hands tracked, speaking starts a clip, the gesture is stored and repl
   await page.evaluate((id) => window.__glossy.play(id), a.id);
   await expect.poll(() => page.evaluate(() => window.__glossy.ghost.visible)).toBe(true);
   // the emulated headset never moved, so the listener stands where the author stood: the gaze is drawn, the head is not
-  const vp = await page.evaluate(() => { const v = window.__glossy.viewpoint; return { visible: v.visible, headShown: v.headShown, position: v.position }; });
-  expect(vp.visible).toBe(true);
-  expect(vp.headShown).toBe(false);
+  await expect.poll(() => page.evaluate(() => window.__glossy.viewpoint.visible)).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.__glossy.viewpoint.headShown)).toBe(false);
+  const vp = await page.evaluate(() => ({ position: window.__glossy.viewpoint.position }));
   for (let i = 0; i < 3; i++) expect(Math.abs(vp.position[i] - a.pose[0].p[i])).toBeLessThan(0.05);
   await page.waitForTimeout(400);
   await page.screenshot({ path: 'test-results/xr-ghost-hands.png' });
