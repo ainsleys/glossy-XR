@@ -104,7 +104,8 @@ export class HandTrace {
  *  stir reads as a circle even when the hand is small or half out of view.
  *  Inferred frames (gap filling) are drawn grey in every style. */
 const TRAIL_MS = 1200;
-const SEEN = 0x9fd3ff, INFERRED = 0x6f7f95;
+export const SEEN = 0x9fd3ff;                     // the ghost palette; the replayed viewpoint (viewpoint.js) uses it too
+const INFERRED = 0x6f7f95;
 const BONE_RADIUS = (a, b) => (a === 0 ? 0.011 : b % 5 === 4 ? 0.007 : b < 5 ? 0.0095 : 0.0085);   // metacarpals thicker, fingertips thinner, thumb in between
 const HAND_MESH_URL = 'https://cdn.jsdelivr.net/npm/@webxr-input-profiles/assets@1.0/dist/profiles/generic-hand/';
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _x = new THREE.Vector3(), _y = new THREE.Vector3(), _z = new THREE.Vector3(), _q = new THREE.Quaternion(), _m4 = new THREE.Matrix4(), _Y = new THREE.Vector3(0, 1, 0);
