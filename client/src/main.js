@@ -757,6 +757,7 @@ function addMarker(record) {
 function removeMarker({ id }) {
   const m = markers.get(id);
   if (!m) return;
+  if (id === playingId) stopAll('removed');                 // stopping the sound here clears its onEnded, so take the replay down through the usual path
   m.sound.isPlaying && m.sound.stop();
   markerGroup.remove(m.mesh);
   markers.delete(id);
