@@ -18,7 +18,7 @@ import { sampleAt } from '../../shared/pose.js';
 const SAMPLE_MS = 1000 / 10;        // the recording rate; one interval past the last sample the replay is over
 const HEAD_RADIUS = 0.1, GAZE_M = 0.6;
 const NEAR_HEAD_M = 0.4;            // a listener this close to the head would see it from inside: draw the gaze alone
-const _fwd = new THREE.Vector3();
+const _fwd = new THREE.Vector3(), _headAt = new THREE.Vector3();
 
 export class Viewpoint {
   constructor(parent) {
@@ -37,8 +37,13 @@ export class Viewpoint {
   get visible() { return this.group.visible; }
   get headShown() { return this.group.visible && this.gaze.visible && this.head.visible; }
   get position() { const s = this.pose?.[this.cursor]; return s ? [...s.p] : null; }
-  // the gaze direction in world space, a unit vector
-  get forward() { return this.pose?.[this.cursor] ? _fwd.set(0, 0, -1).applyQuaternion(this.group.quaternion).toArray() : null; }
+  // the gaze direction in world space, a unit vector, read off the drawn line: its far end through the line's world matrix, from the head
+  get forward() {
+    if (!this.pose?.[this.cursor]) return null;
+    this.group.updateMatrixWorld(true);
+    _fwd.fromBufferAttribute(this.gaze.geometry.attributes.instanceEnd, 0).applyMatrix4(this.gaze.matrixWorld);
+    return _fwd.sub(this.head.getWorldPosition(_headAt)).normalize().toArray();
+  }
   show(pose) { this.pose = pose?.length ? pose : null; this.cursor = -1; this.group.visible = !!this.pose; if (this.pose) this.update(0); }
   hide() { this.group.visible = false; this.pose = null; this.cursor = -1; }
   /** Draw the viewpoint at t milliseconds into the clip, seen by a listener whose head is at `listener` (world). */
