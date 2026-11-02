@@ -10,9 +10,11 @@ The test checks the behaviour that matters (the early release is honoured, the r
 
 ## Requirements
 
-R1. The test asserts, after the instant press-and-release on a cold microphone, that the session log contains a `record:discarded` event with `reason: 'too short'` and `source: 'mouse'` (or a `record:saved` event, if the microphone happened to be ready and the clip long enough; the test's intent is "not stuck", not "discarded"), using `window.__glossy.log.flush()` and `GET /api/projects/:id/events` the way `test/desktop.spec.js` "the session log records a session…" and `test/xr.spec.js` already do.
+R0. **The microphone must actually be cold.** Ticking consent in `prepareRecording` calls `readyMic()`, which opens the fake microphone; by the time the test presses, `recorder.start()` resolves within microtasks and the release lands on an already-recording clip, so the early-release path (`releasedEarly` in `releaseRecording`/`beginRecording`) is never exercised. The test closes the microphone first with `page.evaluate(() => window.__glossy.recorder.release())`, then dispatches `mousedown` and `mouseup` on the canvas inside one `page.evaluate` (two `MouseEvent`s, button 0, in the same task), so the release is guaranteed to arrive while `starting` is set.
 
-R2. The test asserts `window.__glossy.recorder.isRecording === false` by polling, not by a single read (the discard happens after an awaited `recorder.start()`).
+R1. The test then asserts, in this order: `window.__glossy.recorder.isRecording` becomes false (poll); then, after `window.__glossy.log.flush()`, the session log holds a `record:discarded` event with `reason: 'too short'` and `source: 'mouse'` (poll the events endpoint, `GET /api/projects/:id/events`, the way `test/desktop.spec.js` "the session log records a session…" does; flushing before the event exists sends nothing, so the `isRecording` poll comes first). No "or saved" alternative: with a forced-cold microphone and an instant release the clip is always under the 300 ms minimum.
+
+R2. (merged into R1: the `isRecording` poll.)
 
 R3. The test keeps its final step: a normal hold (`recordWithMouse`) afterwards produces one marker.
 
@@ -32,7 +34,7 @@ Replace the `expect.poll(() => status(page)).toMatch(/too short|^saved/)` line w
 
 ## Tests
 
-T1. The rewritten test itself. Mutation: in `endRecording`, make the too-short branch not log `record:discarded` (comment out the `log(...)` call). The test must fail. Restore.
+T1. The rewritten test itself. Primary mutation, matching the test's title: in `releaseRecording`, delete the line that sets `releasedEarly = true` (so an early release is ignored and the recorder stays recording). The test must fail at the `isRecording` poll. Restore. Secondary mutation (optional): in `endRecording`, remove the `record:discarded` log call; the test must fail at the events poll. Restore.
 
 T2. Stability: run the test with `--repeat-each=5`; 5/5 must pass.
 
@@ -42,6 +44,10 @@ T2. Stability: run the test with `--repeat-each=5`; 5/5 must pass.
 - T1's mutation shown to fail; T2's result in the pull request.
 - README: the test-coverage paragraph's phrase "a click released before the microphone is ready" still describes the test; no README change needed unless the implementer finds that phrase inaccurate.
 
-## Decisions
+## Decisions (2 Nov)
 
-(Filled in after the specification review.)
+1. The first draft's assertion would have passed without exercising the early-release path, because the microphone is already open when the test presses (consent → `readyMic`). Hence R0: force it cold with `recorder.release()` and send both mouse events in one task.
+2. "Discarded or saved" dropped: with a cold microphone and an instant release, saved is unreachable.
+3. Order of assertions fixed (`isRecording` first, then flush, then events), because a flush before the event exists sends nothing and the poll would then wait on the 2 s timer.
+4. The mutation that proves the test is the one that breaks the early release, not the one that removes a log line.
+5. Noted, out of scope: `recorder.start()` racing a `readyMic()` still in flight opens a second stream and never stops the first (an orphaned track). Not a block, not this change.
