@@ -19,6 +19,7 @@ import * as THREE from 'three';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
 import { HandTrace, GhostHands, describeHands } from './hands.js';
+import { Viewpoint } from './viewpoint.js';
 import { createSessionLog, createStatsSampler } from './session-log.js';
 import { SlideDetector } from '../../shared/thumb-slide.js';
 import { JOINTS } from './hands.js';
@@ -934,7 +935,7 @@ function bloom(id) {
 
 let playingId = null;
 function stopAll(reason = 'other') {
-  ghost.hide();
+  ghost.hide(); viewpoint.hide();
   if (playingId) log('play:stop', { id: playingId, reason });
   for (const other of markers.values()) {
     if (other.sound.isPlaying) other.sound.stop();
@@ -951,12 +952,14 @@ function play(id) {
   if (listener.context.state === 'suspended') listener.context.resume();
   if (playingId === id) { stopAll('click'); setStatus('■ stopped'); return; }   // click the playing marker again to stop
   stopAll('other');
-  m.sound.onEnded = () => { m.sound.isPlaying = false; ghost.hide(); if (playingId === id) { log('play:stop', { id, reason: 'ended' }); playingId = null; m.mesh.userData.playing = false; m.mesh.material.emissiveIntensity = 0.35; renderList(); } };
+  m.sound.onEnded = () => { m.sound.isPlaying = false; ghost.hide(); viewpoint.hide(); if (playingId === id) { log('play:stop', { id, reason: 'ended' }); playingId = null; m.mesh.userData.playing = false; m.mesh.material.emissiveIntensity = 0.35; renderList(); } };
   m.sound.play();
   playingId = id;
-  log('play:start', { id, hands: !!m.record.hands });
+  const seen = m.record.poseSource === 'xr' && !!m.record.pose?.length;   // a headset viewpoint; a desktop trace is where the mouse pointed, not a gaze, and is not drawn
+  log('play:start', { id, hands: !!m.record.hands, viewpoint: seen });
   playStartedAt = performance.now();
   if (m.record.hands) ghost.show(m.record.hands); else ghost.hide();
+  if (seen) viewpoint.show(m.record.pose); else viewpoint.hide();
   m.mesh.userData.playing = true;
   m.mesh.material.emissiveIntensity = 1.0;
   renderList();
@@ -1771,6 +1774,7 @@ hud.ghostTrail.checked = urlq.has('trail') ? urlq.get('trail') !== '0' : ls.get(
 const ghost = new GhostHands(scene, { style: hud.ghostStyle.value, trail: hud.ghostTrail.checked });
 hud.ghostStyle.addEventListener('change', () => { ghost.setStyle(hud.ghostStyle.value); ls.set('glossy.ghostStyle', ghost.style); log('setting', { ghost: ghost.style }); });
 hud.ghostTrail.addEventListener('change', () => { ghost.trail = hud.ghostTrail.checked; ls.set('glossy.ghostTrail', ghost.trail ? '1' : '0'); log('setting', { trail: ghost.trail }); });
+const viewpoint = new Viewpoint(scene);                     // the author's head and gaze, replayed with the clip
 let playStartedAt = 0;
 // voice start: speech above VOICE_START for VOICE_START_MS begins a clip; a pause below VOICE_STOP for VOICE_STOP_MS ends it
 const VOICE_START = 0.1, VOICE_START_MS = 250, VOICE_STOP = 0.06, VOICE_STOP_MS = 1200, VOICE_MIN_MS = 600;
@@ -1926,7 +1930,7 @@ if (import.meta.env.DEV) window.__glossy = {
   get pending() { return pendingMarkers.size; },
   get interview() { return { on: hud.interview.checked, index: qIndex, question: currentQuestion()?.text || null, total: questions().length }; },
   autoFit, frameAll, applyTransform, aimPoint, aimMarker, floorBelow, spawnInside, focusMarker, play, endRecording,
-  ghost, xrHands, get handsPresent() { return handsPresent(); }, log, microgesture: (hand, gesture) => queuedMicro.push([hand, gesture]),
+  ghost, viewpoint: { get visible() { return viewpoint.visible; }, get headShown() { return viewpoint.headShown; }, get position() { return viewpoint.position; } }, xrHands, get handsPresent() { return handsPresent(); }, log, microgesture: (hand, gesture) => queuedMicro.push([hand, gesture]),
   chat: { begin: beginMessage, end: endMessage, toggle: toggleMessage, get listening() { return !!messaging; }, get messages() { return chatPanel.messages; }, panel: chatPanel },
   wristMic, tracer,
   debugHead() { headWorld(); const xr = renderer.xr.getCamera(); const d1 = new THREE.Vector3(); xr.getWorldDirection(d1); const d2 = new THREE.Vector3(); camera.getWorldDirection(d2); const d3 = new THREE.Vector3(); camera.updateWorldMatrix(true, false); camera.getWorldDirection(d3); return { fwd: [+_fwd.x.toFixed(3), +_fwd.z.toFixed(3)], xrCam: [+d1.x.toFixed(3), +d1.z.toFixed(3)], userCam: [+d2.x.toFixed(3), +d2.z.toFixed(3)], userCamUpdated: [+d3.x.toFixed(3), +d3.z.toFixed(3)], rigYaw: +((rig.rotation.y * 180) / Math.PI).toFixed(1), xrParent: xr.parent?.type || null, camParent: camera.parent?.type || null }; },
@@ -2001,6 +2005,7 @@ renderer.setAnimationLoop(() => {
   updateMessage(performance.now());
   if (renderer.xr.isPresenting) { let h = false; for (const c of xrControllers) if (aimChat(c)) { h = true; break; } chatPanel.hot = h; }
   if (ghost.visible) ghost.update(performance.now() - playStartedAt);
+  if (viewpoint.visible) viewpoint.update(performance.now() - playStartedAt, near);   // `near` is the listener's head, filled above
 
   // once a second while presenting or recording: frame rate, hand tracking coverage, microphone level
   stats.frame(); stats.level(recorder.isRecording ? level : levelNode ? measureLevel() : 0);   // the room's level is only kept while recording; the log wants it whenever the microphone is open
