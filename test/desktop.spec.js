@@ -276,12 +276,24 @@ test('re-transcribe endpoint and deleting while a job is queued', async ({ page,
 });
 
 test('a click released before the microphone is ready does not leave the recorder stuck', async ({ page, request }) => {
-  await openProject(page, request, 'cold-mic');
+  const project = await openProject(page, request, 'cold-mic');
   await prepareRecording(page);
   await lockPointer(page);
-  await page.mouse.down(); await page.mouse.up();                       // instant click on a cold mic
-  await expect.poll(() => status(page), { timeout: 10_000 }).toMatch(/too short|^saved/);
-  expect(await page.evaluate(() => window.__glossy.recorder.isRecording)).toBe(false);
+  // consent already opened the microphone: wait for it to be open, then close it, so the press has to wait for it
+  await expect.poll(() => page.evaluate(() => window.__glossy.recorder.live), { timeout: 10_000 }).toBe(true);
+  await page.evaluate(() => window.__glossy.recorder.release());
+  // press and release in the same task, so the release arrives while the microphone is still starting
+  await page.evaluate(() => {
+    const c = window.__glossy.renderer.domElement, at = { button: 0, bubbles: true };
+    c.dispatchEvent(new MouseEvent('mousedown', at)); c.dispatchEvent(new MouseEvent('mouseup', at));
+  });
+  // the early release is honoured: once the microphone is open again, the recorder is not left recording
+  // (isRecording alone is false before the microphone opens, so the poll waits for it to be live)
+  await expect.poll(() => page.evaluate(() => { const r = window.__glossy.recorder; return { live: r.live, isRecording: r.isRecording }; }), { timeout: 10_000 }).toEqual({ live: true, isRecording: false });
+  // and the clip is dropped quietly, as too short, which the session log records
+  await page.evaluate(() => window.__glossy.log.flush());
+  const clipEvents = async () => (await (await request.get(`${API}/api/projects/${project.id}/events`)).json()).filter((e) => e.kind === 'record:discarded' || e.kind === 'record:saved');
+  await expect.poll(clipEvents, { timeout: 10_000 }).toEqual([expect.objectContaining({ kind: 'record:discarded', data: expect.objectContaining({ reason: 'too short', source: 'mouse' }) })]);
   await recordWithMouse(page, 600);                                      // and a normal hold still works afterwards
   expect(await markerCount(page)).toBe(1);
 });
