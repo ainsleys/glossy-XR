@@ -65,12 +65,12 @@ T4. Optional unit test for the sample-lookup function in `test/unit/`.
 - README updated as in R9.
 - PR description describes the feature and the tests, nothing else.
 
-## Decisions (after review, 2 Nov)
+## Decisions (2 Nov)
 
 1. `removeMarker` is in scope: it is the one stop path that bypasses `stopAll`, and it already leaves the ghost hands behind on project switch and delete. Fixed here via `stopAll('removed')`.
 2. A span guard in `Viewpoint.update` is required, not optional: the step lookup has no natural end.
 3. `visible` and `headShown` are separate, because in the emulated XR test the listener stands on the author's spot and R5 hides the sphere for the whole clip.
-4. Desktop poses stay undrawn (R4). The review did not contest it.
+4. Desktop poses stay undrawn (R4).
 5. Walls occlude the marker (depth test on). A viewpoint seen through a wall would mislead more than it helps.
 6. The gaze line is `Line2`/`LineMaterial` with world units or a cylinder, never a 1 px `Line`.
 7. The playback clock is unchanged; the AudioContext-resume drift is shared with the ghost and noted as a follow-up.
