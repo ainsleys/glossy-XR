@@ -97,6 +97,12 @@ test('records, saves, plays back, and deletes an annotation', async ({ page, req
   await expect.poll(() => page.evaluate(() => window.__glossy.playingId), { timeout: 10_000 }).toBe(a.id);
   await expect(page.locator('#annList li.playing')).toHaveCount(1);
   await page.screenshot({ path: 'test-results/annotation-playing.png' });
+  // a desktop pose is where the mouse pointed, not a gaze: no viewpoint is drawn, and the log says so
+  expect(await page.evaluate(() => window.__glossy.viewpoint.visible)).toBe(false);
+  await page.evaluate(() => window.__glossy.log.flush());
+  let playStart;
+  await expect.poll(async () => (playStart = (await (await request.get(`${API}/api/projects/${project.id}/events`)).json()).find((e) => e.kind === 'play:start')?.data), { timeout: 10_000 }).toBeTruthy();
+  expect(playStart.viewpoint).toBe(false);
 
   // the export carries attribution, timestamp, spatial anchor and temporal reference on every contribution
   const exp = await exportProject(request, project.id);
@@ -561,4 +567,83 @@ test('a spoken message to the laptop: the page records it, the server transcribe
   const events = await (await request.get(`${API}/api/projects/${project.id}/events`)).json();
   expect(events.map((e) => e.kind)).toEqual(expect.arrayContaining(['chat:received', 'chat:listen', 'chat:sent']));
   expect(JSON.stringify(events)).not.toContain('look at the pot');
+});
+
+// A clip as a headset would have saved it, created through the API: a tone of `seconds` and the given pose, poseSource 'xr'.
+async function headsetClip(page, request, projectId, pose, seconds) {
+  const { writeToneWav } = await import('./fixtures/tone.js');
+  const os = await import('node:os'), path = await import('node:path');
+  const wav = writeToneWav(path.join(os.tmpdir(), `glossy-viewpoint-${seconds}s.wav`), seconds);
+  const res = await request.post(`${API}/api/projects/${projectId}/annotations`, { multipart: {
+    audio: { name: 'clip.wav', mimeType: 'audio/wav', buffer: fs.readFileSync(wav) },
+    x: '0', y: '1', z: '-1', author: 'Walker', consent: 'true', durationMs: String(seconds * 1000), pose: JSON.stringify(pose), poseSource: 'xr',
+  } });
+  expect(res.ok(), await res.text()).toBeTruthy();
+  const clip = await res.json();
+  await expect.poll(() => page.evaluate((id) => !!window.__glossy.markers.get(id)?.sound.buffer, clip.id), { timeout: 10_000 }).toBe(true);
+  return clip;
+}
+const viewpoint = (page) => page.evaluate(() => { const v = window.__glossy.viewpoint; return { visible: v.visible, headShown: v.headShown, position: v.position, forward: v.forward }; });
+
+test('a headset clip replays the author\'s viewpoint on the desktop: it moves with the clip, steps aside for a listener in its place, and leaves with an erased clip', async ({ page, request }) => {
+  const project = await openProject(page, request, 'viewpoint');
+  // the author walks 2 m along x over 6 s at 10 Hz, at eye height, looking down -Z
+  const pose = Array.from({ length: 61 }, (_, i) => ({ t: i * 100, p: [-1 + i / 30, 1.6, 0], q: [0, 0, 0, 1] }));
+  const clip = await headsetClip(page, request, project.id, pose, 6);
+  const [stored] = await listAnnotations(request, project.id);
+  expect(stored.poseSource).toBe('xr');
+
+  // the listener stands back from the walk
+  await aimCamera(page, [0, 1.6, 2], [0, 1.6, 0]);
+  expect((await viewpoint(page)).visible).toBe(false);
+  await page.evaluate((id) => window.__glossy.play(id), clip.id);
+  await expect.poll(async () => { const v = await viewpoint(page); return [v.visible, v.headShown]; }).toEqual([true, true]);
+  // the head moves along the walk, in step with the clip (the render loop under software GL runs behind wall time, so poll)
+  await expect.poll(async () => (await viewpoint(page)).position?.[0] ?? -Infinity, { timeout: 5000 }).toBeGreaterThan(pose[0].p[0] + 0.2);
+  const later = await viewpoint(page);
+  expect(later.visible).toBe(true);
+  expect(later.position[1]).toBeCloseTo(1.6, 2);
+
+  // the listener steps into the author's place: the head is not drawn around their eyes, the gaze still is
+  await expect.poll(() => page.evaluate(() => new Promise((done) => {
+    const g = window.__glossy;
+    const follow = () => { const p = g.viewpoint.position; if (p) { g.camera.position.set(p[0] + 0.05, p[1], p[2]); g.camera.updateMatrixWorld(true); } };
+    follow();
+    requestAnimationFrame(() => { follow(); requestAnimationFrame(() => { follow(); requestAnimationFrame(() => done([g.viewpoint.visible, g.viewpoint.headShown])); }); });
+  })), { timeout: 5000 }).toEqual([true, false]);
+  // and steps back out: the head returns
+  await aimCamera(page, [0, 1.6, 2], [0, 1.6, 0]);
+  await expect.poll(() => page.evaluate(() => window.__glossy.viewpoint.headShown)).toBe(true);
+
+  // erased while it plays: the replay goes with it, well before the walk would have ended, and the list row too
+  expect(await page.evaluate(() => window.__glossy.playingId)).toBe(clip.id);
+  expect((await request.delete(`${API}/api/projects/${project.id}/annotations/${clip.id}`)).status()).toBe(204);
+  await expect.poll(() => markerCount(page)).toBe(0);
+  expect(await page.evaluate(() => [window.__glossy.viewpoint.visible, window.__glossy.ghost.visible, window.__glossy.playingId])).toEqual([false, false, null]);
+  await expect(page.locator('#annList li')).toHaveCount(0);
+});
+
+test('the viewpoint leaves when its pose runs out, even while the clip plays on', async ({ page, request }) => {
+  const project = await openProject(page, request, 'viewpoint-span');
+  // 1 s of pose under 4 s of audio
+  const pose = Array.from({ length: 11 }, (_, i) => ({ t: i * 100, p: [0, 1.6, 0], q: [0, 0, 0, 1] }));
+  const clip = await headsetClip(page, request, project.id, pose, 4);
+  await aimCamera(page, [0, 1.6, 2], [0, 1.6, 0]);
+  await page.evaluate((id) => window.__glossy.play(id), clip.id);
+  await expect.poll(async () => (await viewpoint(page)).visible).toBe(true);
+  await expect.poll(async () => (await viewpoint(page)).visible, { timeout: 3000 }).toBe(false);
+  expect(await page.evaluate(() => window.__glossy.playingId)).toBe(clip.id);    // hidden by the span guard, not by the end of the sound
+});
+
+test('the viewpoint\'s gaze line points where the author faced', async ({ page, request }) => {
+  const project = await openProject(page, request, 'viewpoint-gaze');
+  // turned 90° to the left about Y: -Z rotated by +90° yaw faces -X
+  const yaw = Math.PI / 2, q = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)];
+  const pose = Array.from({ length: 31 }, (_, i) => ({ t: i * 100, p: [0, 1.6, 0], q }));
+  const clip = await headsetClip(page, request, project.id, pose, 3);
+  await aimCamera(page, [0, 1.6, 2], [0, 1.6, 0]);
+  await page.evaluate((id) => window.__glossy.play(id), clip.id);
+  await expect.poll(async () => (await viewpoint(page)).visible).toBe(true);
+  const { forward } = await viewpoint(page);
+  [-1, 0, 0].forEach((v, i) => expect(Math.abs(forward[i] - v)).toBeLessThan(0.05));
 });

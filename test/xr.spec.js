@@ -113,6 +113,9 @@ test('with hands tracked, speaking starts a clip, the gesture is stored and repl
   const [a] = await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json();
   fs.writeFileSync('test-results/xr-hands-trace.json', JSON.stringify(a.hands));   // the emulated trace, for looking at when the geometry below disagrees
   expect(a.poseSource).toBe('xr');
+  // the head pose is the camera's world transform: the emulated device's position carried through the rig
+  const devWorld = await page.evaluate(() => { const g = window.__glossy, d = window.__xr.position; g.rig.updateMatrixWorld(true); return g.rig.localToWorld(new (g.rig.position.constructor)(d.x, d.y, d.z)).toArray(); });
+  for (let i = 0; i < 3; i++) expect(Math.abs(a.pose[0].p[i] - devWorld[i])).toBeLessThan(0.05);
   expect(a.hands.joints).toHaveLength(25);
   expect(a.hands.frames.length).toBeGreaterThanOrEqual(15);
   const left = a.hands.frames.map((f) => f.l).filter(Boolean);
@@ -144,13 +147,19 @@ test('with hands tracked, speaking starts a clip, the gesture is stored and repl
   expect(exp.contributions[0].hands.frames.length).toBe(a.hands.frames.length);
   const edm = await (await request.get(`${API}/api/projects/${project.id}/export?format=edm`)).json();
   expect(edm['@graph'].find((n) => n['@id'].endsWith(a.id))['glossy:gesture']).toBe(true);
-  // playback draws the ghost hands and takes them down when the clip ends
+  // playback draws the ghost hands and the author's viewpoint, and takes them down when the clip ends
   await expect.poll(() => page.evaluate((id) => !!window.__glossy.markers.get(id)?.sound.buffer, a.id), { timeout: 10_000 }).toBe(true);
   await page.evaluate((id) => window.__glossy.play(id), a.id);
   await expect.poll(() => page.evaluate(() => window.__glossy.ghost.visible)).toBe(true);
+  // the emulated headset never moved, so the listener stands where the author stood: the gaze is drawn, the head is not
+  await expect.poll(() => page.evaluate(() => window.__glossy.viewpoint.visible)).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.__glossy.viewpoint.headShown)).toBe(false);
+  const vp = await page.evaluate(() => ({ position: window.__glossy.viewpoint.position }));
+  for (let i = 0; i < 3; i++) expect(Math.abs(vp.position[i] - a.pose[0].p[i])).toBeLessThan(0.05);
   await page.waitForTimeout(400);
   await page.screenshot({ path: 'test-results/xr-ghost-hands.png' });
   await expect.poll(() => page.evaluate(() => window.__glossy.ghost.visible), { timeout: 10_000 }).toBe(false);
+  await expect.poll(() => page.evaluate(() => window.__glossy.viewpoint.visible), { timeout: 10_000 }).toBe(false);
   await expect(page.locator('#annList li .badge', { hasText: '✋' })).toHaveCount(1);
 
   // the session log saw it: the hands connect, the clip start by voice, per-second tracking coverage, the playback with ghost hands
@@ -165,6 +174,7 @@ test('with hands tracked, speaking starts a clip, the gesture is stored and repl
   expect(stats.length).toBeGreaterThan(2);
   expect(stats.some((e) => e.data.hands.l.of > 0 && e.data.hands.l.seen > 0)).toBe(true);
   expect(events.find((e) => e.kind === 'play:start').data.hands).toBe(true);
+  expect(events.find((e) => e.kind === 'play:start').data.viewpoint).toBe(true);
   const sessions = await (await request.get(`${API}/api/projects/${project.id}/sessions`)).json();
   expect(sessions).toHaveLength(1);
   expect(sessions[0].events).toBe(events.length);
