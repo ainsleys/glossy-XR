@@ -955,11 +955,11 @@ function play(id) {
   m.sound.onEnded = () => { m.sound.isPlaying = false; ghost.hide(); viewpoint.hide(); if (playingId === id) { log('play:stop', { id, reason: 'ended' }); playingId = null; m.mesh.userData.playing = false; m.mesh.material.emissiveIntensity = 0.35; renderList(); } };
   m.sound.play();
   playingId = id;
-  const seen = m.record.poseSource === 'xr' && !!m.record.pose?.length;   // a headset viewpoint; a desktop trace is where the mouse pointed, not a gaze, and is not drawn
-  log('play:start', { id, hands: !!m.record.hands, viewpoint: seen });
+  const drawViewpoint = m.record.poseSource === 'xr' && !!m.record.pose?.length;   // a headset viewpoint; a desktop trace is where the mouse pointed, not a gaze, and is not drawn
+  log('play:start', { id, hands: !!m.record.hands, viewpoint: drawViewpoint });
   playStartedAt = performance.now();
   if (m.record.hands) ghost.show(m.record.hands); else ghost.hide();
-  if (seen) viewpoint.show(m.record.pose); else viewpoint.hide();
+  if (drawViewpoint) viewpoint.show(m.record.pose); else viewpoint.hide();
   m.mesh.userData.playing = true;
   m.mesh.material.emissiveIntensity = 1.0;
   renderList();
@@ -1930,7 +1930,7 @@ if (import.meta.env.DEV) window.__glossy = {
   get pending() { return pendingMarkers.size; },
   get interview() { return { on: hud.interview.checked, index: qIndex, question: currentQuestion()?.text || null, total: questions().length }; },
   autoFit, frameAll, applyTransform, aimPoint, aimMarker, floorBelow, spawnInside, focusMarker, play, endRecording,
-  ghost, viewpoint: { get visible() { return viewpoint.visible; }, get headShown() { return viewpoint.headShown; }, get position() { return viewpoint.position; } }, xrHands, get handsPresent() { return handsPresent(); }, log, microgesture: (hand, gesture) => queuedMicro.push([hand, gesture]),
+  ghost, viewpoint: { get visible() { return viewpoint.visible; }, get headShown() { return viewpoint.headShown; }, get position() { return viewpoint.position; }, get forward() { return viewpoint.forward; } }, xrHands, get handsPresent() { return handsPresent(); }, log, microgesture: (hand, gesture) => queuedMicro.push([hand, gesture]),
   chat: { begin: beginMessage, end: endMessage, toggle: toggleMessage, get listening() { return !!messaging; }, get messages() { return chatPanel.messages; }, panel: chatPanel },
   wristMic, tracer,
   debugHead() { headWorld(); const xr = renderer.xr.getCamera(); const d1 = new THREE.Vector3(); xr.getWorldDirection(d1); const d2 = new THREE.Vector3(); camera.getWorldDirection(d2); const d3 = new THREE.Vector3(); camera.updateWorldMatrix(true, false); camera.getWorldDirection(d3); return { fwd: [+_fwd.x.toFixed(3), +_fwd.z.toFixed(3)], xrCam: [+d1.x.toFixed(3), +d1.z.toFixed(3)], userCam: [+d2.x.toFixed(3), +d2.z.toFixed(3)], userCamUpdated: [+d3.x.toFixed(3), +d3.z.toFixed(3)], rigYaw: +((rig.rotation.y * 180) / Math.PI).toFixed(1), xrParent: xr.parent?.type || null, camParent: camera.parent?.type || null }; },

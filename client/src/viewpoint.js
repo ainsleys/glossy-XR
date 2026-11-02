@@ -18,6 +18,7 @@ import { sampleAt } from '../../shared/pose.js';
 const SAMPLE_MS = 1000 / 10;        // the recording rate; one interval past the last sample the replay is over
 const HEAD_RADIUS = 0.1, GAZE_M = 0.6;
 const NEAR_HEAD_M = 0.4;            // a listener this close to the head would see it from inside: draw the gaze alone
+const _fwd = new THREE.Vector3();
 
 export class Viewpoint {
   constructor(parent) {
@@ -31,14 +32,18 @@ export class Viewpoint {
     for (const o of [this.head, this.gaze]) { o.frustumCulled = false; o.renderOrder = 1; }   // after the ghost hands
     this.group.add(this.head, this.gaze);
     this.pose = null; this.cursor = -1;
+    this.listener = null;           // the last listener position the loop passed; show() draws with it, so a new clip never flashes a head around the listener's eyes
   }
   get visible() { return this.group.visible; }
   get headShown() { return this.group.visible && this.gaze.visible && this.head.visible; }
   get position() { const s = this.pose?.[this.cursor]; return s ? [...s.p] : null; }
+  // the gaze direction in world space, a unit vector
+  get forward() { return this.pose?.[this.cursor] ? _fwd.set(0, 0, -1).applyQuaternion(this.group.quaternion).toArray() : null; }
   show(pose) { this.pose = pose?.length ? pose : null; this.cursor = -1; this.group.visible = !!this.pose; if (this.pose) this.update(0); }
   hide() { this.group.visible = false; this.pose = null; this.cursor = -1; }
   /** Draw the viewpoint at t milliseconds into the clip, seen by a listener whose head is at `listener` (world). */
   update(t, listener) {
+    if (listener) this.listener = listener;      // the loop's vector, kept by reference: it is refilled every frame
     const s = this.pose; if (!s || !this.group.visible) return;
     // past the last sample the replay is over: hidden, never frozen at its last pose, whatever stops the sound
     if (t > s[s.length - 1].t + SAMPLE_MS) return this.hide();
@@ -47,6 +52,6 @@ export class Viewpoint {
     this.gaze.visible = this.head.visible = !!now;
     if (!now) return;
     this.group.position.fromArray(now.p); this.group.quaternion.fromArray(now.q);
-    this.head.visible = !listener || this.group.position.distanceTo(listener) >= NEAR_HEAD_M;
+    this.head.visible = !this.listener || this.group.position.distanceTo(this.listener) >= NEAR_HEAD_M;   // no listener yet (before the first frame): far
   }
 }
