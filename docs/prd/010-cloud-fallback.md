@@ -63,3 +63,10 @@ T4. Full `npm test` at the final commit: all passed.
 5. Events are inserted server-side under session `'server'`; documented as a partial session.
 6. Depends on PR #10 (SCHEMA.md): rebase after it merges; the drift test is the guard that the document was updated.
 7. The e2e uses an API-only path and a committed "Thank you." fixture rather than silence, because short silence is not unclear and longer silence decodes nondeterministically.
+
+## Decisions (3 Nov, after code review of the first implementation)
+
+8. `allowCloud` is decided when the fallback would run, not when the clip is queued. The server passes a function that re-reads the clip and the project (false if the clip is gone, `consent` or `cloudConsent` is false, or `cloudFallback` is off); the transcriber asks it after the primary result is rejected, just before the secondary. A boolean is still accepted (tests). Added: a unit case where the function returns false, and an e2e case withdrawing consent while the clip waits behind another held at a delayed stub.
+9. A failed cloud call keeps the local result and leaves a trace, because the audio may already have been uploaded: `transcription.cloud: {from, reason, error}`, a `transcribe:fallback` event with `error`, and a provenance clause "a cloud transcription was attempted and failed".
+10. `GLOSSY_TRANSCRIBE_FALLBACK` accepts only `openai`; any other value is logged and ignored, so a `local` secondary is never built.
+11. When the cloud text is itself unclear, the rejected local text is kept as `cloud.raw` (`transcription.raw` holds the cloud text).
