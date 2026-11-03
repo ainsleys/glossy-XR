@@ -1,8 +1,8 @@
 // node --test: docs/SCHEMA.md against the code. The document's fenced json
 // block lists every field name it describes; this test builds real records
 // through server/db.js, reads them back through the running server, and
-// compares the names in both directions. A second check finds each listed
-// name as a row in the document's tables.
+// compares the names in both directions. A second check matches the names
+// against the rows of the document's field tables, also both ways.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -23,7 +23,7 @@ const blocks = [...DOC.matchAll(/^```json\n([\s\S]*?)^```/gm)];
 const LISTED = JSON.parse(blocks[0][1]);
 
 // each list's table rows live under one heading of the document
-const SECTIONS = { record: 'Annotation record', contribution: 'Native export', context: 'EDM serialisation' };
+const SECTIONS = { record: '## Annotation record', contribution: '## Native export', context: '### @context', project: '### Project', asset: '### Asset' };
 
 /** Every key path in a JSON value: nested objects as a.b, array elements as a[].b. */
 function paths(v, pre = '', out = new Set()) {
@@ -35,15 +35,21 @@ function paths(v, pre = '', out = new Set()) {
 }
 const union = (list) => list.reduce((s, v) => { for (const p of paths(v)) s.add(p); return s; }, new Set());
 
-/** Names in the first cell of table rows under `## heading`, up to the next `## `. */
+/** Names in the first cell of the rows of tables headed `| Field |` under a heading, up to the next heading of the same or a higher level. */
 function tableNames(heading) {
-  const start = DOC.indexOf(`\n## ${heading}\n`);
-  assert.ok(start > -1, `docs/SCHEMA.md has no "## ${heading}" section`);
-  const end = DOC.indexOf('\n## ', start + 1);
-  const names = new Set();
-  for (const line of DOC.slice(start, end === -1 ? undefined : end).split('\n')) {
-    const m = line.match(/^\|\s*`([^`]+)`\s*\|/);
-    if (m) names.add(m[1]);
+  const lines = DOC.split('\n');
+  const start = lines.indexOf(heading);
+  assert.ok(start > -1, `docs/SCHEMA.md has no "${heading}" heading`);
+  const level = heading.indexOf(' ');
+  const names = [];
+  let inField = false;
+  for (const line of lines.slice(start + 1)) {
+    const h = line.match(/^(#+) /);
+    if (h && h[1].length <= level) break;
+    if (!line.startsWith('|')) { inField = false; continue; }
+    if (/^\|\s*Field\s*\|/.test(line)) { inField = true; continue; }
+    const m = inField && line.match(/^\|\s*`([^`]+)`\s*\|/);
+    if (m) names.push(m[1]);
   }
   return names;
 }
@@ -59,7 +65,7 @@ const freePort = () => new Promise((resolve, reject) => {
   const s = net.createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }).on('error', reject);
 });
 
-let dir, server, base, projectId, annotations, exported, edm;
+let dir, server, base, projectId, annotations, exported, edm, projectPaths, assets;
 
 before(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'glossy-schema-'));
@@ -68,6 +74,7 @@ before(async () => {
   projectId = project.id;
   db.projects.update(projectId, { language: 'en', script: { questions: [{ id: 'q1', text: 'What was here?' }] } });
   const asset = db.assets.create(projectId, { url: `/models/${projectId}/photo.png`, type: 'image', name: 'photo.png', options: { mode: 'plane' } });
+  db.assets.update(projectId, asset.id, { transform: { scale: 1, rotX: -90, rotY: 0, rotZ: 0, x: 0, y: 0, z: 0, pointSize: 0.01 } });
 
   // a full record: object anchor, period, pose, hands with a gap in each hand, links, a stored transcript
   const J = 25, hand = (x) => Array.from({ length: J * 3 }, (_, i) => x + i * 0.001);
@@ -90,21 +97,33 @@ before(async () => {
   db.annotations.setTranscript(projectId, failed.id, { transcript: null, status: 'failed', meta: { error: 'decoder failed' } });
   db.close();
 
-  // the server opens the database and listens on import, so it runs as its own process
+  // the server opens the database and listens on import, so it runs as its own process.
+  // The port is free when chosen but not reserved: another process could take it before
+  // the server listens. The server then exits, and the error below says so.
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
   server = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', path.join(ROOT, 'server/index.js')], {
-    env: { ...process.env, PORT: String(port), GLOSSY_DATA: dir, GLOSSY_TRANSCRIBE: 'none', NODE_ENV: 'test' }, stdio: 'ignore',
+    env: { ...process.env, PORT: String(port), GLOSSY_DATA: dir, GLOSSY_TRANSCRIBE: 'none', NODE_ENV: 'test' }, stdio: ['ignore', 'ignore', 'pipe'],
   });
-  for (let i = 0; ; i++) {
-    try { if ((await fetch(`${base}/api/health`)).ok) break; } catch {}
-    if (i > 100) throw new Error('server did not start');
-    await new Promise((r) => setTimeout(r, 100));
-  }
+  let stderr = '';
+  server.stderr.on('data', (d) => { stderr += d; });
+  const exited = new Promise((_, reject) => server.on('exit', (code) => reject(new Error(`server exited (code ${code}) before it answered:\n${stderr}`))));
+  exited.catch(() => {});
+  const ready = (async () => {
+    for (let i = 0; i <= 100; i++) {
+      try { if ((await fetch(`${base}/api/health`)).ok) return; } catch {}
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    throw new Error(`server did not answer on port ${port} within 10 s:\n${stderr}`);
+  })();
+  await Promise.race([ready, exited]);
   annotations = await (await fetch(`${base}/api/projects/${projectId}/annotations`)).json();
+  const one = await (await fetch(`${base}/api/projects/${projectId}`)).json();
+  const listed = (await (await fetch(`${base}/api/projects`)).json()).find((p) => p.id === projectId);
+  projectPaths = new Set([...union([one, listed])].filter((p) => !p.startsWith('assets[]') && !p.startsWith('script.questions[]')));
+  assets = await (await fetch(`${base}/api/projects/${projectId}/assets`)).json();
   exported = await (await fetch(`${base}/api/projects/${projectId}/export`)).json();
-  const proj = await (await fetch(`${base}/api/projects/${projectId}`)).json();
-  edm = toEdm(proj, annotations, { base, provider: 'test', rights: 'http://creativecommons.org/licenses/by/4.0/' });
+  edm = toEdm(one, annotations, { base, provider: 'test', rights: 'http://creativecommons.org/licenses/by/4.0/' });
 });
 
 after(() => {
@@ -112,9 +131,9 @@ after(() => {
   if (dir) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('docs/SCHEMA.md has one json block with record, contribution and context', () => {
+test('docs/SCHEMA.md has one json block with record, contribution, context, project and asset', () => {
   assert.equal(blocks.length, 1);
-  assert.deepEqual(Object.keys(LISTED).sort(), ['context', 'contribution', 'record']);
+  assert.deepEqual(Object.keys(LISTED).sort(), ['asset', 'context', 'contribution', 'project', 'record']);
 });
 
 test('the record fields match GET /api/projects/:id/annotations', () => {
@@ -131,10 +150,21 @@ test('the @context keys match toEdm()', () => {
   compare('context', new Set(Object.keys(edm['@context'])), LISTED.context);
 });
 
-test('every listed name is a row in its section\'s tables', () => {
+test('the project fields match GET /api/projects/:id and GET /api/projects', () => {
+  compare('project', projectPaths, LISTED.project);
+});
+
+test('the asset fields match GET /api/projects/:id/assets', () => {
+  assert.equal(assets.length, 1);
+  compare('asset', union(assets), LISTED.asset);
+});
+
+test('the field tables and the json block name the same fields', () => {
   for (const [key, heading] of Object.entries(SECTIONS)) {
     const rows = tableNames(heading);
-    const absent = LISTED[key].filter((n) => !rows.has(n));
-    assert.deepEqual(absent, [], `${key}: listed but not a table row under "## ${heading}": ${absent.join(', ')}`);
+    const absent = LISTED[key].filter((n) => !rows.includes(n));
+    const unlisted = rows.filter((n) => !LISTED[key].includes(n));
+    assert.deepEqual({ absent, unlisted }, { absent: [], unlisted: [] },
+      `${key} under "${heading}": absent = listed but no table row (${absent.join(', ') || 'none'}); unlisted = a table row not in the json block (${unlisted.join(', ') || 'none'})`);
   }
 });
