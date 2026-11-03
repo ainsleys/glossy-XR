@@ -28,7 +28,7 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 import { VoiceRecorder } from './recorder.js';
 import { connect, projects as projectsApi, assets as assetsApi, annotations as annotationsApi, chat as chatApi } from './api.js';
 import { loadModel, SUPPORTED_EXTENSIONS } from './loaders.js';
-import { unclearReason, UNCLEAR_TEXT, langName } from '../../shared/text.js';
+import { unclearReason, UNCLEAR_TEXT, langName, cloudBadge } from '../../shared/text.js';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 
 // BVH-accelerated raycasts for every mesh: anchoring, hover, and collision
@@ -1084,7 +1084,8 @@ function renderList() {
       : unclear ? `<div class="text pending" title="${esc(tr.raw || record.transcript || '')}">(${UNCLEAR_TEXT[unclear] || 'unclear'})</div>`
       : tr.status === 'done' ? `<div class="text pending">(no speech detected)</div>` : '';
     const periodLabel = record.period ? (record.period.label || [record.period.from, record.period.to].filter(Boolean).join('–')) : '';
-    const badges = (record.hands ? `<span class="badge" title="${esc(describeHands(record.hands))}">✋</span>` : '') + (record.replies ? `<span class="badge" title="replies">↩ ${record.replies}</span>` : '') + (periodLabel ? `<span class="period" title="period">${esc(periodLabel)}</span>` : '');
+    const cloud = cloudBadge(tr);
+    const badges = (cloud ? `<span class="badge cloud" title="${esc(cloud.title)}">${esc(cloud.text)}</span>` : '') + (record.hands ? `<span class="badge" title="${esc(describeHands(record.hands))}">✋</span>` : '') + (record.replies ? `<span class="badge" title="replies">↩ ${record.replies}</span>` : '') + (periodLabel ? `<span class="period" title="period">${esc(periodLabel)}</span>` : '');
     const prompt = record.prompt ? `<div class="prompt">Q: ${esc(record.prompt)}</div>` : '';
     // the project or clip forced one language and the model heard another: say so, offer the other decoder
     const mismatch = tr.status === 'done' && tr.heard && tr.language && tr.heard !== tr.language;
