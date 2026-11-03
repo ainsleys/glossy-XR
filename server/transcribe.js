@@ -16,12 +16,13 @@
 //
 // Cloud fallback: with GLOSSY_TRANSCRIBE_FALLBACK set, a second backend is
 // kept for clips whose primary result came back clean but was rejected by the
-// transcript guard (silence or repetition). It runs only for a job enqueued
-// with `allowCloud`, which the server sets from the project's setting and the
-// clip's consent. A primary error or a language fallback never reaches it.
+// transcript guard (silence or repetition). It runs only when the job's
+// `allowCloud` agrees at that moment: the server passes a function that
+// re-reads the project's setting and the clip's consent. A primary error or a
+// language fallback never reaches it. Only `openai` is accepted.
 //
 //   GLOSSY_TRANSCRIBE      local (default) | openai | none
-//   GLOSSY_TRANSCRIBE_FALLBACK  unset (default) | openai: the secondary backend
+//   GLOSSY_TRANSCRIBE_FALLBACK  unset (default) | openai: the secondary backend; any other value is ignored
 //   GLOSSY_WHISPER_MODEL   HF id, default onnx-community/whisper-base_timestamped
 //                          (whisper-small_timestamped, whisper-large-v3-turbo_timestamped for better accuracy)
 //   GLOSSY_WHISPER_DTYPE   q8 (default) | fp32 | fp16 | q4
@@ -172,16 +173,20 @@ const toCode = (l) => { if (!l) return null; const k = String(l).toLowerCase(); 
  * Serial transcription queue. `enqueue(id, file, opts, done)` calls
  * done(err, result) off the request path; results are never written here,
  * the caller decides what to do with them (the record may be gone by then).
- * `opts.allowCloud` lets an unclear primary result go to the secondary
- * backend; the result then carries `cloud: {from, reason}`.
+ * `opts.allowCloud` (a boolean, or a function asked after the primary result,
+ * just before the secondary would run) lets an unclear primary result go to
+ * the secondary backend. The result then carries `cloud: {from, reason}`, plus
+ * `raw` (the rejected primary text) when the secondary's text is unclear too.
+ * When the secondary call fails the primary result is kept and `cloud` says
+ * so with `error`: the audio may have left the server all the same.
  *
  * `backends: {primary, secondary}` is for tests: injected backends skip the
  * ffmpeg check; their warm() runs if they have one.
  */
 export function createTranscriber({ log = console, backends } = {}) {
-  const pick = (name) => name === 'openai' ? openaiBackend() : name === 'local' ? localBackend(log) : null;
-  const backend = backends ? backends.primary || null : BACKEND === 'none' ? null : pick(BACKEND === 'openai' ? 'openai' : 'local');
-  const secondary = backends ? backends.secondary || null : pick(SECONDARY);
+  const backend = backends ? backends.primary || null : BACKEND === 'none' ? null : BACKEND === 'openai' ? openaiBackend() : localBackend(log);
+  if (!backends && SECONDARY && SECONDARY !== 'openai') log.warn(`transcribe: GLOSSY_TRANSCRIBE_FALLBACK=${SECONDARY} ignored; only openai is supported`);
+  const secondary = backends ? backends.secondary || null : SECONDARY === 'openai' ? openaiBackend() : null;
   const queue = [];
   let busy = false, ready = null, unavailable = null, secondaryUnavailable = null;
 
@@ -215,18 +220,23 @@ export function createTranscriber({ log = console, backends } = {}) {
         if (!(await ready)) throw new Error(unavailable || 'transcription disabled');
         const result = await backend.transcribe(job.file, job.opts);
         // only a clean primary result the guard rejects goes to the cloud: never an error, an empty clip or a language fallback
-        const reason = job.opts?.allowCloud && !result.fallback ? unclearReason(result.text) : null;
-        if (reason && (await secondaryReady)) {
+        // permission is asked last, so a setting switched off or consent withdrawn while the clip waited is respected
+        const reason = !result.fallback ? unclearReason(result.text) : null;
+        const allowed = () => (typeof job.opts?.allowCloud === 'function' ? job.opts.allowCloud() : !!job.opts?.allowCloud);
+        let cloud = null;
+        if (reason && (await secondaryReady) && allowed()) {
           try {
             const second = await secondary.transcribe(job.file, job.opts);
             log.log(`transcribe: ${job.id} rejected as ${reason} by ${backend.name}, sent to ${secondary.name}`);
-            finish(job, null, { ...second, backend: secondary.name, model: secondary.model, ms: Date.now() - t0, cloud: { from: backend.name, reason } });
+            finish(job, null, { ...second, backend: secondary.name, model: secondary.model, ms: Date.now() - t0,
+              cloud: { from: backend.name, reason, ...(unclearReason(second.text) ? { raw: result.text } : {}) } });
             continue;
           } catch (e) {
             log.warn(`transcribe: ${job.id} fallback ${secondary.name} failed: ${e.message}; keeping the ${backend.name} result`);
+            cloud = { from: backend.name, reason, error: e.message };
           }
         }
-        finish(job, null, { ...result, backend: backend.name, model: backend.model, ms: Date.now() - t0 });
+        finish(job, null, { ...result, backend: backend.name, model: backend.model, ms: Date.now() - t0, ...(cloud ? { cloud } : {}) });
       } catch (e) {
         log.warn(`transcribe: ${job.id} failed: ${e.message}`);
         finish(job, e, null);

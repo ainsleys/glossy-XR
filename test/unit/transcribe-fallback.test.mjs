@@ -35,12 +35,35 @@ test('an unclear primary result with allowCloud goes to the secondary', async ()
   assert.deepEqual(result.cloud, { from: 'local', reason: 'silence' });
 });
 
-test('a repetition is sent with its reason, and an unclear secondary result keeps the cloud marker', async () => {
+test('a repetition is sent with its reason; an unclear secondary result keeps the cloud marker and the rejected local text', async () => {
   const primary = fake('local', { text: 'la la la la la' }), secondary = fake('openai', { text: 'Thank you.' });
   const { result } = await run(primary, secondary, { allowCloud: true });
   assert.equal(secondary.calls, 1);
   assert.equal(result.backend, 'openai');
-  assert.deepEqual(result.cloud, { from: 'local', reason: 'repetition' });
+  assert.equal(result.text, 'Thank you.');
+  assert.deepEqual(result.cloud, { from: 'local', reason: 'repetition', raw: 'la la la la la' });
+});
+
+test('allowCloud as a function is asked after the primary result, and false keeps the clip local', async () => {
+  let asked = 0, allow = true;
+  const primary = fake('local', { text: 'Thank you.' }), secondary = fake('openai', { text: 'other' });
+  const inner = primary.transcribe;
+  primary.transcribe = async (...a) => { allow = false; return inner(...a); };   // consent withdrawn while the local model ran
+  const { result } = await run(primary, secondary, { allowCloud: () => { asked++; return allow; } });
+  assert.equal(asked, 1);
+  assert.equal(secondary.calls, 0);
+  assert.equal(result.backend, 'local');
+  assert.equal(result.cloud, undefined);
+  // and true sends it
+  const { result: sent } = await run(fake('local', { text: 'Thank you.' }), secondary, { allowCloud: () => true });
+  assert.equal(secondary.calls, 1);
+  assert.equal(sent.backend, 'openai');
+});
+
+test('allowCloud is not asked for a clean result', async () => {
+  let asked = 0;
+  await run(fake('local', { text: 'The lamp is broken.' }), fake('openai', { text: 'other' }), { allowCloud: () => { asked++; return true; } });
+  assert.equal(asked, 0);
 });
 
 test('a clean primary result does not go to the secondary', async () => {
@@ -92,11 +115,12 @@ test('an unavailable secondary leaves the primary result, unclear, and the prima
   }
 });
 
-test('a secondary that throws leaves the primary result', async () => {
+test('a secondary that throws leaves the primary result, with the attempt and its error in cloud', async () => {
   const primary = fake('local', { text: 'Thank you.' }), secondary = fake('openai', { error: 'openai 500' });
   const { err, result } = await run(primary, secondary, { allowCloud: true });
   assert.equal(err, null);
   assert.equal(secondary.calls, 1);
   assert.equal(result.backend, 'local');
-  assert.equal(result.cloud, undefined);
+  assert.equal(result.text, 'Thank you.');
+  assert.deepEqual(result.cloud, { from: 'local', reason: 'silence', error: 'openai 500' });
 });

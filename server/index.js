@@ -47,11 +47,12 @@ if (db.projects.list().length === 0) db.projects.create({ name: 'default' });
 // Clips are transcribed off the request path; clients get `annotation:updated`
 // when the text lands. Jobs left pending by a previous run are picked up on boot.
 
-// A clip may go to the cloud backend only when the project allows it now, the
+// A clip may go to the cloud backend only when the project allows it, the
 // clip still has consent, and the contributor agreed to cloud transcription
 // when it was saved (cloudConsent is only ever true if the project allowed it
-// then too). The transcriber adds the last condition: the local result was
-// rejected as unclear.
+// then too). The transcriber asks this after the local result was rejected as
+// unclear, reading both records afresh, so a change made while the clip waited
+// in the queue counts.
 
 const transcriber = createTranscriber({ log: console });
 function queueTranscription(record) {
@@ -60,18 +61,25 @@ function queueTranscription(record) {
   const project = db.projects.get(record.project);
   // language: the clip's own setting, else the project's, else the backend detects
   const language = record.language || project?.language || undefined;
-  const allowCloud = !!(project?.cloudFallback && record.consent && record.cloudConsent);
+  const allowCloud = () => {
+    const a = db.annotations.get(record.project, record.id), p = db.projects.get(record.project);
+    return !!(a && a.consent && a.cloudConsent && p?.cloudFallback);
+  };
   transcriber.enqueue(record.id, file, { language, allowCloud }, (err, result) => {
     const cur = db.annotations.get(record.project, record.id);
     if (!cur) return;                                        // deleted while queued
     const unclear = err ? null : unclearReason(result.text);      // the model looped, or transcribed silence as a subtitle credit: keep the raw text in meta, store no transcript
-    const cloud = result?.cloud ? { cloud: result.cloud } : {};      // the text came from the cloud backend after the local one was rejected
+    const cloud = result?.cloud ? { cloud: result.cloud } : {};      // the local text was rejected and the clip was sent to the cloud backend (with `error` if that failed)
     const updated = err
       ? db.annotations.setTranscript(record.project, record.id, { transcript: cur.transcript, status: 'failed', meta: { error: err.message } })
       : unclear
         ? db.annotations.setTranscript(record.project, record.id, { transcript: '', status: 'done', meta: { words: [], language: result.language, detected: !!result.detected, heard: result.heard || null, backend: result.backend, model: result.model, ms: result.ms, ...cloud, unclear, raw: result.text } })
         : db.annotations.setTranscript(record.project, record.id, { transcript: result.text, status: 'done', meta: { words: result.words, language: result.language, detected: !!result.detected, heard: result.heard || null, backend: result.backend, model: result.model, ms: result.ms, ...cloud } });
-    if (result?.cloud) db.events.add(record.project, 'server', [{ t: 0, at: new Date().toISOString(), kind: 'transcribe:fallback', data: { id: record.id, from: result.cloud.from, to: result.backend, reason: result.cloud.reason } }]);
+    if (result?.cloud) {
+      const { from, reason, error } = result.cloud;
+      db.events.add(record.project, 'server', [{ t: 0, at: new Date().toISOString(), kind: 'transcribe:fallback',
+        data: { id: record.id, from, to: error ? transcriber.info().cloud?.backend : result.backend, reason, ...(error ? { error } : {}) } }]);
+    }
     io.to(record.project).emit('annotation:updated', updated);
   });
 }

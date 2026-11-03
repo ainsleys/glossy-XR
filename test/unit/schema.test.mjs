@@ -99,6 +99,13 @@ before(async () => {
   const cloud = db.annotations.create(projectId, { author: 'Deniz', x: 0, y: 1, z: 0, audioUrl: '/audio/d.webm', durationMs: 900, consent: true, cloudConsent: true, transcriptStatus: 'pending' });
   db.annotations.setTranscript(projectId, cloud.id, { transcript: 'The well was here.', status: 'done',
     meta: { words: [{ w: 'The', s: 0, e: 0.2 }], language: 'en', detected: true, heard: null, backend: 'openai', model: 'whisper-1', ms: 1500, cloud: { from: 'local', reason: 'silence' } } });
+  // one whose cloud text was rejected too, and one whose cloud call failed
+  const cloudUnclear = db.annotations.create(projectId, { author: 'Deniz', x: 0, y: 1, z: 0, audioUrl: '/audio/e.webm', durationMs: 900, consent: true, cloudConsent: true, transcriptStatus: 'pending' });
+  db.annotations.setTranscript(projectId, cloudUnclear.id, { transcript: '', status: 'done',
+    meta: { words: [], language: 'en', detected: true, heard: null, backend: 'openai', model: 'whisper-1', ms: 1400, cloud: { from: 'local', reason: 'silence', raw: 'Thank you.' }, unclear: 'silence', raw: 'Thank you.' } });
+  const cloudFailed = db.annotations.create(projectId, { author: 'Deniz', x: 0, y: 1, z: 0, audioUrl: '/audio/f.webm', durationMs: 900, consent: true, cloudConsent: true, transcriptStatus: 'pending' });
+  db.annotations.setTranscript(projectId, cloudFailed.id, { transcript: '', status: 'done',
+    meta: { words: [], language: 'en', detected: true, heard: null, backend: 'local', model: 'whisper', ms: 900, cloud: { from: 'local', reason: 'silence', error: 'openai 500' }, unclear: 'silence', raw: 'Thank you.' } });
   db.close();
 
   // the server opens the database and listens on import, so it runs as its own process.
@@ -141,7 +148,7 @@ test('docs/SCHEMA.md has one json block with record, contribution, context, proj
 });
 
 test('the record fields match GET /api/projects/:id/annotations', () => {
-  assert.equal(annotations.length, 4);
+  assert.equal(annotations.length, 6);
   compare('record', union(annotations), LISTED.record);
 });
 
