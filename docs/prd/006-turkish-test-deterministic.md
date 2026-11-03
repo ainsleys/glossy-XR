@@ -14,11 +14,11 @@ The test's outcome depends on the pipeline, not on where a looping microphone ha
 
 R1. **Fixed clip.** A committed fixture, `test/fixtures/turkish-clip.wav` (16 kHz mono, a few seconds, under 200 KB), containing exactly one utterance of the fixture sentence, generated with the same `say` arguments as `playwright.config.js` (document the command in a comment in the config or a sidecar `.txt`). It is verified once with the sweep tool at a single start (the whole clip) in both modes before it is committed; the command and output go in the pull request.
 
-R2. **Content checks on the fixed clip.** The first recording's word assertions (`toMatch(SPEECH_WORDS_TR)`, `words.length > 2`, the list row text) and the whole English-override / "as heard" sequence (clips B and C) run against a clip created through the API from `turkish-clip.wav` (multipart `audio`, the same shape `test/desktop.spec.js` uses in its `headsetClip` helper), with `language` unset so detection runs. The assertions keep their meaning: detected `tr`, Turkish words present; forced `en` with `heard: 'tr'` and the "sounds like" note; "as heard" re-decodes to `tr` with the words present.
+R2. **Content checks on the fixed clip.** The word assertions (`toMatch(SPEECH_WORDS_TR)`, `words.length > 2`, the list row text) and the English-override / "as heard" sequence run against clips created through the API from `turkish-clip.wav` (multipart `audio` with `x/y/z`, `author`, `consent: 'true'`, the shape `test/desktop.spec.js` uses in `headsetClip`; `pose` and `poseSource` left at their defaults). The WAV is posted **twice**: once before the project is patched (clip A: `language` unset, detection runs, expect `language: 'tr'`, `detected: true`, Turkish words present) and once after `PATCH …/projects/:id {language: 'en'}` (clip B: forced `en`, `detected: false`, `heard: 'tr'`, the "sounds like" note; then `.asHeard` re-decodes it to `tr` with the words present, as clip C today). Every lookup uses the id returned by its post, not `[0]`/`.at(-1)`, and every list-row locator is scoped to `li[data-id="<id>"]` (there will be more than one row on the page, and `toHaveText` fails on a locator that matches two). The assertions keep their meaning.
 
-R3. **Live microphone kept for detection.** The test still records one clip through the fake microphone with `recordWithMouse` and asserts `transcription.language === 'tr'` and `detected === true` on it (the behaviour that proved stable), but not the words. Keep the assertion message from 004 on that clip so a future failure shows what was heard.
+R3. **Live microphone kept for detection.** The test still records one clip through the fake microphone with `recordWithMouse` and asserts `transcription.language === 'tr'` and `detected === true` on it, but not the words. This is the only test that asserts detection on audio the browser actually recorded (the English project only checks a forced language), so it stays. The 004 failure message (`JSON.stringify({ transcript, ...transcription })`) moves onto the `language` assertion of this clip, since the word check it sat on is gone from the live clip.
 
-R4. **Title and coverage.** The test title stays. The README's test-coverage sentence about the Turkish project says the words and the override are checked on a fixed clip and detection on a recorded one.
+R4. **Title and coverage.** The test title stays. The README mentions the Turkish project in two places (the transcription section and the test-coverage paragraph); both say the words and the override are checked on a fixed clip and detection on a recorded one.
 
 R5. **No change** to the model, options, guards, `recordWithMouse`, `SPOKEN_TR` (still needed for the live detection clip), or anything under `client/` or `server/`.
 
@@ -33,9 +33,9 @@ R5. **No change** to the model, options, guards, `recordWithMouse`, `SPOKEN_TR` 
 
 ## Tests
 
-T1. The rewritten test, `--repeat-each=10`: 10/10, from a normally named checkout. Mutation A: replace the fixture WAV with a window the sweep showed failing (e.g. one starting in the last word) → the word check fails deterministically; restore. Mutation B: in the test, drop `language` detection by posting with `language: 'en'` → the first assertion (`detected`) fails; restore.
+T1. The rewritten test, `--repeat-each=10`: 10/10, from a normally named checkout. Mutation A: post the English fixture WAV in place of `turkish-clip.wav` → the word check on clip A fails deterministically; restore. Mutation B (server-side, temporary, not committed): skip the detection step in `server/transcribe.js` so an unset language falls back to `en` → clip A's `language === 'tr'`/`detected` assertion fails; restore. Mutation D: in `client/src/main.js`, drop `language: tr.heard` from the `.asHeard` handler → the re-decode assertions on clip B fail; restore.
 
-T2. The live detection clip: Mutation C: point the chromium-tr project's fake microphone at the English WAV → `language === 'tr'` fails; restore.
+T2. The live detection clip: Mutation C: point the chromium-tr project's fake microphone at the English WAV → the live clip's `language === 'tr'` fails; restore.
 
 T3. Full `npm test` at the final commit: all passed (optional interior scene test may be skipped), from both a normally named checkout and the one named `…/turkish-test`.
 
@@ -45,6 +45,10 @@ T3. Full `npm test` at the final commit: all passed (optional interior scene tes
 - README sentence updated.
 - Commit messages and the pull request describe the change only.
 
-## Decisions
+## Decisions (3 Nov)
 
-(Filled in after the specification review.)
+1. A fixed clip is a fair test because in the product a person presses, speaks and releases: a clip is one whole utterance, never a random 3.2 s slice of a loop. The loop was a harness convenience; the sweeps in 005 measured the harness, not the product.
+2. What is given up: the Turkish *words* are no longer checked on audio that passed through the browser's recorder (echo cancellation, noise suppression, Opus). The English project covers that path with words; the Turkish live clip covers detection on it.
+3. The fixture WAV is verified exactly as posted (the bytes in the repo), not through the sweep tool's Opus re-encode; a one-off decode with the server's transcriber, both modes, recorded in the pull request. Generated with `say -v Yelda --file-format=WAVE --data-format=LEI16@16000 -o test/fixtures/turkish-clip.wav "Pekmez kazanı avluda, asmanın altında dururdu."` (one utterance, ~3 s, ~100 KB; above the transcriber's 100 ms floor, under the 30 s chunk).
+4. API-created clips take the same server path as recorded ones (`queueTranscription`, `/transcribe`), and the page builds rows for them from the socket, so the note and the `.asHeard` button appear; `audio/wav` is accepted and ffmpeg sniffs the format regardless of the stored extension.
+5. The live clip stays for detection; the fixed-clip half could run without the Yelda voice, but the test keeps its single skip condition for simplicity (optional follow-up: split so the fixed-clip half runs everywhere).
