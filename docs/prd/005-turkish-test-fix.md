@@ -12,13 +12,15 @@ The Turkish test's outcome does not depend on where the clip starts in the loop,
 
 ## Requirements
 
-R1. **A fixture sweep tool**, `test/fixtures/sweep.mjs`: given a WAV, a window length in ms and a step in ms (default 50), it cuts every window, encodes it as the recorder would (webm/opus via ffmpeg), decodes each with the server's own transcriber (`server/transcribe.js`, local backend, same options the suite uses, language forced to the fixture's language or detected as the test does), and prints per-start-point pass/miss against a regex, plus a summary (misses/total, the failing start ranges). Runs with `node test/fixtures/sweep.mjs <wav> --ms 3200 --match 'pekmez|kazan|avlu|asma|durur'`. Reuses the transcriber; adds no dependency. Documented in one README sentence in the Testing section.
+R1. **A fixture sweep tool**, `test/fixtures/sweep.mjs`. Input: a sentence and voice (it builds the WAV with the same `say` arguments `playwright.config.js` uses, so the audio is the fixture's), a window length in ms, a step in ms (default 25). It treats the fixture as a loop (windows wrap past the end, as the fake microphone does), cuts a window at every start from 0 to the loop length, encodes each as webm/opus with ffmpeg, and decodes each with the server's own transcriber: `createTranscriber` from `server/transcribe.js` is a queue, so the tool wraps `enqueue(id, file, opts, done)` in a promise, treats any error as a miss, applies `unclearReason` from `shared/text.js` exactly as `server/index.js` does, and refuses to run unless the backend is local and `GLOSSY_LANGUAGE` is unset (prints `info()` and exits otherwise). Each window is decoded twice, with language detected and with language forced to the fixture's. Pass rules, mirroring the test: detected mode passes only if not unclear, regex matches, `language` is the fixture's, `detected` is true and `words.length > 2`; forced mode passes if not unclear and the regex matches. The tool prints per-start pass/miss for both modes, `retried` and `ms`, and a summary (misses/total per mode, failing start ranges, any `retried`). Usage: `node test/fixtures/sweep.mjs --text "<sentence>" --voice Yelda --lang tr --ms 3180 --step 25 --match 'pekmez|kazan|avlu|asma|durur'`. Note the recorded clip is about 20 ms shorter than the hold (3180 for a 3200 hold); sweep the recorded length. Adds no dependency. Documented in one README sentence in the Testing section.
 
-R2. **Choose the fix with the sweep.** Candidates, in order of preference: (a) a longer hold in `test/turkish.spec.js` for both recordings (sweep lengths from 3200 ms upward in 500 ms steps; pick the shortest with 0 misses, if any ≤ 8000 ms); (b) a changed fixture in `playwright.config.js` (`SPOKEN_TR`): a different sentence, or the same sentence with a pause of about a second between repetitions, swept the same way at the current 3200 ms; (c) both. The chosen option must give **0 misses at every start point** for the lengths the test records. The decision and the sweep numbers for each candidate go in the Decisions section and the pull request.
+R1b. **The sweep is a model of the e2e path, not a replica**: Chromium applies echo cancellation and noise suppression to the microphone and uses its own Opus settings; the sweep uses plain ffmpeg. The 004 data disagrees with the sweep at some start points. So the tool also takes `--replay <dir>` to decode stored clips (the 004 clips are in `/tmp/trm/audio-*` on this machine, if still present) and report agreement with the sweep at their aligned start points; T1 reports that number.
+
+R2. **Choose the fix with the sweep.** Candidates: (a) a longer hold in `test/turkish.spec.js` for both recordings (sweep recorded lengths from 3180 ms upward in 500 ms steps, up to about 6000 ms); (b) a changed fixture in `playwright.config.js` (`SPOKEN_TR`): the same sentence with a pause of about a second between repetitions (`[[slnc 1000]]` in the `say` text), or a different sentence, swept at the current 3180 ms; (c) both. Acceptance for a candidate: **0 misses in both modes at 25 ms steps, at the recorded length and at the recorded length minus 300 ms** (a timing margin), and **no `retried` decode** in either mode (the repetition retry took 17–31 s in 004 and would push the test toward its 60 s timeout). Sweep both (a) and (b), and prefer the candidate with the larger margin (more surplus length, or 0 misses over a wider range); keep the test's worst case (two holds plus three decodes) under about 40 s. The sweep numbers for every candidate go in the Decisions section and the pull request.
 
 R3. **Apply the choice.** Only the chosen constants change: the hold length(s) in `test/turkish.spec.js` and/or `SPOKEN_TR` in `playwright.config.js`. No change to the model, its options, the guard, `recordWithMouse`, the English fixture, or anything under `client/` or `server/`.
 
-R4. **Project selection by file name.** In `playwright.config.js`, `testMatch` and `testIgnore` for the Turkish project use a pattern anchored to the file name (for example `/(^|\/)turkish\.spec\.js$/`), so a directory named "turkish-…" no longer matches every spec. Default behaviour on the usual checkout is unchanged.
+R4. **Project selection by file name.** In `playwright.config.js`, both the `chromium` project's `testIgnore: /turkish/` and the `chromium-tr` project's `testMatch: /turkish/` become patterns anchored to the file name, `/(^|[\\/])turkish\.spec\.js$/` (Playwright tests them against the absolute path), so a directory named "turkish-…" no longer matches every spec. Default behaviour on the usual checkout is unchanged.
 
 ## Non-goals
 
@@ -32,13 +34,15 @@ R4. **Project selection by file name.** In `playwright.config.js`, `testMatch` a
 
 ## Tests
 
-T1. Sweep at the chosen configuration: 0 misses, output pasted in the pull request. Mutation: sweep at the old configuration (3200 ms, current sentence): misses reported (expected around 52/142), proving the tool sees the defect.
+Order of work: T1 mutation (old settings) → sweep the candidates and choose → R4 with T3 → R3 → T2 → T4.
 
-T2. E2e: `npx playwright test test/turkish.spec.js --repeat-each=10` passes 10/10 at the chosen configuration (poll rules as per the template; the test already polls). Run from a checkout whose directory name contains "turkish" to exercise R4 as well; and once from one that does not.
+T1. Sweep at the old configuration first (3180 ms, current sentence, 25 ms steps): misses reported in detected mode (004 found about 52/142 at 50 ms steps), proving the tool sees the defect; plus the replay agreement figure (R1b). Then sweep every candidate; the chosen one meets R2's acceptance. All outputs in the pull request.
 
-T3. R4: with the new patterns, `npx playwright test --list` in a checkout named `…/turkish-test` lists `turkish.spec.js` under `chromium-tr` only and every other spec under `chromium` only. Mutation: restore the old patterns in that checkout: the listing shows every spec under `chromium-tr`.
+T2. E2e: `npx playwright test test/turkish.spec.js --repeat-each=10` passes 10/10 at the chosen configuration, run from the main checkout (`/Users/ainsleys/xr-annotation/glossy-xr` on this branch via a worktree whose name does not contain "turkish").
 
-T4. Full `npm test` at the final commit: all passed (optional interior scene test may be skipped).
+T3. R4: in the worktree named `…/turkish-test`, `npx playwright test --list` lists `turkish.spec.js` under `chromium-tr` only and every other spec under `chromium` only. Mutation: restore the old patterns there: the listing shows every spec under `chromium-tr`. (Naming the spec file on the command line does not exercise R4; only `--list` or a full run does.)
+
+T4. Full `npm test` at the final commit in both the turkish-named worktree and a normally named one: all passed (optional interior scene test may be skipped).
 
 ## Definition of done
 
@@ -46,6 +50,10 @@ T4. Full `npm test` at the final commit: all passed (optional interior scene tes
 - README sentence for the sweep tool.
 - Commit messages and the pull request describe the change only.
 
-## Decisions
+## Decisions (3 Nov)
 
-(Filled in after the specification review.)
+1. The transcriber is a queue with a callback; the sweep wraps it rather than importing a plain function, applies the silence guard itself (the server does, not the transcriber), and decodes in both modes with the test's full pass rules, so it cannot report 0 misses for a weaker reason.
+2. The sweep is a model: Chromium's mic processing and Opus settings differ from ffmpeg's, and 004's clips disagree with the sweep at some starts. Hence 25 ms steps, a 300 ms length margin, the replay agreement figure, and the no-retry rule.
+3. The fixture-with-pause option is a peer of the longer hold, not a fallback, because longer clips risk the repetition retry and the 60 s test timeout.
+4. Both projects' patterns are anchored (the chromium project's `testIgnore` too).
+5. T2 does not exercise R4; T3 with `--list` does.
