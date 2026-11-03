@@ -60,3 +60,14 @@ export function langName(code, locale) {
   if (!code) return '';
   try { return new Intl.DisplayNames([locale || (typeof navigator !== 'undefined' && navigator.language) || 'en'], { type: 'language' }).of(code) || code; } catch { return code; }
 }
+
+// The provenance badge for a clip's transcription, shared by the room's list
+// and the review page: { text, title } when the cloud fallback ran (or was
+// tried and failed), null otherwise. Pending and older clips carry no backend.
+export function cloudBadge(tr) {
+  if (!tr) return null;
+  const title = [tr.backend, tr.model, tr.cloud?.reason ? `local result rejected as ${tr.cloud.reason}` : ''].filter(Boolean).join(' · ');
+  if (tr.cloud?.error) return { text: 'cloud transcription failed, local text kept', title: [title, tr.cloud.error].filter(Boolean).join(' · ') };
+  if (tr.backend && tr.backend !== 'local') return { text: 'transcribed in the cloud', title };
+  return null;
+}

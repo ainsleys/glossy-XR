@@ -16,6 +16,7 @@
 //   move               { kind: 'step' | 'turn' | 'push' | 'stick', by?, ms? }   a thumb step/turn/push, or a thumbstick glide (its length)
 //   chat:listen / chat:sent { id, ms } / chat:received { id }   the spoken conversation with the laptop (text lives in the chat table, not here)
 //   mic:ready          { via?: 'first clip' | 'reacquired' }   mic:error { error }   mic:ended { recording }
+//   consent:reset      { project }   the box unticked because the project's label now names the cloud transcriber
 //   record:start       { source: 'trigger' | 'pinch' | 'voice' | 'mic' | 'mouse' | 'key' | 'reply', question, layer }   mic = the wrist microphone
 //   record:blocked     { reason: 'no name' | 'no consent' | 'mic' | 'no project' }
 //   record:end         { reason: 'release' | 'voice-pause' | 'project-changed' | 'track-ended', durationMs, hands }

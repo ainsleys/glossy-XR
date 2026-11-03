@@ -28,7 +28,7 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 import { VoiceRecorder } from './recorder.js';
 import { connect, projects as projectsApi, assets as assetsApi, annotations as annotationsApi, chat as chatApi } from './api.js';
 import { loadModel, SUPPORTED_EXTENSIONS } from './loaders.js';
-import { unclearReason, UNCLEAR_TEXT, langName } from '../../shared/text.js';
+import { unclearReason, UNCLEAR_TEXT, langName, cloudBadge } from '../../shared/text.js';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 
 // BVH-accelerated raycasts for every mesh: anchoring, hover, and collision
@@ -72,16 +72,18 @@ const hud = {
   assetList: $('assetList'), assetFile: $('assetFile'), uploadProgress: $('uploadProgress'), exportLink: $('exportLink'), edmLink: $('edmLink'), annList: $('annList'),
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
-  walk: $('walk'), autoplay: $('autoplay'), voiceStart: $('voiceStart'), locoHand: $('locoHand'), locoMode: $('locoMode'), recordMode: $('recordMode'), thumbSource: $('thumbSource'), ghostStyle: $('ghostStyle'), ghostTrail: $('ghostTrail'), reviewLink: $('reviewLink'), language: $('language'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
+  walk: $('walk'), autoplay: $('autoplay'), voiceStart: $('voiceStart'), locoHand: $('locoHand'), locoMode: $('locoMode'), recordMode: $('recordMode'), thumbSource: $('thumbSource'), ghostStyle: $('ghostStyle'), ghostTrail: $('ghostTrail'), reviewLink: $('reviewLink'), language: $('language'), cloudFallback: $('cloudFallback'), consentText: $('consentText'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
   interview: $('interview'), visitorLink: $('visitorLink'), question: $('question'), level: $('level'), levelBar: $('levelBar'), hint: $('hint'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
 };
 const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 hud.author.value = ls.get('glossy.author', '');
 hud.layer.value = ls.get('glossy.layer', 'default');
-hud.consent.checked = ls.get('glossy.consent', '0') === '1';
+// What was agreed: '1' for the plain label, 'cloud' for the label that names
+// the external transcriber (renderConsentLabel). Either ticks the box.
+hud.consent.checked = ['1', 'cloud'].includes(ls.get('glossy.consent', '0'));
 hud.author.addEventListener('change', () => ls.set('glossy.author', hud.author.value));
 hud.layer.addEventListener('change', () => ls.set('glossy.layer', hud.layer.value));
-hud.consent.addEventListener('change', () => { ls.set('glossy.consent', hud.consent.checked ? '1' : '0'); if (hud.consent.checked) readyMic(); });
+hud.consent.addEventListener('change', () => { ls.set('glossy.consent', hud.consent.checked ? (cloudOn() ? 'cloud' : '1') : '0'); if (hud.consent.checked) readyMic(); });
 // The microphone is asked for here, on the flat page, in the gesture that ticks
 // consent: a permission prompt that first appears inside an immersive session
 // may not be seen (Quest Browser), and the first clip would be lost to it. With
@@ -93,7 +95,7 @@ async function readyMic() {
   try { await recorder.init(); attachLevel(recorder.stream); micState = 'ready'; setStatus('microphone ready', { hold: 1500 }); log('mic:ready'); }
   catch (e) { micState = 'blocked'; setStatus('microphone blocked: ' + e.message, { hold: 4000 }); log('mic:error', { error: e.message }); }
 }
-if (hud.consent.checked) document.addEventListener('pointerdown', () => readyMic(), { once: true });
+if (hud.consent.checked) document.addEventListener('pointerdown', () => { if (hud.consent.checked) readyMic(); }, { once: true });   // the box may have been unticked since (renderConsentLabel)
 hud.walk.checked = ls.get('glossy.walk', '1') === '1';
 hud.walk.addEventListener('change', () => ls.set('glossy.walk', hud.walk.checked ? '1' : '0'));
 hud.autoplay.checked = ls.get('glossy.autoplay', '0') === '1';
@@ -254,6 +256,7 @@ function updateXrPanel() {
   const act = hands ? (recordMode() === 'mic' ? 'raise the microphone on your left wrist to answer' : recordMode() === 'voice' && hud.voiceStart.checked ? 'pinch, or just speak, to answer' : 'pinch and hold to answer') : 'hold the trigger to answer';
   let hint = q ? (VISITOR && !hands ? 'squeeze: hear the question · ' + act : act) : hands ? (recordMode() === 'mic' ? 'look at a thing, raise the microphone on your left wrist, talk, lower it' : recordMode() === 'voice' && hud.voiceStart.checked ? 'speak to leave a clip where you look · pinch to hold one' : 'pinch and hold to leave a clip where you look') : '';
   if (micState !== 'ready' && !recorder.isRecording) hint = micState === 'blocked' ? 'microphone blocked: leave VR and allow it in the browser' : micState === 'ended' ? 'microphone stopped while the headset slept: pinch, or speak, to open it again' : 'microphone not yet allowed: tick consent on the page before entering VR';
+  else if (!hud.consent.checked && !recorder.isRecording) hint = 'consent needed: tick consent on the page';   // an open microphone, but the box was unticked when the label changed
   xrPanel.draw(question, hud.status.textContent, hint, hud.rec.classList.contains('on'), level);
 }
 
@@ -614,6 +617,8 @@ async function openProject(id) {
 let shownScript = null;
 function projectToHud({ fresh = false } = {}) {
   hud.language.value = project?.language || '';
+  hud.cloudFallback.checked = cloudOn();
+  renderConsentLabel();
   const scriptKey = JSON.stringify((project?.script?.questions || []).map((q) => q.text));
   if (fresh || scriptKey !== shownScript) {
     if (document.activeElement !== hud.scriptText) hud.scriptText.value = (project?.script?.questions || []).map((q) => q.text).join('\n');
@@ -630,6 +635,29 @@ hud.language.addEventListener('change', async () => {
     setStatus(hud.language.value ? 'transcription language: ' + hud.language.value : 'transcription language: detect');
   } catch (e) { hud.language.value = project.language || ''; setStatus('language not saved: ' + e.message); }
 });
+hud.cloudFallback.addEventListener('change', async () => {
+  if (!project) return;
+  try {
+    project = await projectsApi.update(project.id, { cloudFallback: hud.cloudFallback.checked });
+    setStatus(project.cloudFallback ? 'unclear clips go to the cloud transcriber, for contributors who consent to it' : 'transcription stays local');
+  } catch (e) { setStatus('cloud setting not saved: ' + e.message); }
+  projectToHud();
+});
+// The consent label follows the project: with the cloud fallback on it names the
+// external transcriber. Consent given to the plain label does not cover that, so
+// the box is unticked and has to be ticked again here.
+const CONSENT_PLAIN = 'I consent to my recording being stored and shared';
+const CONSENT_CLOUD = CONSENT_PLAIN + ', and transcribed by an external service when the local transcriber cannot read it';
+function cloudOn() { return !!project?.cloudFallback; }
+function renderConsentLabel() {
+  hud.consentText.textContent = cloudOn() ? CONSENT_CLOUD : CONSENT_PLAIN;
+  if (cloudOn() && hud.consent.checked && ls.get('glossy.consent', '0') !== 'cloud') {
+    hud.consent.checked = false;
+    ls.set('glossy.consent', '0');
+    setStatus('this project may send unclear clips to an external transcriber: read the consent again and tick it to record', { hold: 6000 });
+    log('consent:reset', { project: project.id });
+  }
+}
 hud.saveScript.addEventListener('click', async () => {
   if (!project) return;
   const questions = hud.scriptText.value.split('\n').map((t) => t.trim()).filter(Boolean).map((text) => ({ text }));
@@ -1084,7 +1112,8 @@ function renderList() {
       : unclear ? `<div class="text pending" title="${esc(tr.raw || record.transcript || '')}">(${UNCLEAR_TEXT[unclear] || 'unclear'})</div>`
       : tr.status === 'done' ? `<div class="text pending">(no speech detected)</div>` : '';
     const periodLabel = record.period ? (record.period.label || [record.period.from, record.period.to].filter(Boolean).join('–')) : '';
-    const badges = (record.hands ? `<span class="badge" title="${esc(describeHands(record.hands))}">✋</span>` : '') + (record.replies ? `<span class="badge" title="replies">↩ ${record.replies}</span>` : '') + (periodLabel ? `<span class="period" title="period">${esc(periodLabel)}</span>` : '');
+    const cloud = cloudBadge(tr);
+    const badges = (cloud ? `<span class="badge cloud" title="${esc(cloud.title)}">${esc(cloud.text)}</span>` : '') + (record.hands ? `<span class="badge" title="${esc(describeHands(record.hands))}">✋</span>` : '') + (record.replies ? `<span class="badge" title="replies">↩ ${record.replies}</span>` : '') + (periodLabel ? `<span class="period" title="period">${esc(periodLabel)}</span>` : '');
     const prompt = record.prompt ? `<div class="prompt">Q: ${esc(record.prompt)}</div>` : '';
     // the project or clip forced one language and the model heard another: say so, offer the other decoder
     const mismatch = tr.status === 'done' && tr.heard && tr.language && tr.heard !== tr.language;
@@ -1240,6 +1269,7 @@ async function endRecording(reason = 'release') {
     const rec = await annotationsApi.create({
       project: project.id, ...clip, anchor, objectId, author: hud.author.value.trim(), layer: hud.layer.value, consent: true,
       parent: parentRec?.id, pose: samples, poseSource: pose.source, hands,
+      cloudConsent: ls.get('glossy.consent', '0') === 'cloud' && cloudOn(),   // the server also checks the project
       prompt: q?.text, mode: q ? 'interview' : 'walk',
     });
     clearProvisional(provisional);
@@ -1906,7 +1936,7 @@ const net = connect({
     if (p.id !== project?.id) return;
     const key = (x) => JSON.stringify((x.assets || []).map((a) => [a.id, a.url, a.visible, a.options]));
     const changed = key(p) !== key(project);
-    const settingsChanged = p.language !== project.language || JSON.stringify(p.script) !== JSON.stringify(project.script);
+    const settingsChanged = p.language !== project.language || !!p.cloudFallback !== !!project.cloudFallback || JSON.stringify(p.script) !== JSON.stringify(project.script);
     project = p;
     if (settingsChanged) projectToHud();
     if (changed) await showAssets(p);
@@ -1922,6 +1952,7 @@ if (import.meta.env.DEV) window.__glossy = {
   get project() { return project; }, get selected() { return selected(); }, get playingId() { return playingId; }, get nearId() { return nearId; },
   visitor: VISITOR, get lastAsked() { return lastAsked; }, xrPanel, get level() { return level; }, get fullDistance() { return fullDistance; },
   get status() { return hud.status.textContent; },
+  get consent() { return { checked: hud.consent.checked, stored: ls.get('glossy.consent', '0') }; },
   get captured() { return captured(); },
   get lastPlacementMs() { return lastPlacementMs; },
   visibleIds: () => [...markers.values()].filter((m) => m.mesh.visible).map((m) => m.record.id),

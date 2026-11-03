@@ -6,7 +6,7 @@
 // transcript and viewpoint stay linked: the word under the playhead lights,
 // and the plan shows where the speaker was looking at that moment.
 import { connect, projects as projectsApi, assets as assetsApi, annotations as annotationsApi } from './api.js';
-import { unclearReason, UNCLEAR_TEXT, langName } from '../../shared/text.js';
+import { unclearReason, UNCLEAR_TEXT, langName, cloudBadge } from '../../shared/text.js';
 
 const $ = (id) => document.getElementById(id);
 const ui = { project: $('project'), count: $('count'), search: $('search'), filters: $('filters'), roomLink: $('roomLink'), edmLink: $('edmLink'), visitorLink: $('visitorLink'), exportLink: $('exportLink'), plan: $('plan'), clips: $('clips'), player: $('player'), audio: $('audio'), time: $('time'), toast: $('toast') };
@@ -108,9 +108,10 @@ function cardHtml(r) {
   const links = (r.links || []).length ? `<div class="links">${r.links.map((l, i) => `<figure>${l.kind === 'image' && l.url ? `<a href="${esc(l.url)}" target="_blank"><img src="${esc(l.url)}" alt="${esc(l.title || 'linked photo')}" /></a>` : `<a href="${esc(l.url || '#')}" target="_blank">${esc(l.title || l.url || l.asset)}</a>`}<figcaption title="${esc(l.title || '')}">${esc(l.title || l.kind)}</figcaption><button class="unlink" data-i="${i}" title="remove this link (the file stays in the project's assets)">✕</button></figure>`).join('')}</div>` : '';
   const presets = distinctPeriods().filter((p) => periodKey(p) !== periodKey(r.period)).map((p) => `<button class="preset" data-period='${esc(JSON.stringify(p))}' title="set this period">${esc(periodLabel(p))}</button>`).join('');
   const isArmed = armed?.id === r.id;
+  const cloud = cloudBadge(tr);
   return `<article data-id="${r.id}" class="${r.parent && records.has(r.parent) ? 'reply ' : ''}${r.id === selectedId ? 'sel ' : ''}${matches(r) ? '' : 'dim'}">
     <div class="head"><span class="sw" style="background:${colourOf(r)}"></span><span class="who">${esc(r.author)}</span>
-      ${r.period ? `<span class="period">${esc(periodLabel(r.period))}</span>` : ''}<span title="${esc(r.createdAt)}">${esc(ago(r.createdAt))}</span><span>${fmtDur(r.durationMs)}</span>${lang}${heard}
+      ${r.period ? `<span class="period">${esc(periodLabel(r.period))}</span>` : ''}<span title="${esc(r.createdAt)}">${esc(ago(r.createdAt))}</span><span>${fmtDur(r.durationMs)}</span>${lang}${heard}${cloud ? `<span class="cloud" title="${esc(cloud.title)}">${esc(cloud.text)}</span>` : ''}
       ${r.anchor?.objectId ? `<span>on ${esc(r.anchor.objectId)}</span>` : ''}${r.hands ? `<span title="a hand gesture was recorded with this clip; its wrist paths are drawn on the plan">✋ ${esc(describeHands(r.hands))}</span>` : ''}${r.replies ? `<span>↩ ${r.replies}</span>` : ''}${r.consent === false ? '<span style="color:var(--rec)">consent withdrawn</span>' : ''}
       <span class="right"><button class="playBtn" title="play this clip">${r.id === selectedId && !ui.audio.paused ? '■ stop' : '▶ play'}</button><a href="/?project=${esc(r.project)}&focus=${esc(r.id)}" title="stand in front of this clip in the room">in the room</a></span></div>
     ${r.prompt ? `<div class="prompt">Q: ${esc(r.prompt)}</div>` : ''}
