@@ -11,6 +11,7 @@ import { STUB_PORT, THANK_YOU_CLIP } from '../playwright.config.js';
 
 const CLOUD_TEXT = 'The well stood by the gate.';
 let stub, hits = 0;
+let delayMs = 0, failWith = 0;                 // set by a test to slow the stub down or make it fail
 
 test.beforeAll(async () => {
   stub = http.createServer((req, res) => {
@@ -18,15 +19,17 @@ test.beforeAll(async () => {
     req.on('end', () => {
       if (req.method !== 'POST' || req.url !== '/v1/audio/transcriptions') { res.writeHead(404).end(); return; }
       hits++;
-      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
+      const answer = () => failWith ? res.writeHead(failWith, { 'content-type': 'application/json' }).end('{"error":"stub failure"}') : res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({
         text: CLOUD_TEXT, language: 'english',
         words: CLOUD_TEXT.replace('.', '').split(' ').map((word, i) => ({ word, start: i * 0.3, end: i * 0.3 + 0.25 })),
       }));
+      if (delayMs) setTimeout(answer, delayMs); else answer();
     });
   });
   await new Promise((resolve, reject) => stub.once('error', reject).listen(STUB_PORT, 'localhost', resolve));
 });
 test.afterAll(() => new Promise((resolve) => stub.close(resolve)));
+test.afterEach(() => { delayMs = 0; failWith = 0; });
 
 async function project(request, name, cloudFallback) {
   const p = await (await request.post(`${API}/api/projects`, { data: { name } })).json();
@@ -113,4 +116,44 @@ test('with the project on but no cloud consent on the clip it stays local and un
   expect(hits - before).toBe(0);
   const events = await (await request.get(`${API}/api/projects/${p.id}/events`)).json();
   expect(events.filter((e) => e.kind === 'transcribe:fallback')).toHaveLength(0);
+});
+
+test('consent withdrawn while the clip waits in the queue keeps it local', async ({ request }) => {
+  const p = await project(request, 'cloud-withdrawn', true);
+  const before = hits;
+  delayMs = 3000;                                          // the first clip holds the serial queue at the stub for 3 s
+  const first = await postThankYou(request, p.id, { cloudConsent: 'true' });
+  const second = await postThankYou(request, p.id, { cloudConsent: 'true' });
+  const res = await request.patch(`${API}/api/projects/${p.id}/annotations/${second.id}`, { data: { consent: false } });
+  expect((await res.json()).consent).toBe(false);
+  expect((await transcribed(request, p.id, first.id)).transcription.backend).toBe('openai');
+  const b = await transcribed(request, p.id, second.id);
+  expect(b.transcript).toBe('');
+  expect(b.transcription.unclear).toBe('silence');
+  expect(b.transcription.backend).toBe('local');
+  expect(b.transcription.cloud).toBeUndefined();
+  expect(b.cloudConsent).toBe(true);                       // what the contributor agreed to stays recorded
+  expect(hits - before).toBe(1);                           // the first clip only
+  const events = await (await request.get(`${API}/api/projects/${p.id}/events`)).json();
+  expect(events.filter((e) => e.kind === 'transcribe:fallback').map((e) => e.data.id)).toEqual([first.id]);
+});
+
+test('a failed cloud call keeps the local result and leaves a trace of the attempt', async ({ request }) => {
+  const p = await project(request, 'cloud-failed', true);
+  const before = hits;
+  failWith = 500;
+  const clip = await postThankYou(request, p.id, { cloudConsent: 'true' });
+  const a = await transcribed(request, p.id, clip.id);
+  expect(hits - before).toBe(1);
+  expect(a.transcript).toBe('');
+  expect(a.transcription.unclear).toBe('silence');
+  expect(a.transcription.backend).toBe('local');
+  expect(a.transcription.cloud).toEqual({ from: 'local', reason: 'silence', error: expect.stringMatching(/openai 500/) });
+  const events = await (await request.get(`${API}/api/projects/${p.id}/events`)).json();
+  const fallback = events.filter((e) => e.kind === 'transcribe:fallback');
+  expect(fallback).toHaveLength(1);
+  expect(fallback[0].data).toEqual({ id: clip.id, from: 'local', to: 'openai', reason: 'silence', error: expect.stringMatching(/openai 500/) });
+  const edm = await (await request.get(`${API}/api/projects/${p.id}/export?format=edm`)).json();
+  const web = edm['@graph'].find((n) => n['@type'] === 'edm:WebResource' && n['@id'].endsWith(clip.audioUrl));
+  expect(web['dcterms:provenance']).toContain('a cloud transcription was attempted and failed');
 });
