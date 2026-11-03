@@ -321,6 +321,28 @@ test('a click released before the microphone is ready does not leave the recorde
   expect(await markerCount(page)).toBe(1);
 });
 
+test('without consent a hold does not record and says why; ticking consent lets it record', async ({ page, request }) => {
+  const project = await openProject(page, request, 'no-consent-page');
+  await page.fill('#author', 'Tester');
+  await page.locator('#author').dispatchEvent('change');
+  expect(await page.isChecked('#consent')).toBe(false);                // a fresh context: nothing remembered from an earlier visit
+  await lockPointer(page);
+  await page.mouse.move(640, 400);
+  await page.mouse.down();
+  await expect.poll(() => status(page), { timeout: 10_000 }).toBe('tick consent first');
+  await page.evaluate(() => window.__glossy.log.flush());
+  const blocked = async () => (await (await request.get(`${API}/api/projects/${project.id}/events`)).json()).filter((e) => e.kind === 'record:blocked');
+  await expect.poll(blocked, { timeout: 10_000 }).toEqual([expect.objectContaining({ data: expect.objectContaining({ reason: 'no consent', via: 'mouse' }) })]);
+  // beginRecording ran and returned: nothing is recording, nothing is waiting on the microphone
+  // (the hint reads "release to save" while starting is set), and no microphone was opened
+  const state = await page.evaluate(() => { const g = window.__glossy; return { isRecording: g.recorder.isRecording, live: g.recorder.live, hint: g.hud.hint.textContent, markers: g.markers.size }; });
+  expect(state).toEqual({ isRecording: false, live: false, hint: expect.not.stringMatching(/release to save/), markers: 0 });
+  await page.mouse.up();
+  await page.check('#consent');
+  await recordWithMouse(page, 600);                                    // with consent the same hold records
+  expect(await markerCount(page)).toBe(1);
+});
+
 test('a second client sees the annotation live', async ({ page, request, browser }) => {
   const project = await openProject(page, request, 'sync');
   const other = await browser.newPage();
