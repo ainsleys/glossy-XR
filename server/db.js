@@ -95,6 +95,7 @@ export function openDb(dataDir) {
     ['language', 'TEXT'],           // default transcription language for the project; NULL = detect
     ['script', 'TEXT'],             // interview script: JSON {questions:[{id, text, ...}]}
     ['cloud_fallback', 'INTEGER NOT NULL DEFAULT 0'],  // unclear local transcripts may go to the cloud backend, for clips that consented
+    ['ui_language', 'TEXT'],        // what contributors read in the room: en | tr; NULL = en
   ]);
   db.exec(`CREATE INDEX IF NOT EXISTS annotations_parent ON annotations(project_id, parent_id)`);
 
@@ -113,7 +114,7 @@ export function openDb(dataDir) {
       FROM projects p ORDER BY updated_at DESC`),
     getProject: db.prepare(`SELECT * FROM projects WHERE id = ?`),
     insertProject: db.prepare(`INSERT INTO projects (id, name, transform, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`),
-    updateProject: db.prepare(`UPDATE projects SET name = ?, transform = ?, language = ?, script = ?, cloud_fallback = ?, updated_at = ? WHERE id = ?`),
+    updateProject: db.prepare(`UPDATE projects SET name = ?, transform = ?, language = ?, script = ?, cloud_fallback = ?, ui_language = ?, updated_at = ? WHERE id = ?`),
     setModel: db.prepare(`UPDATE projects SET model_url = ?, model_type = ?, model_name = ?, updated_at = ? WHERE id = ?`),
     deleteProject: db.prepare(`DELETE FROM projects WHERE id = ?`),
     listAnnotations: db.prepare(`${ANN} WHERE a.project_id = ? ORDER BY a.created_at`),
@@ -157,7 +158,7 @@ export function openDb(dataDir) {
   });
   const projectRow = (r) => r && ({
     id: r.id, name: r.name,
-    language: r.language || null, script: safeJson(r.script, null), cloudFallback: !!r.cloud_fallback,
+    language: r.language || null, uiLanguage: r.ui_language || 'en', script: safeJson(r.script, null), cloudFallback: !!r.cloud_fallback,
     createdAt: r.created_at, updatedAt: r.updated_at,
     assets: q.listAssets.all(r.id).map(assetRow),
     ...(r.annotation_count !== undefined ? { annotationCount: Number(r.annotation_count) } : {}),
@@ -185,13 +186,13 @@ export function openDb(dataDir) {
         q.insertProject.run(id, name, JSON.stringify(transform), t, t);
         return api.projects.get(id);
       },
-      update: (id, { name, transform, language, script, cloudFallback }) => {
+      update: (id, { name, transform, language, script, cloudFallback, uiLanguage }) => {
         const cur = api.projects.get(id);
         if (!cur) return null;
         const row = q.getProject.get(id);
         q.updateProject.run(name ?? cur.name, JSON.stringify(transform ?? JSON.parse(row.transform || '{}')),
           language === undefined ? row.language : language, script === undefined ? row.script : (script ? JSON.stringify(script) : null),
-          (cloudFallback === undefined ? !!row.cloud_fallback : cloudFallback) ? 1 : 0, now(), id);
+          (cloudFallback === undefined ? !!row.cloud_fallback : cloudFallback) ? 1 : 0, uiLanguage === undefined ? row.ui_language : uiLanguage, now(), id);
         return api.projects.get(id);
       },
       remove: (id) => q.deleteProject.run(id).changes > 0,

@@ -269,7 +269,11 @@ app.get('/api/projects/:id', projectOr404, (req, res) => res.json(req.project));
 app.patch('/api/projects/:id', projectOr404, (req, res) => {
   const name = req.body?.name !== undefined ? String(req.body.name).trim().slice(0, 120) : undefined;
   const transform = req.body?.transform !== undefined ? sanitizeTransform(req.body.transform) : undefined;
-  let language, script, cloudFallback;
+  let language, script, cloudFallback, uiLanguage;
+  if (req.body?.uiLanguage !== undefined) {                      // the room's interface language; separate from transcription
+    if (!['en', 'tr'].includes(req.body.uiLanguage)) return res.status(400).json({ error: 'uiLanguage must be en or tr' });
+    uiLanguage = req.body.uiLanguage;
+  }
   if (req.body?.cloudFallback !== undefined) {
     if (typeof req.body.cloudFallback !== 'boolean') return res.status(400).json({ error: 'cloudFallback must be true or false' });
     cloudFallback = req.body.cloudFallback;
@@ -282,7 +286,7 @@ app.patch('/api/projects/:id', projectOr404, (req, res) => {
     script = req.body.script ? sanitizeScript(req.body.script) : null;
     if (script === false) return res.status(400).json({ error: 'script must be { questions: [{ text }] }' });
   }
-  const p = db.projects.update(req.params.id, { name, transform, language, script, cloudFallback });
+  const p = db.projects.update(req.params.id, { name, transform, language, script, cloudFallback, uiLanguage });
   io.emit('project:updated', p);
   res.json(p);
 });
