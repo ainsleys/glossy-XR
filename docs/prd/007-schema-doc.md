@@ -52,3 +52,6 @@ T2. The full `npm test` at the final commit: all passed (optional interior scene
 3. The versioning paragraph is explicitly "practice written down", since no rule existed.
 4. The drift test spawns the server (the module listens on import) and builds a full record through `db.js`; a committed fixture export would itself drift.
 5. A fenced `json` block is the machine-readable source; tables are for people, and the test checks the two agree.
+6. The table check runs both ways: a row in a `Field` table whose name is not in the `json` block fails, as does a listed name with no row (mutation E: a `transcription.bogus` row in the record table only).
+7. The `json` block also lists `project` (from `GET /api/projects/:id` and `GET /api/projects` together, so `annotationCount` is covered; only the top level of `script`) and `asset` (including `transform.*`, set through `db.assets.update`), each with its own table (mutation F: remove `annotationCount` from the block).
+8. The test fails fast and says why when the spawned server exits before answering, and prints its stderr; the free port is chosen before the server listens, a race the test notes but does not close.
