@@ -47,6 +47,7 @@ if (info.backend !== 'local' || process.env.GLOSSY_LANGUAGE) {
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'glossy-sweep-'));
 process.on('exit', () => fs.rmSync(tmp, { recursive: true, force: true }));
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => process.exit(130));   // exit runs the cleanup above
 const wav = path.join(tmp, 'fixture.wav');
 execFileSync('say', [...(o.voice ? ['-v', o.voice] : []), '--file-format=WAVE', '--data-format=LEI16@16000', '-o', wav, o.text]);
 const pcm = (file, rate = RATE) => {
@@ -90,7 +91,8 @@ const rangesOf = (ms) => {
   for (const s of ms.sort((a, b) => a - b)) { const last = r.at(-1); if (last && s - last[1] <= STEP) last[1] = s; else r.push([s, s]); }
   return r.map(([a, b]) => a === b ? `${a}` : `${a}–${b}`).join(', ') || 'none';
 };
-const fmt = (s, r) => `${String(s).padStart(5)} ms  det ${r.det.ok ? 'pass' : 'MISS'} ${r.det.retried ? 'retried ' : ''}${String(r.det.ms).padStart(5)} ms  forced ${r.forced.ok ? 'pass' : 'MISS'} ${r.forced.retried ? 'retried ' : ''}${String(r.forced.ms).padStart(5)} ms  ${r.det.ok ? '' : `det: ${r.det.language} ${r.det.why.slice(0, 70)}  `}${r.forced.ok ? '' : `forced: ${r.forced.why.slice(0, 70)}`}`;
+const took = (m) => (m.ms == null ? 'err' : `${m.ms} ms`).padStart(8);   // an errored decode has no time
+const fmt = (s, r) => `${String(s).padStart(5)} ms  det ${r.det.ok ? 'pass' : 'MISS'} ${r.det.retried ? 'retried ' : ''}${took(r.det)}  forced ${r.forced.ok ? 'pass' : 'MISS'} ${r.forced.retried ? 'retried ' : ''}${took(r.forced)}  ${r.det.ok ? '' : `det: ${r.det.language} ${r.det.why.slice(0, 70)}  `}${r.forced.ok ? '' : `forced: ${r.forced.why.slice(0, 70)}`}`;
 
 if (!o.replay) {
   console.log(`sweep: ${o.voice || 'default voice'}, loop ${loopMs} ms, window ${MS} ms, step ${STEP} ms, ${starts.length} starts; ${info.model}`);
