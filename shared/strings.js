@@ -13,7 +13,8 @@
 // one; Turkish uses the same form for both, with no plural after a number.
 //
 // To add a language: add a block under STRINGS with every key of `en`, run
-// `npm run test:unit`, and have a speaker of the language read it.
+// `npm run test:unit`, and have a speaker of the language read it. Turkish is
+// signed off with `node scripts/sign-off-tr.mjs --by "<name>"` (TR_REVIEWED below).
 
 export const LANGS = ['en', 'tr'];
 
@@ -78,6 +79,10 @@ export const STRINGS = {
     'status.thumb': '{hand} thumb: {intent}',
     'status.hand.left': 'left',
     'status.hand.right': 'right',
+    'status.intent.push': 'push',
+    'status.intent.brake': 'brake',
+    'status.intent.turn-left': 'turn-left',
+    'status.intent.turn-right': 'turn-right',
     'status.softCapture': 'pointer lock unavailable here; mouse look without hiding the cursor, Esc to release',
     'status.aimToReply': 'aim at a marker to reply to it',
     'status.empty': 'nothing recorded here yet — hold the mouse button on the scene and speak',
@@ -122,6 +127,8 @@ export const STRINGS = {
     'list.cloud': 'transcribed in the cloud',
     'list.cloudFailed': 'cloud transcription failed, local text kept',
     'list.cloudRejected': 'local result rejected as {reason}',
+    'list.reason.silence': 'silence',
+    'list.reason.repetition': 'repetition',
     'list.today': 'today',
     'list.daysAgo.one': '{n} day ago',
     'list.daysAgo.other': '{n} days ago',
@@ -169,7 +176,7 @@ export const STRINGS = {
 
   tr: {
     'consent.plain': 'Kaydımın saklanmasına ve paylaşılmasına onay veriyorum',
-    'consent.cloud': 'Kaydımın saklanmasına ve paylaşılmasına, yerel araç okuyamadığında harici bir hizmet tarafından yazıya dökülmesine onay veriyorum',
+    'consent.cloud': 'Kaydımın saklanmasına ve paylaşılmasına, yerel yazıya dökme aracı okuyamadığında harici bir hizmet tarafından yazıya dökülmesine onay veriyorum',
     'consent.reset': 'bu proje anlaşılmayan kayıtları harici bir yazıya dökme hizmetine gönderebilir: kayıt yapmak için onay metnini yeniden okuyup kutuyu işaretleyin',
 
     'status.connecting': 'bağlanıyor…',
@@ -187,7 +194,7 @@ export const STRINGS = {
     'status.recording': 'kayıt yapılıyor…',
     'status.recordingLayer': 'kayıt yapılıyor… ({layer})',
     'status.recordingReply': 'yanıt kaydı yapılıyor…',
-    'status.recordingAnswer': 'yanıt {n} için kayıt yapılıyor…',
+    'status.recordingAnswer': '{n}. soruya yanıt kaydediliyor…',
     'status.talking': 'konuşuyorsunuz…',
     'status.talkingAbout': '{object} hakkında konuşuyorsunuz…',
     'status.recTimer': '{base} {secs} sn',
@@ -196,13 +203,13 @@ export const STRINGS = {
     'status.savedOn': '{object} üzerinde {dur} kaydedildi',
     'status.savedWith': '{dur} kaydedildi · {hands}',
     'status.savedOnWith': '{object} üzerinde {dur} kaydedildi · {hands}',
-    'status.savedReply': '{author} için yanıt kaydedildi',
+    'status.savedReply': '{author} adlı kişinin kaydına yanıt kaydedildi',
     'status.savedQuiet': '{saved} — mikrofon neredeyse hiçbir şey duymadı; ses girişini kontrol edin',
     'status.saveFailed': 'kaydedilemedi: {error}',
-    'status.projectChanged': 'kayıt sırasında proje değişti; kayıt saklanmadı',
+    'status.projectChanged': 'kayıt sırasında proje değişti; ses saklanmadı',
     'status.askMuted': 'önce kaydı bitirin; mikrofon açıkken soru okunmaz',
     'status.askUnavailable': 'burada sesli okuma kullanılamıyor; soruyu panelden okuyun',
-    'status.yearView': 'yıl {year}: {total} kayıttan {n} tanesi görünüyor',
+    'status.yearView': '{year} yılı: {total} kayıttan {n} tanesi görünüyor',
     'status.audioLoading': 'ses henüz yükleniyor…',
     'status.stopped': '■ durduruldu',
     'status.playing': '▶ {desc}',
@@ -216,7 +223,7 @@ export const STRINGS = {
     'status.nearAct.click': 'üzerine tıklayın',
     'status.nearAct.pinch': 'doğrultup çimdikleyin',
     'status.nearAct.trigger': 'doğrultup tetiği çekin',
-    'status.eraseAtDesk': 'kayıtlar masada silinir; isterseniz kaydınız kaldırılır',
+    'status.eraseAtDesk': 'silme masada yapılır; kaydınızın kaldırılmasını masadan isteyin',
     'status.chatReceived': 'bilgisayardan mesaj geldi',
     'status.listening': 'sizi dinliyorum…',
     'status.nothingHeard': 'hiçbir şey duyulmadı',
@@ -227,6 +234,10 @@ export const STRINGS = {
     'status.thumb': '{hand} başparmak: {intent}',
     'status.hand.left': 'sol',
     'status.hand.right': 'sağ',
+    'status.intent.push': 'ileri',
+    'status.intent.brake': 'fren',
+    'status.intent.turn-left': 'sola dön',
+    'status.intent.turn-right': 'sağa dön',
     'status.softCapture': 'fare kilidi burada kullanılamıyor; imleç görünür kalarak etrafa bakabilirsiniz, bırakmak için Esc',
     'status.aimToReply': 'yanıt vermek için bir işarete doğrultun',
     'status.empty': 'burada henüz kayıt yok — sahnede fare tuşunu basılı tutup konuşun',
@@ -237,13 +248,13 @@ export const STRINGS = {
     'hint.answerVoice': 'yanıtlamak için çimdikleyin ya da konuşun',
     'hint.answerPinch': 'yanıtlamak için çimdikleyip tutun',
     'hint.answerTrigger': 'yanıtlamak için tetiği basılı tutun',
-    'hint.squeezeThen': 'kavrama tuşu: soruyu yeniden dinleyin · {act}',
+    'hint.squeezeThen': 'soruyu dinlemek için kavrama tuşuna basın · {act}',
     'hint.leaveMic': 'bir şeye bakın, sol bileğinizdeki mikrofonu kaldırın, konuşun, indirin',
     'hint.leaveVoice': 'baktığınız yere kayıt bırakmak için konuşun · tutarak kaydetmek için çimdikleyin',
     'hint.leavePinch': 'baktığınız yere kayıt bırakmak için çimdikleyip tutun',
-    'hint.micBlocked': 'mikrofon engellendi: sanal gerçeklikten çıkıp tarayıcıda izin verin',
+    'hint.micBlocked': 'mikrofon engellendi: VR gözlüğünü çıkarıp tarayıcıda izin verin',
     'hint.micEnded': 'VR gözlüğü uykudayken mikrofon kapandı: yeniden açmak için çimdikleyin ya da konuşun',
-    'hint.micNotAllowed': 'mikrofona henüz izin verilmedi: sanal gerçekliğe girmeden önce sayfadaki onay kutusunu işaretleyin',
+    'hint.micNotAllowed': 'mikrofona henüz izin verilmedi: VR gözlüğünü takmadan önce sayfadaki onay kutusunu işaretleyin',
     'hint.consentNeeded': 'onay gerekli: sayfadaki onay kutusunu işaretleyin',
     'hint.release': 'kaydetmek için bırakın · Esc de kaydeder',
     'hint.capture': 'fareyi kullanmak için sahneye tıklayın',
@@ -271,6 +282,8 @@ export const STRINGS = {
     'list.cloud': 'bulutta yazıya döküldü',
     'list.cloudFailed': 'bulutta yazıya dökülemedi, yerel metin korundu',
     'list.cloudRejected': 'yerel sonuç reddedildi: {reason}',
+    'list.reason.silence': 'sessizlik',
+    'list.reason.repetition': 'tekrar',
     'list.today': 'bugün',
     'list.daysAgo.one': '{n} gün önce',
     'list.daysAgo.other': '{n} gün önce',
@@ -309,7 +322,7 @@ export const STRINGS = {
     'html.legendTitle': 'İşaretin rengi dönemi gösterir: kehribar en eski, mavi en yeni, gri dönemsiz; soluk olanlar altı aydan önce kaydedilmiştir.',
     'html.interview': 'Görüşme',
     'html.ask': 'Sor',
-    'html.askTitle': 'soruyu sesli oku',
+    'html.askTitle': 'soruyu sesli okut',
     'html.prevTitle': 'önceki soru',
     'html.nextTitle': 'sonraki soru',
     'html.annotations': 'Kayıtlar',
@@ -317,37 +330,21 @@ export const STRINGS = {
   },
 };
 
-// Turkish keys not yet read by a Turkish speaker. The unit test fails while
-// this is non-empty; the commit that empties it names who read the strings.
-export const TR_UNREVIEWED = new Set([
-  'consent.plain', 'consent.cloud', 'consent.reset',
-  'status.connecting', 'status.connected', 'status.disconnected', 'status.micReady', 'status.micBlocked',
-  'status.micBlockedShort', 'status.micEnded', 'status.micStoppedNothingSaved', 'status.micStarting', 'status.noProject',
-  'status.noName', 'status.noConsent', 'status.recording', 'status.recordingLayer', 'status.recordingReply',
-  'status.recordingAnswer', 'status.talking', 'status.talkingAbout', 'status.recTimer', 'status.saving',
-  'status.saved', 'status.savedOn', 'status.savedWith', 'status.savedOnWith', 'status.savedReply', 'status.savedQuiet',
-  'status.saveFailed', 'status.projectChanged', 'status.askMuted', 'status.askUnavailable', 'status.yearView',
-  'status.audioLoading', 'status.stopped', 'status.playing', 'status.playingOn', 'status.hoverPlay', 'status.hoverStop',
-  'status.press.click', 'status.press.pinch', 'status.press.trigger', 'status.near', 'status.nearAct.click',
-  'status.nearAct.pinch', 'status.nearAct.trigger', 'status.eraseAtDesk', 'status.chatReceived', 'status.listening',
-  'status.nothingHeard', 'status.sent', 'status.messageFailed', 'status.closer', 'status.inTheWay', 'status.thumb',
-  'status.hand.left', 'status.hand.right', 'status.softCapture', 'status.aimToReply', 'status.empty', 'status.emptyVisitor',
-  'hint.allAnswered', 'hint.answerMic', 'hint.answerVoice', 'hint.answerPinch', 'hint.answerTrigger', 'hint.squeezeThen',
-  'hint.leaveMic', 'hint.leaveVoice', 'hint.leavePinch', 'hint.micBlocked', 'hint.micEnded', 'hint.micNotAllowed',
-  'hint.consentNeeded', 'hint.release', 'hint.capture', 'hint.hover', 'hint.hoverVisitor', 'hint.idle',
-  'chat.laptop', 'chat.you', 'chat.notUnderstood', 'chat.listening', 'chat.sending', 'chat.transcribing',
-  'chat.idle',
-  'list.transcribing', 'list.failed', 'list.unclear', 'list.unclear.repetition', 'list.unclear.silence',
-  'list.noSpeech', 'list.prompt', 'list.soundsLike', 'list.soundsLikeTitle', 'list.cloud', 'list.cloudFailed',
-  'list.cloudRejected', 'list.today', 'list.daysAgo.one', 'list.daysAgo.other', 'list.monthsAgo.one', 'list.monthsAgo.other',
-  'list.yearsAgo.one', 'list.yearsAgo.other', 'list.seconds', 'list.photos.one', 'list.photos.other', 'list.attachments.one',
-  'list.attachments.other', 'list.gesture', 'list.hands', 'list.handsFilled', 'list.hands.both', 'list.hands.left',
-  'list.hands.right', 'list.play', 'list.turnTo', 'list.onObject', 'list.replies', 'list.period', 'list.clips.one',
-  'list.clips.other',
-  'html.title', 'html.yourName', 'html.namePlaceholder', 'html.count.one', 'html.count.other', 'html.allPeriods',
-  'html.allPeriodsTitle', 'html.betweenPeriods', 'html.legend', 'html.legendTitle', 'html.interview', 'html.ask',
-  'html.askTitle', 'html.prevTitle', 'html.nextTitle', 'html.annotations', 'html.visitorHelp',
-]);
+// Turkish strings a Turkish speaker has read: key -> hash() of the string as it
+// was read. The unit test fails for any Turkish key missing here or whose string
+// has changed since, naming it. To sign off, have the strings read, then run
+//   node scripts/sign-off-tr.mjs --by "<name>"
+// which records every current Turkish string here, and commit the result with
+// the reader's name in the message.
+export const TR_REVIEWED = {
+};
+
+/** Eight hex digits of FNV-1a over the string's UTF-16 code units: enough to notice an edit, no dependency. */
+export function hash(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(16).padStart(8, '0');
+}
 
 /** The string for `key` in `lang` (English when the key or language is missing), with {name} filled from `vars`. */
 export function t(key, vars = {}, lang = 'en') {

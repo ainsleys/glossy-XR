@@ -1,9 +1,10 @@
 // node --test: the room's string table (shared/strings.js). Every language has
 // the same keys and the same {variables}, nothing is empty, t() formats and
-// falls back to English, and no Turkish string is waiting for a reader.
+// falls back to English, and every Turkish string, as it stands, has been read
+// by a Turkish speaker (TR_REVIEWED, filled by scripts/sign-off-tr.mjs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { STRINGS, TR_UNREVIEWED, LANGS, t, num, plural } from '../../shared/strings.js';
+import { STRINGS, TR_REVIEWED, LANGS, t, num, plural, hash } from '../../shared/strings.js';
 
 const vars = (s) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 
@@ -45,11 +46,20 @@ test('t() fills variables, picks the language, and falls back to English for a m
   assert.equal(plural('list.daysAgo', 3), 'list.daysAgo.other');
 });
 
-test('every key in TR_UNREVIEWED is a Turkish key', () => {
-  const unknown = [...TR_UNREVIEWED].filter((k) => !(k in STRINGS.tr));
-  assert.deepEqual(unknown, [], `not in STRINGS.tr: ${unknown.join(', ')}`);
+test('every key in TR_REVIEWED is a Turkish key', () => {
+  const unknown = Object.keys(TR_REVIEWED).filter((k) => !(k in STRINGS.tr));
+  assert.equal(unknown.length, 0, `in TR_REVIEWED but not in STRINGS.tr: ${unknown.join(', ')}`);
 });
 
-test('every Turkish string has been read by a Turkish speaker (TR_UNREVIEWED is empty)', () => {
-  assert.deepEqual([...TR_UNREVIEWED], [], `not yet read by a Turkish speaker: ${[...TR_UNREVIEWED].join(', ')}`);
+test('hash() is stable and notices an edit', () => {
+  assert.equal(hash(''), '811c9dc5');
+  assert.match(hash('önce onay kutusunu işaretleyin'), /^[0-9a-f]{8}$/);
+  assert.notEqual(hash('önce onay kutusunu işaretleyin'), hash('önce onay kutusunu işaretleyiniz'));
+});
+
+test('every Turkish string has been read by a Turkish speaker, as it now stands', () => {
+  const unread = Object.keys(STRINGS.tr).filter((k) => !(k in TR_REVIEWED));
+  const changed = Object.keys(STRINGS.tr).filter((k) => k in TR_REVIEWED && TR_REVIEWED[k] !== hash(STRINGS.tr[k]));
+  assert.equal(unread.length + changed.length, 0,
+    `not yet read (${unread.length}): ${unread.join(', ') || 'none'}\nchanged since read (${changed.length}): ${changed.join(', ') || 'none'}\nhave a Turkish speaker read them, then run: node scripts/sign-off-tr.mjs --by "<name>"`);
 });
