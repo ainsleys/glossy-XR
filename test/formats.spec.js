@@ -206,3 +206,38 @@ test('video: a WebM recorded in the page plays on a plane, the room stays', asyn
   expect(info.size[1] / info.size[0]).toBeCloseTo(90 / 160, 2);
   await expect.poll(() => page.evaluate((id) => window.__glossy.loaded.get(id).model.video.readyState, asset.id)).toBeGreaterThanOrEqual(2);
 });
+
+// ---- real files, when ../test-assets is present ------------------------------
+// Load checks only (no anchoring) over files from public collections; see
+// LICENSES.md there. GLOSSY_TEST_ASSETS points elsewhere (a git worktree has
+// no ../test-assets of its own). Frame time is printed, not asserted.
+
+const ASSETS = process.env.GLOSSY_TEST_ASSETS || path.resolve('../test-assets');
+const REAL = [
+  ['SheenChair.glb', 'gltf', 'mesh'],
+  ['cosmic-buddha-100k-2048_std_draco.glb', 'gltf', 'mesh'],      // Draco
+  ['stanford_bunny_bun_zipper_mesh.ply', 'ply', 'mesh'],
+  ['colored_cloud.pcd', 'pcd', 'points'],
+];
+
+for (const [file, type, kind] of REAL) {
+  test(`real asset: ${file}`, async ({ page, request }) => {
+    const full = path.join(ASSETS, file);
+    test.skip(!fs.existsSync(full), `not present: ${full}`);
+    test.setTimeout(180_000);
+    const project = await openProject(page, request, 'real');
+    const asset = await uploadAsset(page, request, project.id, full);
+    await expect.poll(() => page.evaluate((id) => Object.keys(window.__glossy.loaded.get(id).asset.transform || {}).length, asset.id)).toBeGreaterThan(0);
+    expectPlaced(await inspect(page, asset.id), { type, kind });
+    const ms = await page.evaluate(() => new Promise((r) => { const t = []; const f = (now) => { t.push(now); if (t.length < 21) requestAnimationFrame(f); else r((t[20] - t[0]) / 20); }; requestAnimationFrame(f); }));
+    console.log(`${file}: ${ms.toFixed(1)} ms per frame`);
+  });
+}
+
+// Hornedlizard.spz decodes to noise in Spark 2.3.1 (TEST-RESULTS.md there), so
+// it is not loaded. The panoramas are 8192×4096, past SwiftShader's texture size.
+for (const file of ['fireplace.jpg', 'hotel_room.jpg', 'lythwood_room.jpg']) {
+  test(`real asset: panorama/${file}`, () => {
+    test.skip(true, '8192×4096 exceeds the software renderer\'s maximum texture size');
+  });
+}
