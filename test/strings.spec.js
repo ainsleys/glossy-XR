@@ -1,4 +1,5 @@
-// The room in the project's interface language (shared/strings.js): a project
+// The page and the headset panel in the project's interface language
+// (shared/strings.js): a project
 // with uiLanguage 'tr' shows Turkish consent, visitor help, status and headset
 // hints; ?lang= overrides it for one page and survives the URL rewrite on open;
 // a PATCH of uiLanguage redraws an open page. Expected text is read from the

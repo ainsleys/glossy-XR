@@ -50,14 +50,14 @@ export function unclearReason(text) {
   return null;
 }
 
-// English, for the review page; the room reads list.unclear.* in its own language
+// English, for the review page; the page takes list.unclear.* in its interface language
 export const UNCLEAR_TEXT = {
   repetition: t('list.unclear.repetition'),
   silence: t('list.unclear.silence'),
 };
 
 // Human name for an ISO language code in the given locale ("Türkçe" in a
-// Turkish room, "Turkish" in an English one), else the browser's; falls back to the code.
+// Turkish interface, "Turkish" in an English one), else the browser's; falls back to the code.
 export function langName(code, locale) {
   if (!code) return '';
   try { return new Intl.DisplayNames([locale || (typeof navigator !== 'undefined' && navigator.language) || 'en'], { type: 'language' }).of(code) || code; } catch { return code; }

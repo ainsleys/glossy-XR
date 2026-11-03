@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Record that a Turkish speaker has read the room's Turkish strings:
+// Record that a Turkish speaker has read the client's Turkish strings:
 //   node scripts/sign-off-tr.mjs --by "<name>"
 // writes every current Turkish key and the hash of its string into TR_REVIEWED
 // in shared/strings.js, with the reader's name and the date, and prints the keys

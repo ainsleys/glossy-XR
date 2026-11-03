@@ -1,5 +1,6 @@
-// What a contributor reads in the room, in each interface language. No
-// dependencies, so the same file runs in Node (the unit test) and the browser.
+// The strings the page and the headset panel show a contributor, in each
+// interface language. No dependencies, so the same file runs in Node (the unit
+// test) and the browser.
 //
 // Keys are readable ids with a prefix for where the text appears: consent.*,
 // status.* (the status line, also on the headset panel), hint.* (the key hint

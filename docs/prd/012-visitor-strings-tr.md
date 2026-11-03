@@ -1,14 +1,14 @@
-# 012 · What a contributor reads in the room is in the project's UI language
+# 012 · Interface language per project, English or Turkish, for the page and the headset panel
 
-First of two. This change covers the room (desktop page and headset). The review page (012b) is a desk tool with erase, consent and re-transcribe controls; translating only its labels would give a half-translated operator page, so it is left for a separate decision.
+First of two. This change covers the page (`client/index.html` and `client/src/main.js`, on the desktop and in a headset) and the headset panel. The review page (012b) is a desk tool with erase, consent and re-transcribe controls; translating only its labels would give a half-translated operator page, so it is left for a separate decision.
 
 ## Problem
 
-Every string a person reads in the room is English: the consent label, the headset panel and its hints, the status line, the visitor help text, the clip list, the chat panel. A project can be set to Turkish for transcription and its interview questions can be Turkish, but the tool around them stays English. A Turkish-speaking contributor is asked to consent to text they may not read.
+Every string the page and the headset panel show a contributor is English: the consent label, the headset panel and its hints, the status line, the visitor help text, the clip list, the chat panel. A project can be set to Turkish for transcription and its interview questions can be Turkish, but the tool around them stays English. A Turkish-speaking contributor is asked to consent to text they may not read.
 
 ## Goal
 
-When a project's UI language is Turkish, everything a contributor or visitor reads in the room is Turkish; otherwise English. Operator panels stay English.
+When a project's UI language is Turkish, the page and the headset panel show a contributor or visitor every string in Turkish; otherwise in English. Operator panels stay English.
 
 ## Requirements
 
@@ -31,7 +31,7 @@ R4. **Out of scope, stays English:** operator panels (Settings, Assets, Help, pr
 
 R5. **Tests keep their English projects.** Existing tests and helpers (`openProject` polls for not "connecting", `recordWithMouse` polls "recording", the consent and cold-mic tests, xr.spec's panel assertions, cloud.spec's label text) stay as they are on English projects. New Turkish tests import `shared/strings.js` and assert against `STRINGS.tr[key]`, never against literal Turkish in the test.
 
-R6. **README.** The visitor/interview sections say the room follows the project's `uiLanguage` (en/tr) with `?lang=` as override, how to add a language, and that the review page is not translated.
+R6. **README.** The visitor/interview sections say that the page and the headset panel follow the project's `uiLanguage` (en/tr) with `?lang=` as override, how to add a language, and that the review page is not translated.
 
 ## Non-goals
 
@@ -63,7 +63,7 @@ T5. Full `npm test` at the final commit: all passed (which requires every Turkis
 
 ## Decisions (3 Nov)
 
-1. Split: the room now; the review page later if wanted (012b).
+1. Split: the page and the headset panel now; the review page later if wanted (012b).
 2. `uiLanguage` is its own project field: tying the interface to the transcription language would prevent auto-detected transcription with a Turkish interface. This is the one server change in a client PRD, and it is small.
 3. Sign-off is enforced in code, not in prose: the suite cannot pass at the final commit without a human having read the Turkish. Revised after code review (3 Nov): a list of unread keys became `TR_REVIEWED`, a hash per string as read, so a string edited after sign-off is caught, and `scripts/sign-off-tr.mjs` makes the sign-off one command.
 4. Existing tests stay on English projects; Turkish tests assert table values, so wording changes don't break them.

@@ -68,7 +68,7 @@ const VISITOR = new URLSearchParams(location.search).get('mode') === 'visitor';
 document.body.classList.toggle('visitor', VISITOR);
 // Interface language for what a contributor reads (shared/strings.js): ?lang=
 // for this page if given (a kiosk, a test), else the project's uiLanguage, else
-// English. Operator panels stay English. T() is the room's way to say anything.
+// English. Operator panels stay English. Every contributor string goes through T().
 const langQuery = new URLSearchParams(location.search).get('lang');
 const LANG_OVERRIDE = LANGS.includes(langQuery) ? langQuery : null;
 let LANG = LANG_OVERRIDE || 'en';

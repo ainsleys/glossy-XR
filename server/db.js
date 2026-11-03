@@ -95,7 +95,7 @@ export function openDb(dataDir) {
     ['language', 'TEXT'],           // default transcription language for the project; NULL = detect
     ['script', 'TEXT'],             // interview script: JSON {questions:[{id, text, ...}]}
     ['cloud_fallback', 'INTEGER NOT NULL DEFAULT 0'],  // unclear local transcripts may go to the cloud backend, for clips that consented
-    ['ui_language', 'TEXT'],        // what contributors read in the room: en | tr; NULL = en
+    ['ui_language', 'TEXT'],        // language of the contributor strings in the page and headset panel: en | tr; NULL = en
   ]);
   db.exec(`CREATE INDEX IF NOT EXISTS annotations_parent ON annotations(project_id, parent_id)`);
 

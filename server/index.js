@@ -270,7 +270,7 @@ app.patch('/api/projects/:id', projectOr404, (req, res) => {
   const name = req.body?.name !== undefined ? String(req.body.name).trim().slice(0, 120) : undefined;
   const transform = req.body?.transform !== undefined ? sanitizeTransform(req.body.transform) : undefined;
   let language, script, cloudFallback, uiLanguage;
-  if (req.body?.uiLanguage !== undefined) {                      // the room's interface language; separate from transcription
+  if (req.body?.uiLanguage !== undefined) {                      // the page's interface language; separate from transcription
     if (!['en', 'tr'].includes(req.body.uiLanguage)) return res.status(400).json({ error: 'uiLanguage must be en or tr' });
     uiLanguage = req.body.uiLanguage;
   }

@@ -1,4 +1,4 @@
-// node --test: the room's string table (shared/strings.js). Every language has
+// node --test: the client's string table (shared/strings.js). Every language has
 // the same keys and the same {variables}, nothing is empty, t() formats and
 // falls back to English, and every Turkish string, as it stands, has been read
 // by a Turkish speaker (TR_REVIEWED, filled by scripts/sign-off-tr.mjs).
