@@ -1,14 +1,17 @@
 // End-to-end harness: headless Chromium with software WebGL, a fake microphone
 // fed from a generated WAV, and (in xr.spec.js) an emulated Quest 3 via IWER.
 // Runs its own API server on :3100 with a throwaway data dir and Vite on :5174,
-// so a dev session on :3000/:5173 is left alone.
+// so a dev session on :3000/:5173 is left alone. Those ports are the defaults;
+// GLOSSY_TEST_API_PORT and GLOSSY_TEST_VITE_PORT override them, so two checkouts
+// can run the suite at once on different ports.
 import { defineConfig, devices } from '@playwright/test';
 import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { writeToneWav } from './test/fixtures/tone.js';
 
-const API_PORT = 3100, VITE_PORT = 5174;
+const API_PORT = Number(process.env.GLOSSY_TEST_API_PORT || 3100);
+const VITE_PORT = Number(process.env.GLOSSY_TEST_VITE_PORT || 5174);
 
 // The fake microphone plays this file on a loop. On macOS it is real speech
 // from the system voice, so transcripts can be checked for words; elsewhere
@@ -25,8 +28,9 @@ function fakeMic(name, text, voice, flag) {
   }
   return writeToneWav(wav);
 }
-const tone = fakeMic('glossy-test-mic.wav', SPOKEN, null, 'GLOSSY_TEST_SPEECH');
-const toneTr = fakeMic('glossy-test-mic-tr.wav', SPOKEN_TR, 'Yelda', 'GLOSSY_TEST_SPEECH_TR');   // only set when the Turkish voice exists
+// named by the API port, so a concurrent run on other ports never rewrites the file this one reads
+const tone = fakeMic(`glossy-test-mic-${API_PORT}.wav`, SPOKEN, null, 'GLOSSY_TEST_SPEECH');
+const toneTr = fakeMic(`glossy-test-mic-tr-${API_PORT}.wav`, SPOKEN_TR, 'Yelda', 'GLOSSY_TEST_SPEECH_TR');   // only set when the Turkish voice exists
 const launchArgs = (mic) => [
   '--use-fake-ui-for-media-stream',
   '--use-fake-device-for-media-stream',

@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test';
 
-export const API = 'http://localhost:3100';
+export const API = `http://localhost:${process.env.GLOSSY_TEST_API_PORT || 3100}`;   // follows playwright.config.js
 
 /** Create a fresh project through the API and open it in the page. Resolves once the scene is ready. */
 export async function openProject(page, request, name = 'test', query = '') {
