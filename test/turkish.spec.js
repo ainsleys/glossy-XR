@@ -18,7 +18,7 @@ test('a Turkish clip is detected and transcribed as Turkish', async ({ page, req
   console.log('tr transcript:', a.transcript);
   expect(a.transcription.language).toBe('tr');
   expect(a.transcription.detected).toBe(true);
-  expect(a.transcript).toMatch(SPEECH_WORDS_TR);
+  expect(a.transcript, JSON.stringify({ transcript: a.transcript, ...a.transcription })).toMatch(SPEECH_WORDS_TR);   // a miss shows unclear, raw, heard and ms
   expect(a.transcription.words.length).toBeGreaterThan(2);
   await expect(page.locator('#annList li .text')).toHaveText(SPEECH_WORDS_TR);
 
@@ -40,6 +40,6 @@ test('a Turkish clip is detected and transcribed as Turkish', async ({ page, req
   await expect.poll(async () => { const t = (await listAnnotations(request, project.id)).at(-1).transcription; return t.status === 'done' && t.language; }, { timeout: 120_000 }).toBe('tr');
   const c = (await listAnnotations(request, project.id)).at(-1);
   expect(c.transcription.heard).toBe('tr');          // the detector agrees with what was asked, so nothing is flagged
-  expect(c.transcript).toMatch(SPEECH_WORDS_TR);
+  expect(c.transcript, JSON.stringify({ transcript: c.transcript, ...c.transcription })).toMatch(SPEECH_WORDS_TR);
   await expect(row.locator('.note')).toHaveCount(0);
 });
