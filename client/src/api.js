@@ -38,8 +38,8 @@ export const annotations = {
   /** body: { language } to set the clip's transcription language ('' = detect) before re-running */
   transcribe: (project, id, body) => fetch(`/api/projects/${project}/annotations/${id}/transcribe`, { method: 'POST', ...(body ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}) }).then(json),
   update: (project, id, patch) => fetch(`/api/projects/${project}/annotations/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }).then(json),
-  /** parent: id of the annotation this one replies to; pose: head samples over the clip; hands: joint trace over the clip; prompt/mode: interview question answered */
-  create: async ({ project, blob, durationMs, anchor, author, layer, consent, objectId, parent, period, pose, poseSource, hands, prompt, mode, language }) => {
+  /** parent: id of the annotation this one replies to; pose: head samples over the clip; hands: joint trace over the clip; prompt/mode: interview question answered; cloudConsent: the label ticked named the cloud transcriber */
+  create: async ({ project, blob, durationMs, anchor, author, layer, consent, objectId, parent, period, pose, poseSource, hands, prompt, mode, language, cloudConsent }) => {
     const fd = new FormData();
     fd.append('audio', blob, 'clip');
     fd.append('x', anchor.x); fd.append('y', anchor.y); fd.append('z', anchor.z);
@@ -55,6 +55,7 @@ export const annotations = {
     if (prompt) fd.append('prompt', prompt);
     if (mode) fd.append('mode', mode);
     if (language) fd.append('language', language);
+    if (cloudConsent) fd.append('cloudConsent', 'true');
     return fetch(`/api/projects/${project}/annotations`, { method: 'POST', body: fd }).then(json);
   },
 };

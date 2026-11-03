@@ -100,7 +100,7 @@
 
       <label for="author">Your name</label>
       <input id="author" placeholder="e.g. Ainsley" autocomplete="off" />
-      <div class="row" style="margin-top:6px"><input type="checkbox" id="consent" /><label for="consent" style="margin:0">I consent to my recording being stored and shared</label></div>
+      <div class="row" style="margin-top:6px"><input type="checkbox" id="consent" /><label for="consent" style="margin:0"><span id="consentText">I consent to my recording being stored and shared</span></label></div>
 
       <label for="project" class="op">Project</label>
       <div class="row op">
@@ -152,6 +152,7 @@
           <option value="el">ελληνικά (el)</option>
           <option value="pl">polski (pl)</option>
         </select>
+        <div class="row" style="margin-top:6px"><input type="checkbox" id="cloudFallback" /><label for="cloudFallback" style="margin:0" title="Only clips whose local transcription was rejected as silence or repetition, and only from contributors who ticked the consent that names the external service">Send unclear clips to the cloud transcriber</label></div>
         <div class="row" style="margin-top:6px"><input type="checkbox" id="walk" checked /><label for="walk" style="margin:0" title="Floor-following and wall collision on desktop; untick to fly with Q/E">Walk mode (collide with the scene)</label></div>
         <div class="row" style="margin-top:4px"><input type="checkbox" id="autoplay" /><label for="autoplay" style="margin:0" title="Off: walking up to a clip previews it (who, when, first words) and lights it; play with a click or the trigger. On: clips on the active layer play as you approach, for guided walks">Autoplay clips on approach</label></div>
         <label for="ghostStyle" title="How a recorded gesture is drawn when a clip plays">Ghost hands</label>
