@@ -10,7 +10,7 @@ Names in the tables are key paths: `anchor.x` is the `x` key of the `anchor` obj
 - **Rotations** are quaternions `[x, y, z, w]`.
 - **Clip time** (`pose[].t`, `hands.frames[].t`) is integer milliseconds from the start of the recording. Word timings (`words[].s`, `words[].e`) are seconds from the start of the clip, as the transcriber reports them.
 - **Timestamps** (`createdAt`, `exportedAt`) are ISO 8601 strings in UTC, as `Date.prototype.toISOString` writes them.
-- **Hands** use the 25 WebXR hand joints in the fixed order of `JOINTS` in `client/src/hands.js`: `wrist`; `thumb-metacarpal`, `thumb-phalanx-proximal`, `thumb-phalanx-distal`, `thumb-tip`; then for each of `index-finger`, `middle-finger`, `ring-finger` and `pinky-finger`: `-metacarpal`, `-phalanx-proximal`, `-phalanx-intermediate`, `-phalanx-distal`, `-tip`. A hand in a frame is a flat array of `x, y, z` per joint in that order (75 numbers).
+- **Hands** use the 25 WebXR hand joints in the fixed order of `JOINTS` in `client/src/hands.js`: `wrist`; `thumb-metacarpal`, `thumb-phalanx-proximal`, `thumb-phalanx-distal`, `thumb-tip`; then for each of `index-finger`, `middle-finger`, `ring-finger` and `pinky-finger`: `-metacarpal`, `-phalanx-proximal`, `-phalanx-intermediate`, `-phalanx-distal`, `-tip`. A hand in a frame is a flat array of `x, y, z` per joint in that order (three numbers per joint, 75 for the full 25; the server accepts a trace with fewer joints).
 - **Absent and null.** A field marked "absent when unset" is left out of the JSON; a field marked "null" is present with the value `null`. Numbers the server rounds are rounded to millimetres for positions and to four decimals for quaternion components.
 - **Source** says who sets a field: the *client* that recorded the clip (sent with the upload), the *server*, a *reviewer* (by `PATCH /api/projects/:id/annotations/:aid`), or the *transcriber* (written when a transcription job finishes).
 
@@ -76,7 +76,7 @@ Names in the tables are key paths: `anchor.x` is the `x` key of the `anchor` obj
 | `parent` | string | null for a root clip | client | The id of the clip this one replies to, in the same project. Replies are one level deep: a reply to a reply is attached to the original. Erasing a parent sets its replies' `parent` to null. |
 | `replies` | integer | never | server | How many clips reply to this one. Computed on every read, not stored. |
 | `mode` | string | never | client | `interview` for an answer to a scripted question, otherwise `walk`. |
-| `prompt` | string | null outside interview mode | client | The question the clip answers, up to 500 characters. |
+| `prompt` | string | null when the client sent none | client | The question the clip answers, up to 500 characters. The server stores whatever the client sends whatever the `mode`; only the client ties a prompt to interview mode. |
 | `language` | string | null when unset | client, reviewer | The language requested for transcription, an ISO 639 code of two or three letters (`tr`, `en`). Rarely set; when null the project's language applies, else the transcriber detects. The language actually used is `transcription.language`. |
 | `links` | array | empty array when none | reviewer | Photographs, documents or web pages a reviewer attached to the clip, at most 20. |
 | `links[].kind` | string | never | reviewer | `image`, `document` or `url` (anything else is stored as `url`). |
@@ -88,7 +88,7 @@ Names in the tables are key paths: `anchor.x` is the `x` key of the `anchor` obj
 
 `transcript` holds the text; `transcription` holds the job's state and details. When a job finishes the server replaces everything under `transcription` except `status` with the new result, so the keys present depend on the last outcome:
 
-- `{status}` alone while pending, before any result is stored, and for clips created with transcription disabled (`skipped`) or before transcription existed (`none`).
+- `{status}` alone before any result is stored (`pending`, or `skipped` for clips created with transcription disabled, or `none` for clips from before transcription existed), and again after a retry request (`POST …/annotations/:aid/transcribe`), which clears the details and sets `pending` while the transcript text stays until the new result.
 - after a successful job: `words`, `language`, `detected`, `heard`, `backend`, `model`, `ms`, and `unclear` and `raw` when the text was rejected.
 - after a failed job: `error` alone.
 
@@ -117,18 +117,23 @@ The local transcriber also returns `retried` (it ran a second pass) and `fallbac
 
 `GET /api/projects` lists projects, most recently changed first; `GET /api/projects/:id` returns one. The `projects` table still has `model_url`, `model_type`, `model_name` and `transform` columns from before projects held several assets; they are emptied on start and never returned. A project has no transform of its own: each asset has one.
 
+### Project
+
 | Field | Type | Null or absent | Meaning |
 |---|---|---|---|
 | `id` | string | never | Eight hex characters. |
 | `name` | string | never | Up to 120 characters. |
 | `createdAt` | string | never | ISO 8601. |
-| `updatedAt` | string | never | ISO 8601; moves when the project is edited, an asset is added or edited, or a clip is added or edited. |
+| `updatedAt` | string | never | ISO 8601. Moves when the project is created or edited (`PATCH /api/projects/:id`), an asset is added or edited, or a clip is added or edited by a reviewer. A finished transcription, an erased clip and a deleted asset do not move it. |
 | `language` | string | null to detect | Default transcription language for the project's clips, ISO 639 code. |
-| `script` | object | null when none | The interview script: `{questions: [{id, text, …}]}`, at most 200 questions. Each question has an `id` (`q1`, `q2`, … when not given) and `text` up to 500 characters; other keys, such as translations, are kept as given. |
+| `script` | object | null when none | The interview script. Keys other than `questions` are kept as given. |
+| `script.questions` | array | never | At most 200 questions, each `{id, text, …}`: `id` (`q1`, `q2`, … when not given), `text` up to 500 characters, and any other keys, such as translations, kept as given. |
 | `assets` | array | empty array when none | The project's assets in display order, as below. |
 | `annotationCount` | integer | absent except in the list | Number of annotations. Only `GET /api/projects` (and so the all-projects export) carries it. |
 
-An asset is one file in the scene (`GET /api/projects/:id/assets`, or embedded in the project):
+### Asset
+
+An asset is one file in the scene (`GET /api/projects/:id/assets`, or embedded in the project's `assets`):
 
 | Field | Type | Null or absent | Meaning |
 |---|---|---|---|
@@ -139,9 +144,18 @@ An asset is one file in the scene (`GET /api/projects/:id/assets`, or embedded i
 | `name` | string | never | The uploaded file name, or a name given later, up to 120 characters. |
 | `sort` | integer | never | Display order. |
 | `createdAt` | string | never | ISO 8601. |
-| `transform` | object | never | `{}` until the client fits the asset on first load; then `{scale, rotX, rotY, rotZ, x, y, z, pointSize}`, rotations in degrees, offsets in scene metres, `pointSize` in metres for point clouds. |
+| `transform` | object | never | `{}` until the client fits the asset on first load; then all eight keys below. |
+| `transform.scale` | number | absent while `{}` | Uniform scale (1 when unset). |
+| `transform.rotX` | number | absent while `{}` | Rotation about X, degrees. |
+| `transform.rotY` | number | absent while `{}` | Rotation about Y, degrees. |
+| `transform.rotZ` | number | absent while `{}` | Rotation about Z, degrees. |
+| `transform.x` | number | absent while `{}` | Offset, scene metres. |
+| `transform.y` | number | absent while `{}` | Offset, scene metres, up. |
+| `transform.z` | number | absent while `{}` | Offset, scene metres. |
+| `transform.pointSize` | number | absent while `{}` | Point size for point clouds, metres (0.01 when unset). |
 | `visible` | boolean | never | Whether the asset is shown. |
-| `options` | object | never | Per-asset options. Today only `mode` for an image: `plane` or `sphere` (a 360 panorama). |
+| `options` | object | never | Per-asset options; `{}` for anything but an image. |
+| `options.mode` | string | absent except on an image | `plane`, or `sphere` for a 360 panorama. |
 
 ## Native export
 
@@ -180,7 +194,7 @@ Clips whose consent was withdrawn stay in the native export with `consent: false
 | `period.label` | string | absent when unset | As in the record. |
 | `parent` | string | null for a root clip | As in the record. |
 | `mode` | string | never | As in the record. |
-| `prompt` | string | null outside interview mode | As in the record. |
+| `prompt` | string | null when the client sent none | As in the record. |
 | `language` | string | null when neither is known | `transcription.language`, else the record's `language`. |
 | `transcript` | string | null until transcribed | As in the record. |
 | `words` | array | empty array when none | `transcription.words`. |
@@ -233,10 +247,10 @@ Three environment variables configure it:
 | `edm:ProvidedCHO`, the project | `/api/projects/<id>` | `dc:title` (project name), `dc:type` `place with voice annotations`, `edm:type` `3D`, `dcterms:created`, `dcterms:modified`, `dcterms:hasPart` (every included contribution), `glossy:contributions` (how many are included), `glossy:withheldForConsent`, `glossy:nativeRecord` (the native export). |
 | `edm:WebResource`, each asset | the asset's URL | `dc:title` (asset name), `dc:format` (the asset `type`, e.g. `gltf`), `edm:type` (`IMAGE`, `VIDEO`, else `3D`), `dcterms:created`, `edm:rights`. |
 | `ore:Aggregation`, the project | `/api/projects/<id>#aggregation` | `edm:aggregatedCHO`, `edm:dataProvider`, `edm:provider`, `edm:rights`, `edm:isShownAt` (the room, `/?project=<id>`), `edm:isShownBy` (the first 3D asset, else the first asset; absent with no assets), `edm:hasView` (the other assets, when there is more than one). |
-| `edm:ProvidedCHO`, each contribution | `/api/projects/<id>/annotations/<aid>` | `dc:title` (`Answer to “<prompt>”`, else the first eight words of the transcript, else `Voice annotation by <author>`), `dc:creator` (author), `dcterms:created`, `dc:type` (`reply to a voice annotation`, `interview answer` or `voice annotation`), `edm:type` `SOUND`, `dcterms:isPartOf` (the project), `dcterms:spatial` (project name and `on <objectId>`), `dc:description` (the transcript, tagged with its language; absent when empty or rejected as unclear), `dc:language`, `dcterms:temporal` (the period's TimeSpan), `edm:isRelatedTo` and `glossy:replyTo` (the parent, when it is included), and the `glossy:` properties below. |
+| `edm:ProvidedCHO`, each contribution | `/api/projects/<id>/annotations/<aid>` | `dc:title` (`Answer to “<prompt>”`, else the first eight words of the transcript, else `Voice annotation by <author>`), `dc:creator` (author), `dcterms:created`, `dc:type` (`reply to a voice annotation`, `interview answer` or `voice annotation`), `edm:type` `SOUND`, `dcterms:isPartOf` (the project), `dcterms:spatial` (project name and `on <objectId>`), `dc:description` (the transcript, tagged with its language; absent when empty or rejected as unclear), `dc:language` (when a language is known), `dcterms:temporal` (the period's TimeSpan), `edm:isRelatedTo` and `glossy:replyTo` (the parent, when it is included), and the `glossy:` properties below. |
 | `edm:WebResource`, each recording | the audio URL | `dc:format` `audio/webm` (whatever the container), `ebucore:duration` (ISO 8601 duration, `PT1.2S`), `dcterms:extent` (`1.2 s`), `dcterms:created`, `dc:creator`, `edm:rights`, `dcterms:provenance`: a sentence of paradata saying whether the clip was recorded in a headset or on a desktop, whether a hand trace exists and how many of its frames were reconstructed, and which model and backend transcribed it, whether the language was detected or set, or that transcription failed or was not done. |
 | `edm:WebResource`, each linked file | the link's `url` | For every link that has a `url` (photographs, documents and pages alike): `dc:title` (title, else the URL), `edm:type` `IMAGE` for a link of kind `image`, `edm:rights`. |
-| `ore:Aggregation`, each contribution | `/api/projects/<id>/annotations/<aid>#aggregation` | `edm:aggregatedCHO`, `edm:dataProvider`, `edm:provider`, `edm:rights`, `edm:ugc` `true`, `edm:isShownBy` (the audio), `edm:isShownAt` (the clip in the room, `/?project=<id>&focus=<aid>`), `edm:hasView` (the linked files, when any). |
+| `ore:Aggregation`, each contribution | `/api/projects/<id>/annotations/<aid>#aggregation` | `edm:aggregatedCHO`, `edm:dataProvider`, `edm:provider`, `edm:rights`, `edm:ugc` `"true"` (a string), `edm:isShownBy` (the audio), `edm:isShownAt` (the clip in the room, `/?project=<id>&focus=<aid>`), `edm:hasView` (the linked files, when any). |
 | `edm:TimeSpan`, one per distinct period | `/api/projects/<id>/export#timespan-<n>` | `skos:prefLabel` (the label, else `from–to`), `edm:begin` (`from`, when set), `edm:end` (`to`, when set). |
 
 ### The glossy: namespace
@@ -245,7 +259,7 @@ EDM has no place for the scene coordinates, the layer, the recording mode, the i
 
 ### @context
 
-| Key | Value | Use |
+| Field | Value | Use |
 |---|---|---|
 | `dc` | `http://purl.org/dc/elements/1.1/` | Dublin Core elements: title, creator, type, format, language, description. |
 | `dcterms` | `http://purl.org/dc/terms/` | Dublin Core terms: created, modified, spatial, temporal, extent, provenance, part relations. |
@@ -272,7 +286,7 @@ No versioning rule has been written down before; this section records the practi
 
 ## Field list
 
-The names this document describes, checked against the code by `test/unit/schema.test.mjs`: `record` against the records `GET /api/projects/:id/annotations` returns, `contribution` against the contributions in `GET /api/projects/:id/export`, `context` against the `@context` keys of `toEdm()`. Every name here is also a row in the tables above.
+The names this document describes, checked against the code by `test/unit/schema.test.mjs`: `record` against the records `GET /api/projects/:id/annotations` returns, `contribution` against the contributions in `GET /api/projects/:id/export`, `context` against the `@context` keys of `toEdm()`, `project` against `GET /api/projects/:id` and `GET /api/projects` together (without the embedded assets, and only the top level of `script`), and `asset` against `GET /api/projects/:id/assets`. Every name here is a row in a table headed `Field` in its section, and every row of those tables is a name here.
 
 ```json
 {
@@ -310,6 +324,15 @@ The names this document describes, checked against the code by `test/unit/schema
     "edm:aggregatedCHO", "edm:isShownBy", "edm:isShownAt", "edm:hasView", "edm:isRelatedTo", "edm:rights",
     "dcterms:temporal", "dcterms:isPartOf", "dcterms:hasPart",
     "glossy:replyTo", "glossy:nativeRecord"
+  ],
+  "project": [
+    "id", "name", "createdAt", "updatedAt", "language", "script", "script.questions", "assets", "annotationCount"
+  ],
+  "asset": [
+    "id", "project", "url", "type", "name", "sort", "createdAt",
+    "transform", "transform.scale", "transform.rotX", "transform.rotY", "transform.rotZ",
+    "transform.x", "transform.y", "transform.z", "transform.pointSize",
+    "visible", "options", "options.mode"
   ]
 }
 ```
