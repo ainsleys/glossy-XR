@@ -89,10 +89,12 @@ export function openDb(dataDir) {
     ['language', 'TEXT'],           // language requested for transcription; detected language lives in transcript_meta
     ['links', 'TEXT'],              // attachments a reviewer linked to the clip: JSON [{kind, asset, url, title}]
     ['hands', 'TEXT'],              // hand joints over the clip (headset hand tracking): JSON {joints, rate, frames:[{t,l,r}]}
+    ['cloud_consent', 'INTEGER NOT NULL DEFAULT 0'],   // the contributor agreed to cloud transcription, and the project allowed it when the clip was saved
   ]);
   addCols('projects', [
     ['language', 'TEXT'],           // default transcription language for the project; NULL = detect
     ['script', 'TEXT'],             // interview script: JSON {questions:[{id, text, ...}]}
+    ['cloud_fallback', 'INTEGER NOT NULL DEFAULT 0'],  // unclear local transcripts may go to the cloud backend, for clips that consented
   ]);
   db.exec(`CREATE INDEX IF NOT EXISTS annotations_parent ON annotations(project_id, parent_id)`);
 
@@ -111,7 +113,7 @@ export function openDb(dataDir) {
       FROM projects p ORDER BY updated_at DESC`),
     getProject: db.prepare(`SELECT * FROM projects WHERE id = ?`),
     insertProject: db.prepare(`INSERT INTO projects (id, name, transform, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`),
-    updateProject: db.prepare(`UPDATE projects SET name = ?, transform = ?, language = ?, script = ?, updated_at = ? WHERE id = ?`),
+    updateProject: db.prepare(`UPDATE projects SET name = ?, transform = ?, language = ?, script = ?, cloud_fallback = ?, updated_at = ? WHERE id = ?`),
     setModel: db.prepare(`UPDATE projects SET model_url = ?, model_type = ?, model_name = ?, updated_at = ? WHERE id = ?`),
     deleteProject: db.prepare(`DELETE FROM projects WHERE id = ?`),
     listAnnotations: db.prepare(`${ANN} WHERE a.project_id = ? ORDER BY a.created_at`),
@@ -121,8 +123,8 @@ export function openDb(dataDir) {
     detachChildren: db.prepare(`UPDATE annotations SET parent_id = NULL WHERE parent_id = ? AND project_id = ?`),
     insertAnnotation: db.prepare(`
       INSERT INTO annotations (id, project_id, author, created_at, x, y, z, object_id, layer, audio_url, duration_ms, transcript, transcript_status, consent,
-                               parent_id, period, pose, pose_source, prompt, mode, language, hands)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+                               parent_id, period, pose, pose_source, prompt, mode, language, hands, cloud_consent)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
     updateAnnotation: db.prepare(`UPDATE annotations SET layer = ?, period = ?, consent = ?, links = ?, language = ? WHERE id = ? AND project_id = ?`),
     setTranscript: db.prepare(`UPDATE annotations SET transcript = ?, transcript_status = ?, transcript_meta = ? WHERE id = ? AND project_id = ?`),
     listByTranscriptStatus: db.prepare(`${ANN} WHERE a.transcript_status = ? ORDER BY a.created_at`),
@@ -155,7 +157,7 @@ export function openDb(dataDir) {
   });
   const projectRow = (r) => r && ({
     id: r.id, name: r.name,
-    language: r.language || null, script: safeJson(r.script, null),
+    language: r.language || null, script: safeJson(r.script, null), cloudFallback: !!r.cloud_fallback,
     createdAt: r.created_at, updatedAt: r.updated_at,
     assets: q.listAssets.all(r.id).map(assetRow),
     ...(r.annotation_count !== undefined ? { annotationCount: Number(r.annotation_count) } : {}),
@@ -168,7 +170,7 @@ export function openDb(dataDir) {
     replies: Number(r.reply_count || 0),
     mode: r.mode || 'walk', prompt: r.prompt || null, language: r.language || null,
     pose: safeJson(r.pose, []), poseSource: r.pose_source || null, hands: safeJson(r.hands, null), links: safeJson(r.links, []),
-    layer: r.layer, audioUrl: r.audio_url, durationMs: r.duration_ms, transcript: r.transcript, consent: !!r.consent,
+    layer: r.layer, audioUrl: r.audio_url, durationMs: r.duration_ms, transcript: r.transcript, consent: !!r.consent, cloudConsent: !!r.cloud_consent,
     transcription: { status: r.transcript_status || (r.transcript ? 'done' : 'none'), ...safeJson(r.transcript_meta) },
   });
   function safeJson(t, empty = {}) { try { return t ? JSON.parse(t) : empty; } catch { return empty; } }
@@ -183,12 +185,13 @@ export function openDb(dataDir) {
         q.insertProject.run(id, name, JSON.stringify(transform), t, t);
         return api.projects.get(id);
       },
-      update: (id, { name, transform, language, script }) => {
+      update: (id, { name, transform, language, script, cloudFallback }) => {
         const cur = api.projects.get(id);
         if (!cur) return null;
         const row = q.getProject.get(id);
         q.updateProject.run(name ?? cur.name, JSON.stringify(transform ?? JSON.parse(row.transform || '{}')),
-          language === undefined ? row.language : language, script === undefined ? row.script : (script ? JSON.stringify(script) : null), now(), id);
+          language === undefined ? row.language : language, script === undefined ? row.script : (script ? JSON.stringify(script) : null),
+          (cloudFallback === undefined ? !!row.cloud_fallback : cloudFallback) ? 1 : 0, now(), id);
         return api.projects.get(id);
       },
       remove: (id) => q.deleteProject.run(id).changes > 0,
@@ -223,7 +226,7 @@ export function openDb(dataDir) {
         q.insertAnnotation.run(id, projectId, a.author, t, a.x, a.y, a.z, a.objectId ?? null, a.layer || 'default',
           a.audioUrl, a.durationMs ?? null, a.transcript ?? null, a.transcriptStatus ?? (a.transcript ? 'done' : 'pending'), a.consent ? 1 : 0,
           a.parent ?? null, a.period ? JSON.stringify(a.period) : null, a.pose?.length ? JSON.stringify(a.pose) : null,
-          a.pose?.length ? (a.poseSource || null) : null, a.prompt ?? null, a.mode ?? null, a.language ?? null, a.hands ? JSON.stringify(a.hands) : null);
+          a.pose?.length ? (a.poseSource || null) : null, a.prompt ?? null, a.mode ?? null, a.language ?? null, a.hands ? JSON.stringify(a.hands) : null, a.cloudConsent ? 1 : 0);
         q.touchProject.run(t, projectId);
         return api.annotations.get(projectId, id);
       },

@@ -47,21 +47,31 @@ if (db.projects.list().length === 0) db.projects.create({ name: 'default' });
 // Clips are transcribed off the request path; clients get `annotation:updated`
 // when the text lands. Jobs left pending by a previous run are picked up on boot.
 
+// A clip may go to the cloud backend only when the project allows it now, the
+// clip still has consent, and the contributor agreed to cloud transcription
+// when it was saved (cloudConsent is only ever true if the project allowed it
+// then too). The transcriber adds the last condition: the local result was
+// rejected as unclear.
+
 const transcriber = createTranscriber({ log: console });
 function queueTranscription(record) {
   if (!transcriber.enabled) return;
   const file = path.join(AUDIO_DIR, path.basename(record.audioUrl));
+  const project = db.projects.get(record.project);
   // language: the clip's own setting, else the project's, else the backend detects
-  const language = record.language || db.projects.get(record.project)?.language || undefined;
-  transcriber.enqueue(record.id, file, { language }, (err, result) => {
+  const language = record.language || project?.language || undefined;
+  const allowCloud = !!(project?.cloudFallback && record.consent && record.cloudConsent);
+  transcriber.enqueue(record.id, file, { language, allowCloud }, (err, result) => {
     const cur = db.annotations.get(record.project, record.id);
     if (!cur) return;                                        // deleted while queued
     const unclear = err ? null : unclearReason(result.text);      // the model looped, or transcribed silence as a subtitle credit: keep the raw text in meta, store no transcript
+    const cloud = result?.cloud ? { cloud: result.cloud } : {};      // the text came from the cloud backend after the local one was rejected
     const updated = err
       ? db.annotations.setTranscript(record.project, record.id, { transcript: cur.transcript, status: 'failed', meta: { error: err.message } })
       : unclear
-        ? db.annotations.setTranscript(record.project, record.id, { transcript: '', status: 'done', meta: { words: [], language: result.language, detected: !!result.detected, heard: result.heard || null, backend: result.backend, model: result.model, ms: result.ms, unclear, raw: result.text } })
-        : db.annotations.setTranscript(record.project, record.id, { transcript: result.text, status: 'done', meta: { words: result.words, language: result.language, detected: !!result.detected, heard: result.heard || null, backend: result.backend, model: result.model, ms: result.ms } });
+        ? db.annotations.setTranscript(record.project, record.id, { transcript: '', status: 'done', meta: { words: [], language: result.language, detected: !!result.detected, heard: result.heard || null, backend: result.backend, model: result.model, ms: result.ms, ...cloud, unclear, raw: result.text } })
+        : db.annotations.setTranscript(record.project, record.id, { transcript: result.text, status: 'done', meta: { words: result.words, language: result.language, detected: !!result.detected, heard: result.heard || null, backend: result.backend, model: result.model, ms: result.ms, ...cloud } });
+    if (result?.cloud) db.events.add(record.project, 'server', [{ t: 0, at: new Date().toISOString(), kind: 'transcribe:fallback', data: { id: record.id, from: result.cloud.from, to: result.backend, reason: result.cloud.reason } }]);
     io.to(record.project).emit('annotation:updated', updated);
   });
 }
@@ -159,6 +169,7 @@ function validateAnnotation(body, projectId) {
   const objectId = body.objectId ? String(body.objectId).slice(0, 200) : undefined;
   const consent = body.consent === 'true' || body.consent === true;
   if (!consent) errors.push('consent must be true');
+  const cloudConsent = body.cloudConsent === 'true' || body.cloudConsent === true;
   // replies are one level deep: a reply to a reply attaches to the original
   let parent = body.parent ? String(body.parent).slice(0, 80) : null;
   if (parent) {
@@ -175,7 +186,7 @@ function validateAnnotation(body, projectId) {
   const mode = body.mode === 'interview' ? 'interview' : 'walk';
   const language = body.language && LANG_RE.test(String(body.language)) ? String(body.language) : null;
   const poseSource = body.poseSource === 'xr' ? 'xr' : 'desktop';
-  return { errors, x, y, z, author, layer, objectId, consent, parent, period, pose, poseSource, hands, prompt, mode, language };
+  return { errors, x, y, z, author, layer, objectId, consent, cloudConsent, parent, period, pose, poseSource, hands, prompt, mode, language };
 }
 
 // ---- http ------------------------------------------------------------------
@@ -250,7 +261,11 @@ app.get('/api/projects/:id', projectOr404, (req, res) => res.json(req.project));
 app.patch('/api/projects/:id', projectOr404, (req, res) => {
   const name = req.body?.name !== undefined ? String(req.body.name).trim().slice(0, 120) : undefined;
   const transform = req.body?.transform !== undefined ? sanitizeTransform(req.body.transform) : undefined;
-  let language, script;
+  let language, script, cloudFallback;
+  if (req.body?.cloudFallback !== undefined) {
+    if (typeof req.body.cloudFallback !== 'boolean') return res.status(400).json({ error: 'cloudFallback must be true or false' });
+    cloudFallback = req.body.cloudFallback;
+  }
   if (req.body?.language !== undefined) {
     language = req.body.language ? String(req.body.language) : null;
     if (language && !LANG_RE.test(language)) return res.status(400).json({ error: 'language must be an ISO code such as en or tr' });
@@ -259,7 +274,7 @@ app.patch('/api/projects/:id', projectOr404, (req, res) => {
     script = req.body.script ? sanitizeScript(req.body.script) : null;
     if (script === false) return res.status(400).json({ error: 'script must be { questions: [{ text }] }' });
   }
-  const p = db.projects.update(req.params.id, { name, transform, language, script });
+  const p = db.projects.update(req.params.id, { name, transform, language, script, cloudFallback });
   io.emit('project:updated', p);
   res.json(p);
 });
@@ -352,6 +367,7 @@ app.post('/api/projects/:id/annotations', projectOr404, audioUpload.single('audi
     id: path.parse(req.file.filename).name,
     author: v.author, x: v.x, y: v.y, z: v.z, objectId: v.objectId, layer: v.layer,
     audioUrl: `/audio/${req.file.filename}`, durationMs: Number(req.body.durationMs) || null, consent: true,
+    cloudConsent: v.cloudConsent && req.project.cloudFallback === true,   // a project switched on later never applies to this clip
     transcriptStatus: transcriber.enabled ? 'pending' : 'skipped',
     parent: v.parent, period: v.period, pose: v.pose, poseSource: v.poseSource, hands: v.hands, prompt: v.prompt, mode: v.mode, language: v.language,
   });
@@ -511,7 +527,7 @@ function exportProject(p) {
     project: p,
     contributions: annotations.map((a) => ({
       id: a.id, attribution: a.author, timestamp: a.createdAt, anchor: a.anchor, period: a.period,
-      parent: a.parent, mode: a.mode, prompt: a.prompt, layer: a.layer, consent: a.consent,
+      parent: a.parent, mode: a.mode, prompt: a.prompt, layer: a.layer, consent: a.consent, cloudConsent: a.cloudConsent,
       audio: a.audioUrl, durationMs: a.durationMs, language: a.transcription?.language || a.language || null,
       transcript: a.transcript, words: a.transcription?.words || [], pose: a.pose, poseSource: a.poseSource, hands: a.hands || null, links: a.links || [],
     })),

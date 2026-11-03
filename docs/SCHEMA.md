@@ -28,6 +28,7 @@ Names in the tables are key paths: `anchor.x` is the `x` key of the `anchor` obj
 | `createdAt` | string | never | server | When the clip was saved, ISO 8601. |
 | `layer` | string | never | client, reviewer | A free label (draft, review, a period name), up to 120 characters; `default` when none is given. |
 | `consent` | boolean | never | client, reviewer | The contributor's consent. A clip can only be created with `true`; a reviewer sets `false` when consent is withdrawn. |
+| `cloudConsent` | boolean | never | client, server | The contributor also agreed to cloud transcription. Set at creation only: `true` when the client sent `cloudConsent: true` and the project's `cloudFallback` was on at that moment, otherwise `false`. The annotation `PATCH` cannot change it. |
 
 ### Audio and place
 
@@ -89,7 +90,9 @@ Names in the tables are key paths: `anchor.x` is the `x` key of the `anchor` obj
 `transcript` holds the text; `transcription` holds the job's state and details. When a job finishes the server replaces everything under `transcription` except `status` with the new result, so the keys present depend on the last outcome:
 
 - `{status}` alone before any result is stored (`pending`, or `skipped` for clips created with transcription disabled, or `none` for clips from before transcription existed), and again after a retry request (`POST …/annotations/:aid/transcribe`), which clears the details and sets `pending` while the transcript text stays until the new result.
-- after a successful job: `words`, `language`, `detected`, `heard`, `backend`, `model`, `ms`, and `unclear` and `raw` when the text was rejected.
+- after a successful job: `words`, `language`, `detected`, `heard`, `backend`, `model`, `ms`, `cloud` when the cloud fallback produced the text, and `unclear` and `raw` when the text was rejected.
+
+**Cloud fallback.** A clip is sent to the cloud backend (`GLOSSY_TRANSCRIBE_FALLBACK`) only when the project's `cloudFallback` is on, the clip's `consent` and `cloudConsent` are both `true`, and the local result came back without error but was rejected as unclear. The stored result is then the cloud backend's: `backend` and `model` name it, `cloud` says why the local text was set aside, and if the cloud text is unclear too it is stored as rejected in the same way. A local error, an empty clip or a language fallback never goes to the cloud. Each fallback also writes a `transcribe:fallback` event to the project's session log.
 - after a failed job: `error` alone.
 
 | Field | Type | Null or absent | Source | Meaning |
@@ -104,14 +107,17 @@ Names in the tables are key paths: `anchor.x` is the `x` key of the `anchor` obj
 | `transcription.language` | string | absent until a result is stored | transcriber | The language the text was transcribed in, ISO 639 code. |
 | `transcription.detected` | boolean | absent until a result is stored | transcriber | `true` when the transcriber chose the language, `false` when it was set by the clip or the project. |
 | `transcription.heard` | string | absent until a result is stored; null unless a language was forced | transcriber | When the language was set, the language the detector would have chosen; clients flag a clip where the two disagree. |
-| `transcription.backend` | string | absent until a result is stored | transcriber | `local` or `openai`. |
+| `transcription.backend` | string | absent until a result is stored | transcriber | `local` or `openai`: the backend that produced the stored text. |
 | `transcription.model` | string | absent until a result is stored | transcriber | The model name. |
-| `transcription.ms` | integer | absent until a result is stored | transcriber | How long the job took, milliseconds. |
+| `transcription.ms` | integer | absent until a result is stored | transcriber | How long the job took, milliseconds, both backends together when the fallback ran. |
+| `transcription.cloud` | object | absent unless the cloud fallback ran | transcriber | Present when the stored text came from the cloud backend after the local one was rejected. |
+| `transcription.cloud.from` | string | never | transcriber | The backend whose result was rejected, `local`. |
+| `transcription.cloud.reason` | string | never | transcriber | Why it was rejected: `silence` or `repetition`, as `unclear`. |
 | `transcription.unclear` | string | absent unless rejected | server | Why the text was rejected: `silence` (a subtitle credit or similar for an empty clip) or `repetition` (the model looped). |
 | `transcription.raw` | string | absent unless rejected | transcriber | The rejected text, kept for inspection. |
 | `transcription.error` | string | absent unless failed | transcriber | The error message of a failed job. |
 
-The local transcriber also returns `retried` (it ran a second pass) and `fallback` (it fell back to English); the server does not store them, so they never appear in a record.
+The local transcriber also returns `retried` (it ran a second pass) and `fallback` (it fell back to English); the server does not store them, so they never appear in a record. That `fallback` is unrelated to the cloud fallback, which is recorded as `cloud`.
 
 ## Projects and assets
 
@@ -127,6 +133,7 @@ The local transcriber also returns `retried` (it ran a second pass) and `fallbac
 | `updatedAt` | string | never | ISO 8601. Moves when the project is created or edited (`PATCH /api/projects/:id`), an asset is added or edited, or a clip is added or edited by a reviewer. A finished transcription, an erased clip and a deleted asset do not move it. |
 | `language` | string | null to detect | Default transcription language for the project's clips, ISO 639 code. |
 | `script` | object | null when none | The interview script. Keys other than `questions` are kept as given. |
+| `cloudFallback` | boolean | never | Whether clips whose local transcript is rejected as unclear may be sent to the cloud backend, for clips whose contributor agreed (`cloudConsent`). `false` by default; set with `PATCH /api/projects/:id {cloudFallback}`, a boolean. Switching it on does not apply to clips saved before. |
 | `script.questions` | array | never | At most 200 questions, each `{id, text, …}`: `id` (`q1`, `q2`, … when not given), `text` up to 500 characters, and any other keys, such as translations, kept as given. |
 | `assets` | array | empty array when none | The project's assets in display order, as below. |
 | `annotationCount` | integer | absent except in the list | Number of annotations. Only `GET /api/projects` (and so the all-projects export) carries it. |
@@ -170,7 +177,7 @@ An asset is one file in the scene (`GET /api/projects/:id/assets`, or embedded i
 
 `GET /api/export` returns every project in one document: `{exportedAt, schema: "glossy-xr/all/0.4", projects: [{project, contributions}]}`, where each `project` is in its list form and so carries `annotationCount`. The EDM serialisation exists only per project.
 
-A contribution is the annotation record with some fields renamed and the job details left out. Renamed: `author` is `attribution`, `createdAt` is `timestamp`, `audioUrl` is `audio`, and `transcription.words` is `words`. Left out: `project` (the document says which), `replies` (count the `parent` references), and the whole `transcription` object, so `status`, `detected`, `heard`, `backend`, `model`, `ms`, `unclear`, `raw` and `error` are not exported. `language` is the language the clip was transcribed in when there is one, otherwise the requested language.
+A contribution is the annotation record with some fields renamed and the job details left out. Renamed: `author` is `attribution`, `createdAt` is `timestamp`, `audioUrl` is `audio`, and `transcription.words` is `words`. Left out: `project` (the document says which), `replies` (count the `parent` references), and the whole `transcription` object, so `status`, `detected`, `heard`, `backend`, `model`, `ms`, `cloud`, `unclear`, `raw` and `error` are not exported; the EDM serialisation's provenance sentence says which backend transcribed a clip and whether the cloud fallback ran. `language` is the language the clip was transcribed in when there is one, otherwise the requested language.
 
 Clips whose consent was withdrawn stay in the native export with `consent: false`; the EDM serialisation leaves them out. Audio is referenced by path (`audio`), never embedded: fetch it from the same server. An erased clip is gone from both.
 
@@ -181,6 +188,7 @@ Clips whose consent was withdrawn stay in the native export with `consent: false
 | `timestamp` | string | never | The record's `createdAt`. |
 | `layer` | string | never | As in the record. |
 | `consent` | boolean | never | As in the record; `false` for a withdrawn clip. |
+| `cloudConsent` | boolean | never | As in the record. |
 | `audio` | string | never | The record's `audioUrl`, a path on the exporting server. |
 | `durationMs` | integer | null when unknown | As in the record. |
 | `anchor` | object | never | As in the record. |
@@ -248,7 +256,7 @@ Three environment variables configure it:
 | `edm:WebResource`, each asset | the asset's URL | `dc:title` (asset name), `dc:format` (the asset `type`, e.g. `gltf`), `edm:type` (`IMAGE`, `VIDEO`, else `3D`), `dcterms:created`, `edm:rights`. |
 | `ore:Aggregation`, the project | `/api/projects/<id>#aggregation` | `edm:aggregatedCHO`, `edm:dataProvider`, `edm:provider`, `edm:rights`, `edm:isShownAt` (the room, `/?project=<id>`), `edm:isShownBy` (the first 3D asset, else the first asset; absent with no assets), `edm:hasView` (the other assets, when there is more than one). |
 | `edm:ProvidedCHO`, each contribution | `/api/projects/<id>/annotations/<aid>` | `dc:title` (`Answer to “<prompt>”`, else the first eight words of the transcript, else `Voice annotation by <author>`), `dc:creator` (author), `dcterms:created`, `dc:type` (`reply to a voice annotation`, `interview answer` or `voice annotation`), `edm:type` `SOUND`, `dcterms:isPartOf` (the project), `dcterms:spatial` (project name and `on <objectId>`), `dc:description` (the transcript, tagged with its language; absent when empty or rejected as unclear), `dc:language` (when a language is known), `dcterms:temporal` (the period's TimeSpan), `edm:isRelatedTo` and `glossy:replyTo` (the parent, when it is included), and the `glossy:` properties below. |
-| `edm:WebResource`, each recording | the audio URL | `dc:format` `audio/webm` (whatever the container), `ebucore:duration` (ISO 8601 duration, `PT1.2S`), `dcterms:extent` (`1.2 s`), `dcterms:created`, `dc:creator`, `edm:rights`, `dcterms:provenance`: a sentence of paradata saying whether the clip was recorded in a headset or on a desktop, whether a hand trace exists and how many of its frames were reconstructed, and which model and backend transcribed it, whether the language was detected or set, or that transcription failed or was not done. |
+| `edm:WebResource`, each recording | the audio URL | `dc:format` `audio/webm` (whatever the container), `ebucore:duration` (ISO 8601 duration, `PT1.2S`), `dcterms:extent` (`1.2 s`), `dcterms:created`, `dc:creator`, `edm:rights`, `dcterms:provenance`: a sentence of paradata saying whether the clip was recorded in a headset or on a desktop, whether a hand trace exists and how many of its frames were reconstructed, and which model and backend transcribed it (with "after the local transcription was rejected as <reason>" when the cloud fallback produced the text), whether the language was detected or set, or that transcription failed or was not done. |
 | `edm:WebResource`, each linked file | the link's `url` | For every link that has a `url` (photographs, documents and pages alike): `dc:title` (title, else the URL), `edm:type` `IMAGE` for a link of kind `image`, `edm:rights`. |
 | `ore:Aggregation`, each contribution | `/api/projects/<id>/annotations/<aid>#aggregation` | `edm:aggregatedCHO`, `edm:dataProvider`, `edm:provider`, `edm:rights`, `edm:ugc` `"true"` (a string), `edm:isShownBy` (the audio), `edm:isShownAt` (the clip in the room, `/?project=<id>&focus=<aid>`), `edm:hasView` (the linked files, when any). |
 | `edm:TimeSpan`, one per distinct period | `/api/projects/<id>/export#timespan-<n>` | `skos:prefLabel` (the label, else `from–to`), `edm:begin` (`from`, when set), `edm:end` (`to`, when set). |
@@ -291,7 +299,7 @@ The names this document describes, checked against the code by `test/unit/schema
 ```json
 {
   "record": [
-    "id", "project", "author", "createdAt", "layer", "consent",
+    "id", "project", "author", "createdAt", "layer", "consent", "cloudConsent",
     "audioUrl", "durationMs",
     "anchor", "anchor.x", "anchor.y", "anchor.z", "anchor.objectId",
     "period", "period.from", "period.to", "period.label",
@@ -305,10 +313,11 @@ The names this document describes, checked against the code by `test/unit/schema
     "transcription.words", "transcription.words[].w", "transcription.words[].s", "transcription.words[].e",
     "transcription.language", "transcription.detected", "transcription.heard",
     "transcription.backend", "transcription.model", "transcription.ms",
+    "transcription.cloud", "transcription.cloud.from", "transcription.cloud.reason",
     "transcription.unclear", "transcription.raw", "transcription.error"
   ],
   "contribution": [
-    "id", "attribution", "timestamp", "layer", "consent", "audio", "durationMs",
+    "id", "attribution", "timestamp", "layer", "consent", "cloudConsent", "audio", "durationMs",
     "anchor", "anchor.x", "anchor.y", "anchor.z", "anchor.objectId",
     "period", "period.from", "period.to", "period.label",
     "parent", "mode", "prompt", "language", "transcript",
@@ -326,7 +335,7 @@ The names this document describes, checked against the code by `test/unit/schema
     "glossy:replyTo", "glossy:nativeRecord"
   ],
   "project": [
-    "id", "name", "createdAt", "updatedAt", "language", "script", "script.questions", "assets", "annotationCount"
+    "id", "name", "createdAt", "updatedAt", "language", "script", "script.questions", "cloudFallback", "assets", "annotationCount"
   ],
   "asset": [
     "id", "project", "url", "type", "name", "sort", "createdAt",
