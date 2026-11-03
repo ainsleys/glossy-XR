@@ -241,3 +241,53 @@ for (const file of ['fireplace.jpg', 'hotel_room.jpg', 'lythwood_room.jpg']) {
     test.skip(true, '8192×4096 exceeds the software renderer\'s maximum texture size');
   });
 }
+
+// ---- refusals and broken files ------------------------------------------------
+
+const post = (request, projectId, name, bytes) => {
+  const fd = new FormData();
+  fd.append('model', new Blob([bytes]), name);
+  return request.post(`${API}/api/projects/${projectId}/assets`, { multipart: fd });
+};
+
+test('upload refusals: a .txt is filtered out, a .mtl alone is not a scene', async ({ request }) => {
+  const project = await (await request.post(`${API}/api/projects`, { data: { name: 'refusals' } })).json();
+  const txt = await post(request, project.id, 'notes.txt', 'hello');
+  expect(txt.status()).toBe(400);
+  expect((await txt.json()).error).toMatch(/^file is required/);
+  const mtl = await post(request, project.id, 'box.mtl', scenes.objMtl());
+  expect(mtl.status()).toBe(400);
+  expect((await mtl.json()).error).toBe('unsupported asset type');
+  const saved = await (await request.get(`${API}/api/projects/${project.id}`)).json();
+  expect(saved.assets).toHaveLength(0);
+});
+
+/** Upload non-PLY bytes under a .ply name and wait for the viewer to settle on it. */
+async function loadBroken(page, request) {
+  const project = await openProject(page, request, 'broken');
+  const res = await post(request, project.id, 'broken.ply', Buffer.from('this is not a PLY file\n'.repeat(20)));
+  expect(res.status()).toBe(201);                       // the server goes by the extension; the client sniffs
+  const asset = await res.json();
+  expect(asset.type).toBe('ply');
+  await page.waitForFunction((id) => { const e = window.__glossy.loaded.get(id); return e && (e.model || e.error); }, asset.id, { timeout: 30_000 });
+  return asset;
+}
+
+test('a .ply that is not a PLY is stored and the viewer keeps running', async ({ page, request }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await loadBroken(page, request);
+  const frame = await page.evaluate(() => window.__glossy.renderer.info.render.frame);
+  await expect.poll(() => page.evaluate(() => window.__glossy.renderer.info.render.frame)).toBeGreaterThan(frame);
+  expect(errors).toEqual([]);
+});
+
+// Known gap, reported rather than fixed here: PLYLoader returns an empty
+// geometry for bytes with no PLY header instead of throwing, and loadPly
+// accepts it as a point cloud of 0 points, so no error reaches the asset list.
+// Marked as expected to fail; when the loader rejects it this will say so.
+test('a .ply that is not a PLY is reported as a load error', async ({ page, request }) => {
+  test.fail(true, 'loaders.js accepts an empty PLY parse as a 0-point cloud');
+  const asset = await loadBroken(page, request);
+  expect(await page.evaluate((id) => window.__glossy.loaded.get(id).error, asset.id)).toBeTruthy();
+});
