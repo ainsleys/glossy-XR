@@ -96,3 +96,113 @@ test('.splat: Gaussians load through Spark and anchor on the sphere', async ({ p
 test('3DGS PLY: the header sniff sends it to Spark, not PLYLoader', async ({ page, request }) => {
   await splatTest(page, request, { 'sphere-3dgs.ply': scenes.gaussianPly() });
 });
+
+test('PLY with faces: a mesh, anchored by its name', async ({ page, request }) => {
+  const { project, asset } = await load(page, request, { 'cube.ply': scenes.cubePly() });
+  const info = await inspect(page, asset.id);
+  expectPlaced(info, { type: 'ply', kind: 'mesh' });
+  expect(info.count).toBe(8);
+  const centre = await toWorld(page, asset.id, scenes.CUBE.centre);
+  const anchor = await anchorAt(page, request, project.id, centre);            // the middle of the +Z face is in front of the centre
+  expect(anchor.objectId).toBe('ply');
+  expect(anchor.z).toBeCloseTo(centre[2] + scenes.CUBE.size / 2 * info.scale, 2);
+});
+
+test('PLY without faces: a point cloud, anchored on a corner', async ({ page, request }) => {
+  const { project, asset } = await load(page, request, { 'corners.ply': scenes.cubePly({ faces: false }) });
+  const info = await inspect(page, asset.id);
+  expectPlaced(info, { type: 'ply', kind: 'points' });
+  expect(info.count).toBe(8);
+  const corner = await toWorld(page, asset.id, scenes.cubeCorners().at(-1));    // +X +Y +Z: nothing between it and a camera out along +Z
+  const anchor = await anchorAt(page, request, project.id, corner);
+  expect(anchor.objectId).toBe('pointcloud');
+  expect(dist([anchor.x, anchor.y, anchor.z], corner)).toBeLessThan(0.05);
+});
+
+test('PCD: a coloured point cloud, anchored on a known point', async ({ page, request }) => {
+  const { project, asset } = await load(page, request, { 'cloud.pcd': scenes.cloudPcd() });
+  const info = await inspect(page, asset.id);
+  expectPlaced(info, { type: 'pcd', kind: 'points' });
+  expect(info.count).toBe(scenes.CLOUD.count);
+  expect(await page.evaluate((id) => !!window.__glossy.loaded.get(id).model.object.geometry.attributes.color, asset.id)).toBe(true);
+  const target = await toWorld(page, asset.id, scenes.CLOUD_TARGET);
+  const anchor = await anchorAt(page, request, project.id, target);
+  expect(anchor.objectId).toBe('pointcloud');
+  expect(dist([anchor.x, anchor.y, anchor.z], target)).toBeLessThan(0.05);
+});
+
+test('glTF: an embedded-buffer mesh 50 units across is scaled to 4 m', async ({ page, request }) => {
+  const { project, asset } = await load(page, request, { 'crate.gltf': scenes.cubeGltf() });
+  const info = await inspect(page, asset.id);
+  expectPlaced(info, { type: 'gltf', kind: 'mesh' });
+  expect(info.scale).toBeCloseTo(4 / scenes.BIG_CUBE.size, 4);                 // auto-fit shrinks giants to about 4 m
+  expect(info.worldMax[1] - info.worldMin[1]).toBeCloseTo(4, 2);
+  const centre = await toWorld(page, asset.id, scenes.BIG_CUBE.centre);
+  const anchor = await anchorAt(page, request, project.id, centre, [0, 0, 1], 5);
+  expect(anchor.objectId).toBe(scenes.BIG_CUBE.name);
+});
+
+test('OBJ with its MTL: the material colour comes from the MTL', async ({ page, request }) => {
+  const { project, asset } = await load(page, request, { 'box.obj': scenes.cubeObj(), 'box.mtl': scenes.objMtl() });
+  const info = await inspect(page, asset.id);
+  expectPlaced(info, { type: 'obj', kind: 'mesh' });
+  // MTLLoader reads Kd as sRGB; getRGB with SRGBColorSpace gives the file's numbers back
+  const kd = await page.evaluate((id) => {
+    let c = null;
+    window.__glossy.loaded.get(id).model.object.traverse((o) => { if (o.isMesh) { const t = { r: 0, g: 0, b: 0 }; o.material.color.getRGB(t, 'srgb'); c = [t.r, t.g, t.b]; } });
+    return c;
+  }, asset.id);
+  scenes.OBJ_CUBE.kd.forEach((v, i) => expect(kd[i]).toBeCloseTo(v, 2));
+  const centre = await toWorld(page, asset.id, scenes.OBJ_CUBE.centre);
+  const anchor = await anchorAt(page, request, project.id, centre);
+  expect(anchor.objectId).toBe(scenes.OBJ_CUBE.name);
+});
+
+// Images and video are a plane (or a sphere) with the picture as a texture:
+// kind mesh, four corners. A 360 panorama is the room; a flat photo or a
+// video hangs in it, so the default room stays (the isScene rule).
+
+test('360 panorama: a sphere around the viewer, centred at scale 1, replacing the room', async ({ page, request }) => {
+  const { asset } = await load(page, request, { 'pano.png': await scenes.png(64, 32) }, { mode: 'sphere' });
+  const info = await inspect(page, asset.id);
+  expect(info).toMatchObject({ type: 'image', kind: 'mesh', count: 4, imageMode: 'sphere', scale: 1, room: false });
+  expect(Object.keys(info.transform).length).toBeGreaterThan(0);
+  const radius = info.size[1] / 2;
+  expect(Math.hypot(...info.camera)).toBeLessThan(radius);
+});
+
+test('flat photo: a plane standing on the floor, the room stays', async ({ page, request }) => {
+  const { asset } = await load(page, request, { 'photo.png': await scenes.png(48, 32) });
+  const info = await inspect(page, asset.id);
+  expect(info).toMatchObject({ type: 'image', kind: 'mesh', count: 4, imageMode: 'plane', room: true });
+  for (const s of info.size.slice(0, 2)) expect(s).toBeGreaterThan(0);
+  expect(Object.keys(info.transform).length).toBeGreaterThan(0);
+  expect(info.worldMin[1]).toBeCloseTo(0, 2);
+  expect(info.size[1] / info.size[0]).toBeCloseTo(32 / 48, 3);
+});
+
+test('video: a WebM recorded in the page plays on a plane, the room stays', async ({ page, request }) => {
+  await openProject(page, request, 'recorder');
+  // one second of a moving square from a canvas, through MediaRecorder
+  const b64 = await page.evaluate(async () => {
+    const c = document.createElement('canvas'); c.width = 160; c.height = 90;
+    const ctx = c.getContext('2d');
+    const rec = new MediaRecorder(c.captureStream(30), { mimeType: 'video/webm' });
+    const chunks = []; rec.ondataavailable = (e) => chunks.push(e.data);
+    const done = new Promise((r) => { rec.onstop = r; });
+    rec.start();
+    const t0 = performance.now();
+    await new Promise((r) => { const step = () => { const t = performance.now() - t0; ctx.fillStyle = '#234'; ctx.fillRect(0, 0, 160, 90); ctx.fillStyle = '#fa3'; ctx.fillRect(t / 10 % 140, 30, 20, 20); if (t < 1000) requestAnimationFrame(step); else r(); }; step(); });
+    rec.stop(); await done;
+    const buf = new Uint8Array(await new Blob(chunks).arrayBuffer());
+    let s = ''; for (const x of buf) s += String.fromCharCode(x);
+    return btoa(s);
+  });
+  const { asset } = await load(page, request, { 'clip.webm': Buffer.from(b64, 'base64') });
+  const info = await inspect(page, asset.id);
+  expect(info).toMatchObject({ type: 'video', kind: 'mesh', count: 4, imageMode: 'plane', room: true });
+  expect(Object.keys(info.transform).length).toBeGreaterThan(0);
+  expect(info.worldMin[1]).toBeCloseTo(0, 2);
+  expect(info.size[1] / info.size[0]).toBeCloseTo(90 / 160, 2);
+  await expect.poll(() => page.evaluate((id) => window.__glossy.loaded.get(id).model.video.readyState, asset.id)).toBeGreaterThanOrEqual(2);
+});
