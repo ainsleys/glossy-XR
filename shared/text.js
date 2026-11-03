@@ -67,7 +67,7 @@ export function langName(code, locale) {
 export function cloudBadge(tr) {
   if (!tr) return null;
   const title = [tr.backend, tr.model, tr.cloud?.reason ? `local result rejected as ${tr.cloud.reason}` : ''].filter(Boolean).join(' · ');
-  if (tr.cloud?.error) return { text: 'cloud transcription failed, local text kept', title: title + ' · ' + tr.cloud.error };
+  if (tr.cloud?.error) return { text: 'cloud transcription failed, local text kept', title: [title, tr.cloud.error].filter(Boolean).join(' · ') };
   if (tr.backend && tr.backend !== 'local') return { text: 'transcribed in the cloud', title };
   return null;
 }

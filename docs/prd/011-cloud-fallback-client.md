@@ -59,3 +59,4 @@ T5. Full `npm test` at the final commit: all passed.
 4. Badges live in `renderList` and `cardHtml`; the condition is "backend set and not local", with the failed-call badge keyed on `cloud.error`.
 5. The page-load microphone listener and the headset hint follow the checkbox's current state after an untick.
 6. T3 lives in `cloud.spec.js` because the stub is started there and the live microphone cannot trigger the fallback.
+7. Accepted behaviour: consent is stored per browser origin, so a `'cloud'` tick carries to other projects that have the switch on, and to the next person on a shared device (already true of the plain consent; the exhibition consent flow is a separate change). When a project is switched off and later on again, a stored `'cloud'` consent applies without a new prompt.
