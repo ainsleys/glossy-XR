@@ -1,12 +1,15 @@
-// The cloud fallback through the API, no browser. A stub on STUB_PORT stands in
-// for the OpenAI transcription endpoint and counts its calls. The clip is a
-// committed "Thank you." that the local model transcribes to a line the
-// transcript guard rejects as silence, so only the three conditions (project
-// setting, clip consent, cloud consent) decide whether the stub is called.
+// The cloud fallback. A stub on STUB_PORT stands in for the OpenAI
+// transcription endpoint and counts its calls. The clip is a committed
+// "Thank you." that the local model transcribes to a line the transcript guard
+// rejects as silence, so only the three conditions (project setting, clip
+// consent, cloud consent) decide whether the stub is called. The API tests come
+// first; then the page: the switch, the consent label, the flag the page sends,
+// and the badges. The fake microphone speaks clearly, so a clip recorded in the
+// page never reaches the stub; the badges are checked on the posted clip.
 import fs from 'node:fs';
 import http from 'node:http';
 import { test, expect } from '@playwright/test';
-import { API, listAnnotations } from './helpers.js';
+import { API, listAnnotations, openProject, prepareRecording, lockPointer, aimCamera, recordWithMouse } from './helpers.js';
 import { STUB_PORT, THANK_YOU_CLIP } from '../playwright.config.js';
 
 const CLOUD_TEXT = 'The well stood by the gate.';
@@ -156,4 +159,102 @@ test('a failed cloud call keeps the local result and leaves a trace of the attem
   const edm = await (await request.get(`${API}/api/projects/${p.id}/export?format=edm`)).json();
   const web = edm['@graph'].find((n) => n['@type'] === 'edm:WebResource' && n['@id'].endsWith(clip.audioUrl));
   expect(web['dcterms:provenance']).toContain('a cloud transcription was attempted and failed');
+});
+
+const PLAIN = 'I consent to my recording being stored and shared';
+const consentState = (page) => page.evaluate(() => window.__glossy.consent);
+
+test('the settings switch and the consent label follow the project', async ({ page, request }) => {
+  const p = await openProject(page, request, 'cloud-switch');
+  await expect(page.locator('#consentText')).toHaveText(PLAIN);
+  await expect(page.locator('#cloudFallback')).not.toBeChecked();
+  await request.patch(`${API}/api/projects/${p.id}`, { data: { cloudFallback: true } });
+  await expect(page.locator('#consentText')).toContainText('external service');   // project:updated re-renders
+  await expect(page.locator('#cloudFallback')).toBeChecked();
+  await page.locator('#settingsPanel > summary').click();
+  await page.uncheck('#cloudFallback');
+  await expect.poll(async () => (await (await request.get(`${API}/api/projects/${p.id}`)).json()).cloudFallback).toBe(false);
+  await expect(page.locator('#consentText')).toHaveText(PLAIN);
+});
+
+test('the page sends cloud consent only for the label that named the cloud, and asks again when the label changes', async ({ page, request }) => {
+  // what each clip upload carried: Chromium does not expose a FormData body holding a blob to page.on('request'), so read it at fetch
+  await page.addInitScript(() => {
+    const fetch0 = window.fetch; window.__uploads = [];
+    window.fetch = (url, opts) => { if (opts?.body instanceof FormData && /\/annotations$/.test(url)) window.__uploads.push(opts.body.get('cloudConsent')); return fetch0(url, opts); };
+  });
+  const sentCloud = () => page.evaluate(() => window.__uploads.at(-1));
+  const latest = async (id) => (await listAnnotations(request, id)).at(-1);
+
+  // project on: the label carries the clause, the page stores 'cloud' and sends the flag
+  const on = await openProject(page, request, 'cloud-flag-on');
+  await request.patch(`${API}/api/projects/${on.id}`, { data: { cloudFallback: true } });
+  await expect(page.locator('#consentText')).toContainText('external service');
+  await prepareRecording(page, 'Guest');
+  expect(await consentState(page)).toEqual({ checked: true, stored: 'cloud' });
+  await lockPointer(page);
+  await aimCamera(page, [0.4, 1.6, 0.6], [0.4, 0.79, -1.2]);
+  await recordWithMouse(page, 700);
+  expect(await sentCloud()).toBe('true');
+  expect((await latest(on.id)).cloudConsent).toBe(true);
+
+  // project off: consent given again to the plain label stores '1' and sends nothing
+  const off = await openProject(page, request, 'cloud-flag-off');
+  await expect(page.locator('#consentText')).toHaveText(PLAIN);
+  await page.uncheck('#consent');
+  await page.check('#consent');
+  expect(await consentState(page)).toEqual({ checked: true, stored: '1' });
+  await lockPointer(page);
+  await aimCamera(page, [0.4, 1.6, 0.6], [0.4, 0.79, -1.2]);
+  await recordWithMouse(page, 700);
+  expect(await sentCloud()).toBeNull();
+  expect((await latest(off.id)).cloudConsent).toBe(false);
+
+  // the project switches on under the page: the plain consent no longer covers it
+  await request.patch(`${API}/api/projects/${off.id}`, { data: { cloudFallback: true } });
+  await expect.poll(() => consentState(page)).toEqual({ checked: false, stored: '0' });
+  await expect(page.locator('#consentText')).toContainText('external service');
+  await expect(page.locator('#statusText')).toContainText('tick it to record');
+  await page.check('#consent');
+  expect(await consentState(page)).toEqual({ checked: true, stored: 'cloud' });
+  await lockPointer(page);
+  await aimCamera(page, [0, 1.6, 0.6], [0, 1.4, -2.9]);                // a fresh spot
+  await recordWithMouse(page, 700);
+  expect(await sentCloud()).toBe('true');
+  expect((await latest(off.id)).cloudConsent).toBe(true);
+});
+
+test('the room list and the review page say when a clip was transcribed in the cloud, or the attempt failed', async ({ page, request }) => {
+  const p = await openProject(page, request, 'cloud-badges');
+  await request.patch(`${API}/api/projects/${p.id}`, { data: { cloudFallback: true } });
+  const clip = await postThankYou(request, p.id, { cloudConsent: 'true' });
+  expect((await transcribed(request, p.id, clip.id)).transcription.backend).toBe('openai');
+  const row = page.locator(`#annList li[data-id="${clip.id}"]`);
+  await expect(row.locator('.badge.cloud')).toHaveText('transcribed in the cloud');
+  await expect(row.locator('.badge.cloud')).toHaveAttribute('title', /openai · whisper-1 · local result rejected as silence/);
+
+  failWith = 500;
+  const failed = await postThankYou(request, p.id, { cloudConsent: 'true' });
+  expect((await transcribed(request, p.id, failed.id)).transcription.cloud.error).toMatch(/openai 500/);
+  await expect(page.locator(`#annList li[data-id="${failed.id}"] .badge.cloud`)).toHaveText('cloud transcription failed, local text kept');
+
+  // a clip transcribed locally carries no badge
+  const local = await postThankYou(request, p.id);
+  await transcribed(request, p.id, local.id);
+  await expect(page.locator(`#annList li[data-id="${local.id}"]`)).toBeVisible();
+  await expect(page.locator(`#annList li[data-id="${local.id}"] .badge.cloud`)).toHaveCount(0);
+
+  await page.goto(`/review.html?project=${p.id}`);
+  await expect(page.locator(`article[data-id="${clip.id}"] .head .cloud`)).toHaveText('transcribed in the cloud');
+  await expect(page.locator(`article[data-id="${failed.id}"] .head .cloud`)).toHaveText('cloud transcription failed, local text kept');
+  await expect(page.locator(`article[data-id="${local.id}"] .head .cloud`)).toHaveCount(0);
+});
+
+test('a visitor sees the clause and no switch', async ({ page, request }) => {
+  const p = await openProject(page, request, 'cloud-visitor', '&mode=visitor');
+  await request.patch(`${API}/api/projects/${p.id}`, { data: { cloudFallback: true } });
+  await expect(page.locator('#consentText')).toContainText('external service');
+  await expect(page.locator('#cloudFallback')).toBeHidden();
+  await page.check('#consent');
+  expect(await consentState(page)).toEqual({ checked: true, stored: 'cloud' });
 });
