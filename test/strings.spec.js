@@ -42,6 +42,7 @@ test('a Turkish project speaks Turkish to a visitor; ?lang=en overrides it; a PA
   // the operator switches the project to English: the open page redraws
   await request.patch(`${API}/api/projects/${project.id}`, { data: { uiLanguage: 'en' } });
   await expect.poll(() => page.locator('#consentText').textContent()).toBe(EN['consent.plain']);
+  await expect.poll(() => status(page)).toBe(EN['status.noConsent']);           // the line on screen is redrawn too, as "connected" is when the project's language arrives
   await expect(page.locator('#visitorHelp')).toHaveText(EN['html.visitorHelp']);
 
   // back to Turkish, but this page asks for English: the override wins and is kept in the URL and the visitor link

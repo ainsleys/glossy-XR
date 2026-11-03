@@ -69,7 +69,7 @@ export function langName(code, locale) {
 // `lang` is the interface language (the review page stays English).
 export function cloudBadge(tr, lang = 'en') {
   if (!tr) return null;
-  const title = [tr.backend, tr.model, tr.cloud?.reason ? t('list.cloudRejected', { reason: tr.cloud.reason }, lang) : ''].filter(Boolean).join(' · ');
+  const title = [tr.backend, tr.model, tr.cloud?.reason ? t('list.cloudRejected', { reason: ['silence', 'repetition'].includes(tr.cloud.reason) ? t('list.reason.' + tr.cloud.reason, {}, lang) : tr.cloud.reason }, lang) : ''].filter(Boolean).join(' · ');
   if (tr.cloud?.error) return { text: t('list.cloudFailed', {}, lang), title: [title, tr.cloud.error].filter(Boolean).join(' · ') };
   if (tr.backend && tr.backend !== 'local') return { text: t('list.cloud', {}, lang), title };
   return null;
