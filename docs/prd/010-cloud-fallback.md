@@ -1,55 +1,65 @@
-# 010 · Cloud transcription as a consented fallback
+# 010 · Cloud transcription as a consented fallback (server side)
+
+This is the first of two changes. It adds the policy, the storage and the secondary backend, with API-level tests. The second (011) adds the consent label, the Settings checkbox and the badges in the room and the review page. Until 011 ships, no client sends `cloudConsent`, so no clip can be sent to the cloud: this change is safe on its own.
 
 ## Problem
 
-Transcription runs locally by default (`server/transcribe.js`, Whisper via transformers.js) and an OpenAI backend exists, but the choice is a server-wide environment variable (`GLOSSY_TRANSCRIBE=local|openai|none`) set at deployment. There is no way to keep local transcription as the default and call the cloud only for a clip the local model could not read, and nothing records that a clip left the server or asks the contributor for that. Measured in 004/005: the local base model returns a hallucination for a meaningful share of short Turkish clips; those end as `transcript: ''` with `unclear` set.
+Transcription runs locally by default (`server/transcribe.js`) and an OpenAI backend exists, but the choice is a server-wide environment variable set at deployment. There is no way to keep local transcription as the default and call the cloud only for a clip the local model could not read, nothing records that a clip left the server, and nothing ties that to what the contributor agreed to. Measured in 004/005: the local base model returns a hallucination for a meaningful share of short Turkish clips; those end as `transcript: ''` with `unclear` set.
 
 ## Goal
 
-A project can opt in to a cloud fallback. When it has, and only then, a clip whose local transcription came back unclear is sent to the cloud backend, the result is stored with its provenance, the consent text the contributor ticked says it may happen, and the room and review page show which backend produced a transcript.
+A project can opt in to a cloud fallback. A clip is sent to the cloud only when the project has opted in, the contributor consented to that specific clause, and the local model's result was rejected as unclear. The result is stored with its provenance.
 
 ## Requirements
 
-R1. **Project setting.** `cloudFallback: boolean` on the project (new column, default false), settable by `PATCH /api/projects/:id {cloudFallback}` and returned by the project endpoints; a checkbox in the operator HUD's Settings panel ("send unclear clips to the cloud transcriber"), hidden in visitor mode. Documented in SCHEMA.md's project table and json block.
+R1. **Project setting.** `cloudFallback: boolean` on projects (new column, default false; migration in the existing `db.js` pattern), settable by `PATCH /api/projects/:id {cloudFallback}` (boolean only) and returned by the project endpoints.
 
-R2. **Secondary backend.** `createTranscriber` gains an optional fallback backend, configured by `GLOSSY_TRANSCRIBE_FALLBACK=openai` (default unset); the primary stays `GLOSSY_TRANSCRIBE`. `enqueue(..., { language, fallback: true|false })`: when `fallback` is true and the primary result is unclear (`unclearReason` non-null) or the primary errors, the job is retried once on the fallback backend; the final result carries `backend` as the backend that produced it and `fallback: { from: 'local', reason: <unclear reason or error> }` when the fallback ran. `info()` reports both backends. `OPENAI_BASE_URL` (default `https://api.openai.com/v1`) is honoured by the OpenAI backend so a test can point it at a stub.
+R2. **Clip consent flag.** `cloudConsent: boolean` on annotations (new column, default false). On create, the server stores `cloudConsent = (body.cloudConsent === 'true' || body.cloudConsent === true) && project.cloudFallback === true`. The annotation PATCH cannot change it. It is returned in the record and in the native export's contribution.
 
-R3. **Server policy.** `queueTranscription` passes `fallback: project.cloudFallback === true`. The stored `transcription` meta gains `fallback` (object or absent). A `fallback` result that is itself unclear is stored as unclear with `backend` of the fallback. The re-run endpoint (`POST …/transcribe`) honours the same policy.
+R3. **Trigger.** The fallback runs only when all hold at run time: `project.cloudFallback`, `clip.consent`, `clip.cloudConsent`, and the primary backend returned a clean result whose `unclearReason(text)` is non-null (silence or repetition). It does **not** run on a primary error (missing ffmpeg, model load failure, backend exception: those stay `failed`), on an empty transcript, or on the primary's language fallback (`fallback: true` in the backend result means an English-only model or no language tokens: a configuration matter). The boot requeue and the `POST …/transcribe` re-run route apply the same rule with the clip's own stored flags.
 
-R4. **Consent text.** The consent label in `client/index.html` reads as today when the project's `cloudFallback` is off, and adds ", and transcribed by an external service when the local one cannot read it" when it is on; the label updates when the project loads or the setting changes. The consent recorded on the clip is unchanged in shape (boolean); the project setting at the time of the clip is what makes the label true, so the clip stores `cloudConsent: true|false` (the project setting at creation), returned in the record and the export.
+R4. **Secondary backend.** `createTranscriber` gains an optional secondary backend from `GLOSSY_TRANSCRIBE_FALLBACK=openai` (default unset). Naming, to avoid the existing boolean `fallback` on backend results: the enqueue option is `allowCloud: boolean`; the stored meta is `cloud: { from: 'local', reason: 'silence'|'repetition' }`, present only when the secondary ran; `backend`/`model` name whatever produced the stored text. If the secondary is itself unclear, the result is stored unclear with the secondary's `backend` and `cloud` set. A failed `warm()` of the secondary marks only the secondary unavailable (`info()` reports both), never the primary. `openaiBackend()` builds its URL from `OPENAI_BASE_URL` (default `https://api.openai.com/v1`).
 
-R5. **Visible provenance.** The room's clip list and the review page show "transcribed in the cloud" (or the backend name) on clips whose `transcription.backend !== 'local'`; the EDM `dcterms:provenance` on the audio WebResource already says how a clip was transcribed and includes the backend.
+R5. **Event.** When the secondary runs, the server records a `transcribe:fallback {id, from, to, reason}` event through `db.events.add(project, 'server', [...])` (the server-side session `'server'` has no `session:start`; the README's session-log paragraph says so and that reports show it as a partial session).
 
-R6. **Session log.** `transcribe:fallback {id, from, to, reason}` emitted server-side into the project's events (the server already stores events; if only clients post them today, add a server-side insert) so the operator can see how often the cloud was used.
+R6. **Provenance.** EDM `dcterms:provenance` on the audio WebResource, which already names the backend, adds "after the local transcription was rejected as <reason>" when `cloud` is set.
 
-R7. **README.** The transcription section describes the fallback, its two switches (project setting + `GLOSSY_TRANSCRIBE_FALLBACK`), the consent text change, and that nothing leaves the server unless both are on.
+R7. **SCHEMA.md and the drift test.** This branch is rebased on `main` after PR #10 (SCHEMA.md) merges. Add `cloudFallback` to the project list and table; `cloudConsent`, `transcription.cloud`, `transcription.cloud.from`, `transcription.cloud.reason` to the record; `cloudConsent` to the contribution; update the prose about the backend and the export's dropped keys; the drift test's fixture records gain one with `meta.cloud` so the union covers the new keys.
+
+R8. **README.** Transcription section: the fallback, its three conditions, the two switches (project setting and `GLOSSY_TRANSCRIBE_FALLBACK`), and that nothing leaves the server unless all hold.
 
 ## Non-goals
 
-- No change to the primary model or its options.
-- No per-clip consent prompt in the headset (the project-level text is the consent mechanism, as it is today).
-- No automatic quality scoring beyond the existing `unclearReason` guard.
-- No cost controls or rate limits on the cloud backend.
+- No client change (consent label, Settings checkbox, badges): change 011.
+- No change to the primary model or options; no quality scoring beyond `unclearReason`.
+- No fallback for chat audio (`POST …/chat/audio`); it stays local-only.
+- No cost controls or rate limits.
 
 ## Design
 
-`transcribe.js`: `createTranscriber({ log })` reads `GLOSSY_TRANSCRIBE_FALLBACK`; `pump()` runs primary, checks `unclearReason` (import from `shared/text.js`), and on unclear or error with `job.opts.fallback` runs the fallback backend; `openaiBackend()` uses `process.env.OPENAI_BASE_URL`. `db.js`: `cloud_fallback` on projects, `cloud_consent` on annotations, migrations as the existing pattern. `index.js`: PATCH field, `cloudConsent` on create (from the project), `fallback` meta in both branches, event insert. `main.js`: Settings checkbox bound to the project; consent label text; list badge. `review.js`: badge. `edm.js`: provenance string includes backend (check it already does). SCHEMA.md and its json block updated (the drift test will fail otherwise).
+`transcribe.js`: `createTranscriber({ log, backends })` where `backends` is a test-only injection seam `{ primary, secondary }` that skips `check()` for injected fakes; otherwise built from env. `pump()` runs the primary; if `job.opts.allowCloud` and the result is clean and `unclearReason(result.text)` is non-null and the secondary is available, runs the secondary and returns its result with `cloud: {from: primary.name, reason}`. `db.js`: `cloud_fallback` (projects), `cloud_consent` (annotations), migrations. `index.js`: PATCH field; create stores `cloudConsent`; `queueTranscription` and the re-run route compute `allowCloud` from the three flags; meta stores `cloud`; event insert. `edm.js`: provenance clause. Test env in `playwright.config.js`'s webServer command: `GLOSSY_TRANSCRIBE_FALLBACK=openai OPENAI_API_KEY=test OPENAI_BASE_URL=http://localhost:${STUB_PORT}/v1`, with `STUB_PORT` from `GLOSSY_TEST_STUB_PORT` (default 3101); harmless for every other test since projects default to off.
 
 ## Tests
 
-T1. Unit: `test/unit/transcribe-fallback.test.mjs` builds a transcriber with a fake primary (returns a subtitle-credit hallucination, or throws) and a fake fallback (returns the words), via a small injection seam (`createTranscriber({ backends })` for tests only, defaulting to env); asserts fallback runs only with `fallback: true`, result has `backend` of the fallback and `fallback.from/reason`, and does not run when the primary result is clear. Mutation: remove the `unclearReason` check → fallback runs on clear results → test fails.
+T1. Unit, `test/unit/transcribe-fallback.test.mjs`: fakes injected through the seam. Cases: unclear primary + `allowCloud` → secondary runs, result has secondary `backend` and `cloud.from/reason`; clean primary → secondary does not run; unclear primary without `allowCloud` → does not run; primary error → `failed`, secondary does not run; secondary unavailable → stored unclear from the primary. Mutations: (a) remove the `unclearReason` check → "clean primary" case fails; (b) make errors fall back → "primary error" case fails.
 
-T2. E2e: in `test/desktop.spec.js` (or a new `test/fallback.spec.js`), the suite's server is started with `GLOSSY_TRANSCRIBE_FALLBACK=openai` and `OPENAI_BASE_URL=http://localhost:<API_PORT+1>/v1` (set in `playwright.config.js`'s webServer command); the test starts a stub HTTP server on that port returning a fixed transcription JSON for `/audio/transcriptions`, posts a clip of the committed Turkish fixture? No: posts a clip of **silence** (a short WAV of zeros, which the local model turns into a credit or empty, hence unclear) with the project's `cloudFallback` on, and asserts the stored transcript is the stub's text, `backend: 'openai'`, `fallback.from === 'local'`, `cloudConsent: true`, the list badge, and a `transcribe:fallback` event. Then the same clip with `cloudFallback` off: transcript stays unclear, no stub request (stub records hits), `cloudConsent: false`. Mutation: make `queueTranscription` pass `fallback: true` unconditionally → the "off" half fails.
+T2. API-level e2e (Playwright `request` fixture, no browser): a stub HTTP server started in the test on `STUB_PORT`, answering `POST /v1/audio/transcriptions` with a fixed JSON and counting hits. Fixture: a committed `test/fixtures/thank-you.wav` (`say -v Samantha … "Thank you."`, English), which the local model transcribes to a line the silence guard rejects (`/^thank you\.?$/`), verified once and recorded in the PR. Cases: project `cloudFallback` on, clip posted with `cloudConsent: 'true'` → stored transcript is the stub's text, `backend: 'openai'`, `cloud.from === 'local'`, `cloud.reason` set, `cloudConsent: true`, one stub hit, a `transcribe:fallback` event in the project's events; same clip with the project off → unclear, no hit, `cloudConsent: false`; project on but clip without `cloudConsent` → unclear, no hit. Mutation: make `queueTranscription` pass `allowCloud: true` unconditionally → the two negative cases fail.
 
-T3. Consent label: with `cloudFallback` on, `#consent`'s label contains "external service"; off, it does not.
+T3. Drift test (`test/unit/schema.test.mjs`) passes with the new fields; mutation: drop `cloudConsent` from the json block → fails.
 
-T4. Full `npm test` at the final commit: all passed; SCHEMA drift test passes with the new fields.
+T4. Full `npm test` at the final commit: all passed.
 
 ## Definition of done
 
-- R1–R7; T1–T4 with mutations in the pull request.
+- R1–R8; T1–T4 with mutations in the pull request; the fixture's verification decode in the pull request.
 - Commit messages and the pull request describe the change only.
 
-## Decisions
+## Decisions (3 Nov)
 
-(Filled in after the specification review.)
+1. Trigger is "clean primary result rejected by the guard", never an error or the language fallback: an infrastructure failure must not become a stream of paid calls, and a configuration problem must be fixed, not papered over.
+2. Consent is per clip and set by the client only when the label the contributor ticked carried the clause (011); the server ANDs it with the project setting at creation and the fallback checks all three flags at run time, so a setting switched on later never applies to older clips.
+3. `allowCloud`/`cloud` naming avoids the existing `fallback` boolean on backend results.
+4. Split in two: server first (safe alone, since no client sends the flag yet), client second.
+5. Events are inserted server-side under session `'server'`; documented as a partial session.
+6. Depends on PR #10 (SCHEMA.md): rebase after it merges; the drift test is the guard that the document was updated.
+7. The e2e uses an API-only path and a committed "Thank you." fixture rather than silence, because short silence is not unclear and longer silence decodes nondeterministically.
