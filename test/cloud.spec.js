@@ -198,6 +198,15 @@ test('the page sends cloud consent only for the label that named the cloud, and 
   expect(await sentCloud()).toBe('true');
   expect((await latest(on.id)).cloudConsent).toBe(true);
 
+  // the same project switched off: the stored 'cloud' consent stays, but the page no longer sends the flag
+  await request.patch(`${API}/api/projects/${on.id}`, { data: { cloudFallback: false } });
+  await expect(page.locator('#consentText')).toHaveText(PLAIN);
+  expect(await consentState(page)).toEqual({ checked: true, stored: 'cloud' });
+  await aimCamera(page, [0, 1.6, 0.6], [0, 1.4, -2.9]);                // a fresh spot
+  await recordWithMouse(page, 700);
+  expect(await sentCloud()).toBeNull();
+  expect((await latest(on.id)).cloudConsent).toBe(false);
+
   // project off: consent given again to the plain label stores '1' and sends nothing
   const off = await openProject(page, request, 'cloud-flag-off');
   await expect(page.locator('#consentText')).toHaveText(PLAIN);
@@ -222,6 +231,23 @@ test('the page sends cloud consent only for the label that named the cloud, and 
   await recordWithMouse(page, 700);
   expect(await sentCloud()).toBe('true');
   expect((await latest(off.id)).cloudConsent).toBe(true);
+});
+
+test('consent remembered for the plain label does not open the microphone on a project with the clause', async ({ page, request }) => {
+  const p = await (await request.post(`${API}/api/projects`, { data: { name: 'cloud-mic' } })).json();
+  await request.patch(`${API}/api/projects/${p.id}`, { data: { cloudFallback: true } });
+  await page.addInitScript(() => localStorage.setItem('glossy.consent', '1'));   // an earlier visit ticked the plain label
+  await page.goto(`/?project=${p.id}`);
+  await page.waitForFunction((id) => window.__glossy?.project?.id === id, p.id);
+  await expect.poll(() => consentState(page)).toEqual({ checked: false, stored: '0' });
+  const seen = new Set();
+  await page.mouse.click(640, 400);                                    // the first click on the page, which opens the microphone when consent holds
+  for (const end = Date.now() + 3000; Date.now() < end;) { seen.add(await page.evaluate(() => window.__glossy.status)); await page.waitForTimeout(100); }
+  expect([...seen]).not.toContain('microphone ready');
+  await page.evaluate(() => window.__glossy.log.flush());
+  const events = async () => (await (await request.get(`${API}/api/projects/${p.id}/events`)).json()).map((e) => e.kind);
+  await expect.poll(events).toContain('consent:reset');                // the log reached the server, the untick with it
+  expect(await events()).not.toContain('mic:ready');
 });
 
 test('the room list and the review page say when a clip was transcribed in the cloud, or the attempt failed', async ({ page, request }) => {
