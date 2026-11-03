@@ -56,10 +56,13 @@ export default defineConfig({
     permissions: ['microphone'],
     launchOptions: { args: launchArgs(tone) },
   },
+  // Playwright tests these patterns against the absolute path, so they are
+  // anchored to the file name: a checkout in a directory named "turkish-…" must
+  // not put every spec under chromium-tr.
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /turkish/ },
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /(^|[\\/])turkish\.spec\.js$/ },
     // same browser, Turkish speech on the fake microphone
-    { name: 'chromium-tr', use: { ...devices['Desktop Chrome'], launchOptions: { args: launchArgs(toneTr) } }, testMatch: /turkish/ },
+    { name: 'chromium-tr', use: { ...devices['Desktop Chrome'], launchOptions: { args: launchArgs(toneTr) } }, testMatch: /(^|[\\/])turkish\.spec\.js$/ },
   ],
   webServer: [
     {
