@@ -196,6 +196,8 @@ Playwright drives a headless Chromium with software WebGL, a fake microphone fed
 
 Headless Chromium refuses the Pointer Lock API, so the client falls back to a software mouse capture (same controls, cursor stays visible, Esc releases); that fallback is what the tests exercise, and it also covers embedding contexts where pointer lock is denied.
 
+The fake microphone loops its WAV and a clip can start anywhere in it, so `node test/fixtures/sweep.mjs --text "<sentence>" --voice Yelda --lang tr --ms 3180 --match '<regex>'` checks a fixture offline: it cuts a window at every 25 ms start in the loop, decodes each with the server's transcriber (language detected, then forced) under the Turkish test's pass rules, and prints where it misses (`--replay <dir>` checks stored clips against it).
+
 ## API
 
 | Method | Path | |
