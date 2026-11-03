@@ -3,7 +3,9 @@
 // Runs its own API server on :3100 with a throwaway data dir and Vite on :5174,
 // so a dev session on :3000/:5173 is left alone. Those ports are the defaults;
 // GLOSSY_TEST_API_PORT and GLOSSY_TEST_VITE_PORT override them, so two checkouts
-// can run the suite at once on different ports.
+// can run the suite at once on different ports. The server's cloud fallback
+// points at a stub the cloud test starts on :3101 (GLOSSY_TEST_STUB_PORT);
+// projects default to the fallback off, so no other test reaches it.
 import { defineConfig, devices } from '@playwright/test';
 import path from 'node:path';
 import os from 'node:os';
@@ -13,6 +15,7 @@ import { writeToneWav } from './test/fixtures/tone.js';
 
 const API_PORT = Number(process.env.GLOSSY_TEST_API_PORT || 3100);
 const VITE_PORT = Number(process.env.GLOSSY_TEST_VITE_PORT || 5174);
+export const STUB_PORT = Number(process.env.GLOSSY_TEST_STUB_PORT || 3101);
 
 // The fake microphone plays this file on a loop. On macOS it is real speech
 // from the system voice, so transcripts can be checked for words; elsewhere
@@ -27,6 +30,10 @@ export const SPEECH_WORDS_TR = /pekmez|kazan|avlu|asma|durur/i;
 // Made once, with the arguments fakeMic below passes to `say`, not at test time:
 //   say -v Yelda --file-format=WAVE --data-format=LEI16@16000 -o test/fixtures/turkish-clip.wav "Pekmez kazanı avluda, asmanın altında dururdu."
 export const TURKISH_CLIP = fileURLToPath(new URL('./test/fixtures/turkish-clip.wav', import.meta.url));
+// "Thank you." in English, which the local model hears and the transcript guard
+// rejects as a silence credit: the case the cloud fallback is for. Made once:
+//   say -v Samantha --file-format=WAVE --data-format=LEI16@16000 -o test/fixtures/thank-you.wav "Thank you."
+export const THANK_YOU_CLIP = fileURLToPath(new URL('./test/fixtures/thank-you.wav', import.meta.url));
 function fakeMic(name, text, voice, flag) {
   const wav = path.join(os.tmpdir(), name);
   if (process.platform === 'darwin') {
@@ -72,7 +79,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: `rm -rf .test-data && GLOSSY_DATA=.test-data PORT=${API_PORT} node --disable-warning=ExperimentalWarning server/index.js`,
+      command: `rm -rf .test-data && GLOSSY_DATA=.test-data PORT=${API_PORT} GLOSSY_TRANSCRIBE_FALLBACK=openai OPENAI_API_KEY=test OPENAI_BASE_URL=http://localhost:${STUB_PORT}/v1 node --disable-warning=ExperimentalWarning server/index.js`,
       url: `http://localhost:${API_PORT}/api/health`,
       reuseExistingServer: false,
       timeout: 30_000,
