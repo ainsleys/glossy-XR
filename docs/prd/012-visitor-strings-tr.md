@@ -1,55 +1,71 @@
-# 012 · What a contributor reads is in the project's language
+# 012 · What a contributor reads in the room is in the project's UI language
+
+First of two. This change covers the room (desktop page and headset). The review page (012b) is a desk tool with erase, consent and re-transcribe controls; translating only its labels would give a half-translated operator page, so it is left for a separate decision.
 
 ## Problem
 
-Every string a person reads in the room is English: the consent label, the headset panel and its hints ("pinch and hold to answer", "microphone not yet allowed: tick consent on the page"), the status line ("tick consent first", "recording…", "saved …", "too short"), the visitor help text, the interview prompts' chrome, and the review page's card labels. A project can be set to Turkish for transcription (`language: 'tr'`), and its interview questions can be written in Turkish, but the tool around them stays English. A Turkish-speaking contributor is asked to consent to text they may not read.
+Every string a person reads in the room is English: the consent label, the headset panel and its hints, the status line, the visitor help text, the clip list, the chat panel. A project can be set to Turkish for transcription and its interview questions can be Turkish, but the tool around them stays English. A Turkish-speaking contributor is asked to consent to text they may not read.
 
 ## Goal
 
-When a project's language is Turkish, everything a contributor or visitor reads in the room and on the review page is Turkish; otherwise English. The operator's panels (Settings, Assets, Help, the project selector) stay English: they are for the team.
+When a project's UI language is Turkish, everything a contributor or visitor reads in the room is Turkish; otherwise English. Operator panels stay English.
 
 ## Requirements
 
-R1. **String table.** `shared/strings.js` exporting `STRINGS = { en: {...}, tr: {...} }` keyed by short ids, and `t(key, vars)` that formats `{name}` placeholders. Every key exists in both languages (a unit test enforces this). Turkish strings are written by a Turkish speaker on the team before merge (the implementer drafts them and marks the file for review; the pull request lists every Turkish string for a human read).
+R1. **String table.** `shared/strings.js`, dependency-free, runs in Node and the browser: `STRINGS = { en: {...}, tr: {...} }` keyed by readable ids with prefixes, `t(key, vars)` formatting `{name}` placeholders and falling back to `en` for a missing key, and `TR_UNREVIEWED = new Set([...])` listing every Turkish key not yet read by a Turkish speaker. The unit test fails while that set is non-empty, so the suite cannot be green at the final commit without sign-off; the commit that empties the set names who read the strings (first name or role, in the commit message).
 
-R2. **Which language.** The UI language is the project's `language` when it is `tr`, else `en` (`?lang=tr|en` in the URL overrides, for testing and for a kiosk). It is re-evaluated when the project loads or changes. The review page follows the same rule from the project it shows.
+R2. **Which language.** A new project field `uiLanguage` (`'en'` default, `'tr'`), separate from the transcription `language`, because a site may want auto-detected transcription with a Turkish interface. Server: column with migration in the `db.js` pattern, accepted by `PATCH /api/projects/:id` (`en`|`tr` only), returned by the project endpoints, a row and json-block entry in `docs/SCHEMA.md` (the drift test will say if it is missing), a Settings dropdown in the HUD (operator-only, like `language`). `?lang=tr|en` in the URL overrides the project for that page (kiosk, tests): read once at boot, kept through the two `replaceState` calls on project open, and carried in the visitor link. Re-evaluated when the project loads or `project:updated` changes `uiLanguage`.
 
-R3. **The contributor surface, in scope** (each string through `t()`): the consent label in both forms (plain and with the cloud clause; the stored consent values are unchanged); the visitor help block; the headset panel's hints and status lines (everything `renderHint` and the hint branches produce, including the microphone states and the consent messages); the recording status lines (`starting microphone…`, `recording…`, `saved …`, `too short`, `tick consent first`, `enter your name first`, the reply and interview variants); the interview panel's visible chrome ("question 2 of 3", the ask/next labels); the chat panel lines the visitor sees ("pinch this panel to talk…", "listening…", "sending…"); the Ask voice uses the project language already. On the review page: card labels (period, layer, replies, "sounds like", "transcribed in the cloud"), the search placeholder, and the consent-withdrawn note.
+R3. **The contributor surface, by key prefix** (all through `t()`; counts approximate, from a read of `main.js` on `main`):
+- `consent.*`: the plain and cloud labels; the re-consent status.
+- `status.*` (~42): microphone ready/blocked/stopped; recording start/progress/saved/too short/blocked (name, consent, project); the five `recStatusBase` variants; reply and interview variants; play/stop/hover/near lines; the year-view line; ask; chat lines; connected/disconnected; the initial `connecting…` in `index.html`.
+- `hint.*` (~18): everything `renderHint` (desktop `#hint`) and `updateXrPanel` (the headset panel) produce.
+- `chat.*` (4): the chat panel states.
+- `list.*` (~20): the clip list a visitor sees: transcribing/failed/no speech, `Q:`, "sounds like … transcribed as …", `UNCLEAR_TEXT` and `cloudBadge` in `shared/text.js`, `linksOf`, `whenOf` (days/months/years ago; Turkish takes no plural after a number: "3 gün önce"), `fmtDur`, `describeHands` in `client/src/hands.js`.
+- `html.*` (~12): "Your name" and its placeholder, "All periods", the legend, "Annotations", the Ask/previous/next titles, `document.title`.
+- `langName(code, LANG)` uses the UI language, not `navigator.language`.
 
-R4. **Out of scope, stays English:** the operator panels (Settings, Assets, Help), the project selector and asset list, the transform controls, error messages that name HTTP or file errors, the session-log vocabulary, console output, and the server.
+Strings that are concatenations today become whole templates with variables: "saved {dur} on {object} with {extra}", "recording… ({layer})", "talking about {object}…", "{hand} thumb" (hand names translated too), "{base} {secs}s". Rule for Turkish: variables take postpositions, never case suffixes ("{obj} üzerinde"), and plural keys are chosen by the caller. Durations keep the hand-written formatting; the decimal separator follows the language (`Intl.NumberFormat` is built in).
 
-R5. **Dates and numbers.** `whenOf`'s relative times ("3 min ago", period labels) and durations go through `t()` with the same keys; no locale library is added (keep the formatting hand-written as today).
+R4. **Out of scope, stays English:** operator panels (Settings, Assets, Help, project selector, transforms, erase, layer and language controls), `e.message` fragments inside a translated prefix (the prefix is translated, the message is not), the session-log vocabulary, console output, the server, three.js's "ENTER VR" button text, the review page (012b).
 
-R6. **README.** The interview/visitor sections say the contributor surface follows the project language (en/tr) and how to add a language (one object in `shared/strings.js`; the unit test tells you what is missing).
+R5. **Tests keep their English projects.** Existing tests and helpers (`openProject` polls for not "connecting", `recordWithMouse` polls "recording", the consent and cold-mic tests, xr.spec's panel assertions, cloud.spec's label text) stay as they are on English projects. New Turkish tests import `shared/strings.js` and assert against `STRINGS.tr[key]`, never against literal Turkish in the test.
+
+R6. **README.** The visitor/interview sections say the room follows the project's `uiLanguage` (en/tr) with `?lang=` as override, how to add a language, and that the review page is not translated.
 
 ## Non-goals
 
-- No translation of operator panels, logs, or the server.
+- No translation of the review page, operator panels, logs, or server messages.
 - No change to transcription language handling.
-- No right-to-left or pluralisation machinery beyond `{vars}`; Turkish plural forms are written out per key where needed.
-- No automatic browser-language detection (the project decides; the URL overrides).
+- No pluralisation or RTL machinery beyond `{vars}` and per-key plural forms.
+- No browser-language detection.
 
 ## Design
 
-`shared/strings.js` is dependency-free and runs in Node and the browser (like `shared/text.js`). `main.js` gets `let LANG = 'en'` and `const t = (k, v) => fmt(STRINGS[LANG][k] ?? STRINGS.en[k], v)`, set in `projectToHud` and on `?lang=`; the strings listed in R3 are replaced by `t()` calls; `index.html`'s static contributor text (consent label, visitor help) gets ids and is filled from `t()` at load and on language change. `review.js` does the same for its card labels. The headset panel is redrawn from `renderHint`, so a language change re-renders it on the next frame. Keep keys readable (`consent.plain`, `hint.pinchToAnswer`, `status.tooShort`).
+`shared/strings.js` as in R1. `main.js`: `LANG` from `?lang=` else `project.uiLanguage` else `en`, set in `projectToHud` and `onProjectUpdated`; `t` wraps `STRINGS`; the strings in R3 replaced; `index.html` contributor text gets ids filled from `t()` at load and on language change; the headset panel redraws from `updateXrPanel` each frame. Server: `ui_language` column, PATCH validation, project JSON. SCHEMA.md updated.
 
 ## Tests
 
-T1. Unit, `test/unit/strings.test.mjs`: every key in `en` exists in `tr` and vice versa; no empty strings; every `{var}` in an `en` string appears in its `tr` counterpart; `t()` formats and falls back to `en` for a missing key. Mutation: delete one `tr` key → fails naming it.
+T1. Unit `test/unit/strings.test.mjs`: every `en` key in `tr` and vice versa; no empty strings; every `{var}` in `en` appears in `tr`; `t()` formats and falls back; `TR_UNREVIEWED` is empty. Mutations: delete a `tr` key → fails naming it; add a key to `TR_UNREVIEWED` → fails naming it.
 
-T2. E2e, `test/desktop.spec.js` or a new `test/strings.spec.js`: with the project language `tr`, the consent label, the visitor help and the status after a blocked record ("tick consent first" in Turkish) are Turkish; with `?lang=en` on the same project they are English; switching the project language via PATCH re-renders the label (poll). Mutation: make `t()` always use `en` → fails.
+T2. E2e desktop, new `test/strings.spec.js`: a project with `uiLanguage: 'tr'` shows `STRINGS.tr['consent.plain']` as the label, the visitor help in Turkish, and after a blocked record the status equals `STRINGS.tr['status.noConsent']`; `?lang=en` on the same project shows English; `PATCH uiLanguage: 'en'` re-renders the label (poll). Mutation: make `t()` ignore `LANG` → fails.
 
-T3. Headset: in `test/xr.spec.js`, with the project language `tr`, the panel hint text (read through `__glossy.hud.hint` or the panel's exposed text) is the Turkish string for the current state. Mutation: as T2.
+T3. Headset, in `test/xr.spec.js` or `strings.spec.js` with IWER: with `uiLanguage: 'tr'`, `__glossy.xrPanel.text` contains the Turkish hint for the current state (read keys from the table). Mutation: as T2.
 
-T4. Review page: a Turkish project's card shows Turkish labels. Mutation: as T2.
+T4. Drift test passes with `uiLanguage`; mutation: drop it from the json block → fails.
 
-T5. Full `npm test` at the final commit: all passed.
+T5. Full `npm test` at the final commit: all passed (which requires `TR_UNREVIEWED` to be empty: the pull request stays a draft until a Turkish speaker has read the strings and the sign-off commit is made).
 
 ## Definition of done
 
-- R1–R6; T1–T5 with mutations in the pull request; the Turkish strings listed in the pull request for human review and a note of who read them.
+- R1–R6; T1–T5 with mutations in the pull request; every Turkish string listed in the pull request; the sign-off commit present.
 - Commit messages and the pull request describe the change only.
 
-## Decisions
+## Decisions (3 Nov)
 
-(Filled in after the specification review.)
+1. Split: the room now; the review page later if wanted (012b).
+2. `uiLanguage` is its own project field: tying the interface to the transcription language would prevent auto-detected transcription with a Turkish interface. This is the one server change in a client PRD, and it is small.
+3. Sign-off is enforced in code (`TR_UNREVIEWED`), not in prose: the suite cannot pass at the final commit without a human having read the Turkish.
+4. Existing tests stay on English projects; Turkish tests assert table values, so wording changes don't break them.
+5. `?lang=` must survive `replaceState` and be carried in links, or a kiosk loses it on reload.
+6. Concatenated strings become templates; the grammar rules for Turkish variables are stated so the drafter and the reader apply the same ones.
