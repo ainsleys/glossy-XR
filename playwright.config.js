@@ -8,6 +8,7 @@ import { defineConfig, devices } from '@playwright/test';
 import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { writeToneWav } from './test/fixtures/tone.js';
 
 const API_PORT = Number(process.env.GLOSSY_TEST_API_PORT || 3100);
@@ -21,6 +22,11 @@ export const SPEECH_WORDS = /lamp|table|broken/i;
 // Turkish fixture for the language test (macOS ships the Yelda voice)
 export const SPOKEN_TR = 'Pekmez kazanı avluda, asmanın altında dururdu. Pekmez kazanı avluda, asmanın altında dururdu.';
 export const SPEECH_WORDS_TR = /pekmez|kazan|avlu|asma|durur/i;
+// One utterance of the same sentence, committed, for the Turkish word and
+// override checks (the fake microphone's loop is only used there for detection).
+// Made once, with the arguments fakeMic below passes to `say`, not at test time:
+//   say -v Yelda --file-format=WAVE --data-format=LEI16@16000 -o test/fixtures/turkish-clip.wav "Pekmez kazanı avluda, asmanın altında dururdu."
+export const TURKISH_CLIP = fileURLToPath(new URL('./test/fixtures/turkish-clip.wav', import.meta.url));
 function fakeMic(name, text, voice, flag) {
   const wav = path.join(os.tmpdir(), name);
   if (process.platform === 'darwin') {
