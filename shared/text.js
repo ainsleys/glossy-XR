@@ -1,6 +1,7 @@
 // Transcript sanity checks shared by the server (when a transcript lands) and
-// the clients (when an older record is shown). No dependencies, so the same
-// file runs in Node and in the browser.
+// the clients (when an older record is shown). No dependencies beyond the
+// string table, so the same file runs in Node and in the browser.
+import { t } from './strings.js';
 
 /**
  * Whisper's failure mode on short or noisy clips is a loop ("çabukla çabukla
@@ -49,13 +50,14 @@ export function unclearReason(text) {
   return null;
 }
 
+// English, for the review page; the room reads list.unclear.* in its own language
 export const UNCLEAR_TEXT = {
-  repetition: 'unclear: the model repeated itself; try again closer to the microphone',
-  silence: 'nothing heard: the microphone picked up no speech',
+  repetition: t('list.unclear.repetition'),
+  silence: t('list.unclear.silence'),
 };
 
-// Human name for an ISO language code in the page's language ("Türkçe" in a
-// Turkish page, "Turkish" in an English one); falls back to the code.
+// Human name for an ISO language code in the given locale ("Türkçe" in a
+// Turkish room, "Turkish" in an English one), else the browser's; falls back to the code.
 export function langName(code, locale) {
   if (!code) return '';
   try { return new Intl.DisplayNames([locale || (typeof navigator !== 'undefined' && navigator.language) || 'en'], { type: 'language' }).of(code) || code; } catch { return code; }
@@ -64,10 +66,11 @@ export function langName(code, locale) {
 // The provenance badge for a clip's transcription, shared by the room's list
 // and the review page: { text, title } when the cloud fallback ran (or was
 // tried and failed), null otherwise. Pending and older clips carry no backend.
-export function cloudBadge(tr) {
+// `lang` is the interface language (the review page stays English).
+export function cloudBadge(tr, lang = 'en') {
   if (!tr) return null;
-  const title = [tr.backend, tr.model, tr.cloud?.reason ? `local result rejected as ${tr.cloud.reason}` : ''].filter(Boolean).join(' · ');
-  if (tr.cloud?.error) return { text: 'cloud transcription failed, local text kept', title: [title, tr.cloud.error].filter(Boolean).join(' · ') };
-  if (tr.backend && tr.backend !== 'local') return { text: 'transcribed in the cloud', title };
+  const title = [tr.backend, tr.model, tr.cloud?.reason ? t('list.cloudRejected', { reason: tr.cloud.reason }, lang) : ''].filter(Boolean).join(' · ');
+  if (tr.cloud?.error) return { text: t('list.cloudFailed', {}, lang), title: [title, tr.cloud.error].filter(Boolean).join(' · ') };
+  if (tr.backend && tr.backend !== 'local') return { text: t('list.cloud', {}, lang), title };
   return null;
 }

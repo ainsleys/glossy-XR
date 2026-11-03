@@ -28,7 +28,8 @@ import { PointerLockControls } from 'three/addons/controls/PointerLockControls.j
 import { VoiceRecorder } from './recorder.js';
 import { connect, projects as projectsApi, assets as assetsApi, annotations as annotationsApi, chat as chatApi } from './api.js';
 import { loadModel, SUPPORTED_EXTENSIONS } from './loaders.js';
-import { unclearReason, UNCLEAR_TEXT, langName, cloudBadge } from '../../shared/text.js';
+import { unclearReason, langName, cloudBadge } from '../../shared/text.js';
+import { t, num, plural, LANGS } from '../../shared/strings.js';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 
 // BVH-accelerated raycasts for every mesh: anchoring, hover, and collision
@@ -65,6 +66,13 @@ const handsSummary = (h) => h?.frames?.length ? { frames: h.frames.length, ms: h
 // erased from this page. It is a presentation setting, not access control.
 const VISITOR = new URLSearchParams(location.search).get('mode') === 'visitor';
 document.body.classList.toggle('visitor', VISITOR);
+// Interface language for what a contributor reads (shared/strings.js): ?lang=
+// for this page if given (a kiosk, a test), else the project's uiLanguage, else
+// English. Operator panels stay English. T() is the room's way to say anything.
+const langQuery = new URLSearchParams(location.search).get('lang');
+const LANG_OVERRIDE = LANGS.includes(langQuery) ? langQuery : null;
+let LANG = LANG_OVERRIDE || 'en';
+const T = (key, vars) => t(key, vars, LANG);
 log('session:start', { ua: navigator.userAgent.slice(0, 200), visitor: VISITOR, viewport: [innerWidth, innerHeight], href: location.pathname + location.search });
 const hud = {
   project: $('project'), newProject: $('newProject'), modelInfo: $('modelInfo'),
@@ -73,8 +81,18 @@ const hud = {
   t: { scale: $('tScale'), rotX: $('tRotX'), rotY: $('tRotY'), rotZ: $('tRotZ'), x: $('tX'), y: $('tY'), z: $('tZ'), pointSize: $('tPointSize') },
   zUp: $('zUp'), autoFit: $('autoFit'), resetFit: $('resetFit'), saveTransform: $('saveTransform'), selectedName: $('selectedName'),
   walk: $('walk'), autoplay: $('autoplay'), voiceStart: $('voiceStart'), locoHand: $('locoHand'), locoMode: $('locoMode'), recordMode: $('recordMode'), thumbSource: $('thumbSource'), ghostStyle: $('ghostStyle'), ghostTrail: $('ghostTrail'), reviewLink: $('reviewLink'), language: $('language'), cloudFallback: $('cloudFallback'), consentText: $('consentText'), timeAll: $('timeAll'), year: $('year'), yearLabel: $('yearLabel'), periodBands: $('periodBands'),
-  interview: $('interview'), visitorLink: $('visitorLink'), question: $('question'), level: $('level'), levelBar: $('levelBar'), hint: $('hint'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
+  uiLanguage: $('uiLanguage'), interview: $('interview'), visitorLink: $('visitorLink'), question: $('question'), level: $('level'), levelBar: $('levelBar'), hint: $('hint'), prevQ: $('prevQ'), askQ: $('askQ'), nextQ: $('nextQ'), scriptText: $('scriptText'), saveScript: $('saveScript'),
 };
+// Fixed page text a contributor reads: elements marked data-t (text), data-t-title
+// and data-t-placeholder in index.html take their string from the table.
+function applyHtmlStrings() {
+  document.documentElement.lang = LANG; document.title = T('html.title');
+  for (const el of document.querySelectorAll('[data-t]')) el.textContent = T(el.dataset.t);
+  for (const el of document.querySelectorAll('[data-t-title]')) el.title = T(el.dataset.tTitle);
+  for (const el of document.querySelectorAll('[data-t-placeholder]')) el.placeholder = T(el.dataset.tPlaceholder);
+}
+applyHtmlStrings();
+hud.status.textContent = T('status.connecting');
 const ls = { get: (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 hud.author.value = ls.get('glossy.author', '');
 hud.layer.value = ls.get('glossy.layer', 'default');
@@ -92,8 +110,8 @@ let micState = 'unasked';            // unasked | asking | ready | blocked | end
 async function readyMic() {
   if (micState === 'ready' || micState === 'asking') return;
   micState = 'asking';
-  try { await recorder.init(); attachLevel(recorder.stream); micState = 'ready'; setStatus('microphone ready', { hold: 1500 }); log('mic:ready'); }
-  catch (e) { micState = 'blocked'; setStatus('microphone blocked: ' + e.message, { hold: 4000 }); log('mic:error', { error: e.message }); }
+  try { await recorder.init(); attachLevel(recorder.stream); micState = 'ready'; setStatus(T('status.micReady'), { hold: 1500 }); log('mic:ready'); }
+  catch (e) { micState = 'blocked'; setStatus(T('status.micBlocked', { error: e.message }), { hold: 4000 }); log('mic:error', { error: e.message }); }
 }
 if (hud.consent.checked) document.addEventListener('pointerdown', () => { if (hud.consent.checked) readyMic(); }, { once: true });   // the box may have been unticked since (renderConsentLabel)
 hud.walk.checked = ls.get('glossy.walk', '1') === '1';
@@ -125,19 +143,20 @@ const setStatus = (t, { hold = 0, idle = false } = {}) => {
   if (hold) setTimeout(refreshIdleStatus, hold + 20);   // then let hover or approach text take over
 };
 const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const fmtDur = (ms) => (ms ? (ms / 1000).toFixed(1) + 's' : '');
+const fmtDur = (ms) => (ms ? T('list.seconds', { n: num(ms / 1000, 1, LANG) }) : '');
 const snippet = (t, n = 70) => (t.length > n ? t.slice(0, n - 1).trimEnd() + '…' : t);
 // When a clip is from: its period label if it has one, otherwise how long ago it was recorded.
 const whenOf = (r) => {
   if (r.period) return r.period.label || [r.period.from, r.period.to].filter(Boolean).join('–');
   const days = Math.floor((Date.now() - Date.parse(r.createdAt)) / 86400e3);
   if (!(days >= 0)) return '';
-  return days < 1 ? 'today' : days < 30 ? `${days} day${days === 1 ? '' : 's'} ago` : days < 365 ? `${Math.max(1, Math.floor(days / 30))} months ago` : `${Math.floor(days / 365)} year${days < 730 ? '' : 's'} ago`;
+  const ago = (key, n) => T(plural(key, n), { n });
+  return days < 1 ? T('list.today') : days < 30 ? ago('list.daysAgo', days) : days < 365 ? ago('list.monthsAgo', Math.max(1, Math.floor(days / 30))) : ago('list.yearsAgo', Math.floor(days / 365));
 };
 // One line about a clip for the status row: author · when · layer (unless default) · length · first words.
-const linksOf = (r) => { const n = (r.links || []).length; return n ? `${n} ${(r.links || []).every((l) => l.kind === 'image') ? 'photo' : 'attachment'}${n === 1 ? '' : 's'}` : ''; };
+const linksOf = (r) => { const n = (r.links || []).length; return n ? T(plural((r.links || []).every((l) => l.kind === 'image') ? 'list.photos' : 'list.attachments', n), { n }) : ''; };
 const spokenText = (r) => (r.transcript && !unclearReason(r.transcript) ? r.transcript : '');   // older records may hold a loop the guard now catches
-const describeRecord = (r) => [r.author, whenOf(r), r.layer !== 'default' ? r.layer : '', fmtDur(r.durationMs), linksOf(r), r.hands ? 'gesture' : '', spokenText(r) ? '“' + snippet(spokenText(r)) + '”' : ''].filter(Boolean).join(' · ');
+const describeRecord = (r) => [r.author, whenOf(r), r.layer !== 'default' ? r.layer : '', fmtDur(r.durationMs), linksOf(r), r.hands ? T('list.gesture') : '', spokenText(r) ? '“' + snippet(spokenText(r)) + '”' : ''].filter(Boolean).join(' · ');
 
 // ---- renderer / scene ------------------------------------------------------
 
@@ -208,20 +227,22 @@ const chatPanel = (() => {
   let shown = '', hot = false;
   const wrap = (text, max) => { const lines = []; let cur = ''; for (const w of String(text).split(/\s+/)) { const t = cur ? cur + ' ' + w : w; if (cur && ctx.measureText(t).width > max) { lines.push(cur); cur = w; } else cur = t; } if (cur) lines.push(cur); return lines; };
   function draw(state, hovered) {
-    const key = messages.map((m) => m.id + ':' + m.status + ':' + m.text).join('|') + '\n' + state + (hovered ? 'H' : '');
+    const key = messages.map((m) => m.id + ':' + m.status + ':' + m.text).join('|') + '\n' + state + (hovered ? 'H' : '') + LANG;
     if (key === shown) return;
     shown = key;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = state === 'listening' ? 'rgba(60,20,0,0.78)' : 'rgba(0,0,0,0.7)';
     ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(0, 0, canvas.width, canvas.height, 28); else ctx.rect(0, 0, canvas.width, canvas.height); ctx.fill();
     if (hovered) { ctx.strokeStyle = '#9fd3ff'; ctx.lineWidth = 8; ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(4, 4, canvas.width - 8, canvas.height - 8, 26); else ctx.rect(4, 4, canvas.width - 8, canvas.height - 8); ctx.stroke(); }
-    // messages, newest at the bottom, as many as fit
+    // messages, newest at the bottom, as many as fit; the text starts right of the longest speaker label
+    ctx.font = '600 26px system-ui, sans-serif';
+    const textX = Math.max(100, 40 + Math.max(...['chat.laptop', 'chat.you'].map((k) => ctx.measureText(T(k)).width)));
     const lines = [];
     for (const m of messages) {
-      const who = m.role === 'operator' ? 'laptop' : 'you';
-      const text = m.status === 'pending' ? '…' : m.status === 'failed' ? '(not understood)' : m.text;
+      const who = T(m.role === 'operator' ? 'chat.laptop' : 'chat.you');
+      const text = m.status === 'pending' ? '…' : m.status === 'failed' ? T('chat.notUnderstood') : m.text;
       ctx.font = '36px system-ui, sans-serif';
-      const ws = wrap(text, canvas.width - 100);
+      const ws = wrap(text, canvas.width - textX);
       lines.push({ who, first: true, text: ws[0] || '', role: m.role });
       for (const l of ws.slice(1)) lines.push({ who, first: false, text: l, role: m.role });
       lines.push(null);
@@ -233,13 +254,13 @@ const chatPanel = (() => {
       if (l === null) { y -= 18; continue; }
       ctx.fillStyle = l.role === 'operator' ? '#9fd3ff' : '#fff';
       ctx.font = '36px system-ui, sans-serif';
-      ctx.fillText(l.text, 100, y);
+      ctx.fillText(l.text, textX, y);
       if (l.first) { ctx.fillStyle = '#8a9bb0'; ctx.font = '600 26px system-ui, sans-serif'; ctx.fillText(l.who, 24, y); }
       y -= lh;
     }
     // state line
     ctx.fillStyle = state === 'listening' ? '#ff9b6b' : '#9ab'; ctx.font = '30px system-ui, sans-serif';
-    const line = state === 'listening' ? 'listening… pause, or pinch here again, to send' : state === 'sending' ? 'sending…' : state === 'transcribing' ? 'the laptop is reading it…' : 'pinch this panel to talk to the laptop';
+    const line = T(state === 'listening' ? 'chat.listening' : state === 'sending' ? 'chat.sending' : state === 'transcribing' ? 'chat.transcribing' : 'chat.idle');
     ctx.fillText(line, 24, canvas.height - 40);
     tex.needsUpdate = true;
   }
@@ -251,12 +272,12 @@ function updateXrPanel() {
   chatPanel.mesh.visible = chatPanel.messages.length > 0 || !!messaging || chatPanel.hot;
   if (chatPanel.mesh.visible) chatPanel.draw(messaging ? 'listening' : chatPanel.messages.some((m) => m.role === 'visitor' && m.status === 'pending' && m.mine) ? 'transcribing' : 'idle', chatPanel.hot);
   const qs = questions(), q = currentQuestion();
-  const question = q ? `${qIndex + 1}/${qs.length} · ${q.text}` : qs.length && qIndex >= qs.length ? 'all questions answered' : '';
+  const question = q ? `${qIndex + 1}/${qs.length} · ${q.text}` : qs.length && qIndex >= qs.length ? T('hint.allAnswered') : '';
   const hands = handsPresent();
-  const act = hands ? (recordMode() === 'mic' ? 'raise the microphone on your left wrist to answer' : recordMode() === 'voice' && hud.voiceStart.checked ? 'pinch, or just speak, to answer' : 'pinch and hold to answer') : 'hold the trigger to answer';
-  let hint = q ? (VISITOR && !hands ? 'squeeze: hear the question · ' + act : act) : hands ? (recordMode() === 'mic' ? 'look at a thing, raise the microphone on your left wrist, talk, lower it' : recordMode() === 'voice' && hud.voiceStart.checked ? 'speak to leave a clip where you look · pinch to hold one' : 'pinch and hold to leave a clip where you look') : '';
-  if (micState !== 'ready' && !recorder.isRecording) hint = micState === 'blocked' ? 'microphone blocked: leave VR and allow it in the browser' : micState === 'ended' ? 'microphone stopped while the headset slept: pinch, or speak, to open it again' : 'microphone not yet allowed: tick consent on the page before entering VR';
-  else if (!hud.consent.checked && !recorder.isRecording) hint = 'consent needed: tick consent on the page';   // an open microphone, but the box was unticked when the label changed
+  const act = T(hands ? (recordMode() === 'mic' ? 'hint.answerMic' : recordMode() === 'voice' && hud.voiceStart.checked ? 'hint.answerVoice' : 'hint.answerPinch') : 'hint.answerTrigger');
+  let hint = q ? (VISITOR && !hands ? T('hint.squeezeThen', { act }) : act) : hands ? T(recordMode() === 'mic' ? 'hint.leaveMic' : recordMode() === 'voice' && hud.voiceStart.checked ? 'hint.leaveVoice' : 'hint.leavePinch') : '';
+  if (micState !== 'ready' && !recorder.isRecording) hint = T(micState === 'blocked' ? 'hint.micBlocked' : micState === 'ended' ? 'hint.micEnded' : 'hint.micNotAllowed');
+  else if (!hud.consent.checked && !recorder.isRecording) hint = T('hint.consentNeeded');   // an open microphone, but the box was unticked when the label changed
   xrPanel.draw(question, hud.status.textContent, hint, hud.rec.classList.contains('on'), level);
 }
 
@@ -266,10 +287,10 @@ let shownHint = null;
 function renderHint() {
   let h = '';
   if (renderer.xr.isPresenting) h = '';
-  else if (recorder.isRecording || starting) h = 'release to save · Esc also saves';
-  else if (!captured()) h = 'click the scene to take the mouse';
-  else if (hoverId) h = `click: play · hold R: reply${VISITOR ? '' : ' · Delete ×2: erase'}`;
-  else h = 'hold the mouse button: record here · walk up to a marker to read it · W A S D: move';
+  else if (recorder.isRecording || starting) h = T('hint.release');
+  else if (!captured()) h = T('hint.capture');
+  else if (hoverId) h = T(VISITOR ? 'hint.hoverVisitor' : 'hint.hover');
+  else h = T('hint.idle');
   if (h !== shownHint) { shownHint = h; hud.hint.textContent = h; }
 }
 
@@ -292,7 +313,7 @@ function updateLevel() {
   hud.level.classList.add('on');
   hud.levelBar.style.width = `${Math.round(level * 100)}%`;
   const secs = Math.floor((performance.now() - recorder.startedAt) / 1000);
-  if (secs !== recSecs) { recSecs = secs; setStatus(`${recStatusBase} ${secs}s`); }
+  if (secs !== recSecs) { recSecs = secs; setStatus(T('status.recTimer', { base: recStatusBase, secs })); }
 }
 
 // player rig so desktop movement and XR share one transform
@@ -598,8 +619,9 @@ async function openProject(id) {
   hud.project.value = id;
   hud.exportLink.href = `/api/projects/${id}/export`;
   hud.edmLink.href = `/api/projects/${id}/export?format=edm`;
-  history.replaceState(null, '', `?project=${id}${VISITOR ? '&mode=visitor' : ''}`);
-  hud.visitorLink.href = `?project=${id}&mode=visitor`;
+  const langQ = LANG_OVERRIDE ? `&lang=${LANG_OVERRIDE}` : '';   // a kiosk's ?lang= survives a reload and goes with the visitor link
+  history.replaceState(null, '', `?project=${id}${VISITOR ? '&mode=visitor' : ''}${langQ}`);
+  hud.visitorLink.href = `?project=${id}&mode=visitor${langQ}`;
   hud.reviewLink.href = `/review.html?project=${id}`;
   log.setProject(id); log('project:open', { id, name: project.name, assets: (project.assets || []).length });
   chatPanel.messages.length = 0; chatApi.list(id).then((rows) => { for (const m of rows.slice(-20)) onChat(m); }).catch(() => {});
@@ -617,6 +639,8 @@ async function openProject(id) {
 let shownScript = null;
 function projectToHud({ fresh = false } = {}) {
   hud.language.value = project?.language || '';
+  hud.uiLanguage.value = project?.uiLanguage || 'en';
+  setLang(LANG_OVERRIDE || project?.uiLanguage || 'en');
   hud.cloudFallback.checked = cloudOn();
   renderConsentLabel();
   const scriptKey = JSON.stringify((project?.script?.questions || []).map((q) => q.text));
@@ -635,6 +659,14 @@ hud.language.addEventListener('change', async () => {
     setStatus(hud.language.value ? 'transcription language: ' + hud.language.value : 'transcription language: detect');
   } catch (e) { hud.language.value = project.language || ''; setStatus('language not saved: ' + e.message); }
 });
+hud.uiLanguage.addEventListener('change', async () => {
+  if (!project) return;
+  try {
+    project = await projectsApi.update(project.id, { uiLanguage: hud.uiLanguage.value });
+    setStatus('interface language: ' + project.uiLanguage);
+  } catch (e) { hud.uiLanguage.value = project.uiLanguage || 'en'; setStatus('interface language not saved: ' + e.message); }
+  projectToHud();
+});
 hud.cloudFallback.addEventListener('change', async () => {
   if (!project) return;
   try {
@@ -646,15 +678,22 @@ hud.cloudFallback.addEventListener('change', async () => {
 // The consent label follows the project: with the cloud fallback on it names the
 // external transcriber. Consent given to the plain label does not cover that, so
 // the box is unticked and has to be ticked again here.
-const CONSENT_PLAIN = 'I consent to my recording being stored and shared';
-const CONSENT_CLOUD = CONSENT_PLAIN + ', and transcribed by an external service when the local transcriber cannot read it';
+// Switch the interface language: redraw what was already drawn in the old one.
+// The status line keeps its text until the next message.
+function setLang(lang) {
+  if (lang === LANG) return;
+  LANG = lang;
+  applyHtmlStrings();
+  shownHint = null; shownBands = null;
+  renderConsentLabel(); renderInterview(); updateCount(); updateYearBounds(); renderList();
+}
 function cloudOn() { return !!project?.cloudFallback; }
 function renderConsentLabel() {
-  hud.consentText.textContent = cloudOn() ? CONSENT_CLOUD : CONSENT_PLAIN;
+  hud.consentText.textContent = T(cloudOn() ? 'consent.cloud' : 'consent.plain');
   if (cloudOn() && hud.consent.checked && ls.get('glossy.consent', '0') !== 'cloud') {
     hud.consent.checked = false;
     ls.set('glossy.consent', '0');
-    setStatus('this project may send unclear clips to an external transcriber: read the consent again and tick it to record', { hold: 6000 });
+    setStatus(T('consent.reset'), { hold: 6000 });
     log('consent:reset', { project: project.id });
   }
 }
@@ -681,7 +720,7 @@ function renderInterview() {
   const q = currentQuestion();
   hud.question.textContent = !project?.script?.questions?.length ? (VISITOR ? '' : 'no script: add questions below')
     : !interviewOn() ? `${project.script.questions.length} question${project.script.questions.length === 1 ? '' : 's'} (tick to start)`
-    : q ? `${qIndex + 1}/${qs.length} · ${q.text}` : 'all questions answered';
+    : q ? `${qIndex + 1}/${qs.length} · ${q.text}` : T('hint.allAnswered');
   hud.prevQ.disabled = !qs.length || qIndex === 0;
   hud.nextQ.disabled = !qs.length || qIndex >= qs.length;
   hud.askQ.disabled = !q;
@@ -707,8 +746,8 @@ function askCurrent() {
   lastAsked = q.text;
   const r = speak(q.text);
   log('question:ask', { index: qIndex, result: r });
-  if (r === 'muted') setStatus('finish recording first; the question is not read while the microphone is open');
-  else if (r === 'unavailable') setStatus('speech synthesis unavailable here; read the question from the panel');
+  if (r === 'muted') setStatus(T('status.askMuted'));
+  else if (r === 'unavailable') setStatus(T('status.askUnavailable'));
 }
 hud.askQ.addEventListener('click', askCurrent);
 
@@ -796,7 +835,7 @@ function removeMarker({ id }) {
 }
 function clearMarkers() { for (const id of [...markers.keys()]) removeMarker({ id }); }
 function updateCount() {
-  hud.count.textContent = `${markers.size} annotation${markers.size === 1 ? '' : 's'}`;
+  hud.count.textContent = T(plural('html.count', markers.size), { n: markers.size });
   const o = project && [...hud.project.options].find((o) => o.value === project.id);   // keep the selector's count in step
   if (o) o.textContent = `${o.dataset.name} (${markers.size})${o.dataset.suffix || ''}`;
 }
@@ -846,7 +885,7 @@ function updateYearBounds() {
   else {
     const y = Number(hud.year.value);
     const covering = distinctPeriods().filter(({ period }) => yearOf(period.from, -Infinity) <= y && y <= yearOf(period.to, Infinity)).map(({ period }) => periodLabelOf(period));
-    hud.yearLabel.textContent = `${hud.year.value} · ${covering.length ? covering.join(', ') : 'between periods'} · ${vis}/${markers.size}`;
+    hud.yearLabel.textContent = `${hud.year.value} · ${covering.length ? covering.join(', ') : T('html.betweenPeriods')} · ${vis}/${markers.size}`;
   }
 }
 
@@ -884,7 +923,7 @@ function renderBands() {
     s.style.width = `${Math.max(((b - a) / span) * 100, 1)}%`;
     s.style.top = `${lane * 10}px`;
     s.style.background = '#' + markerColor({ period, createdAt: new Date().toISOString() }).getHexString();
-    s.title = `${periodLabelOf(period)} · ${a}–${b} · ${n} clip${n === 1 ? '' : 's'}`;
+    s.title = `${periodLabelOf(period)} · ${a}–${b} · ${T(plural('list.clips', n), { n })}`;
     s.textContent = periodLabelOf(period);
     el.appendChild(s);
   }
@@ -898,7 +937,7 @@ function applyTime() {
   }
   updateYearBounds();
   renderList();
-  if (!hud.timeAll.checked) setStatus(`year ${hud.year.value}: ${[...markers.values()].filter((m) => m.mesh.visible).length} of ${markers.size} clips in view`);
+  if (!hud.timeAll.checked) setStatus(T('status.yearView', { year: hud.year.value, n: [...markers.values()].filter((m) => m.mesh.visible).length, total: markers.size }));
 }
 hud.timeAll.addEventListener('change', applyTime);
 hud.year.addEventListener('input', applyTime);
@@ -976,9 +1015,9 @@ function stopAll(reason = 'other') {
 function play(id) {
   const m = markers.get(id);
   if (!m) return;
-  if (!m.sound.buffer) return setStatus('audio still loading…', { hold: 1000 });
+  if (!m.sound.buffer) return setStatus(T('status.audioLoading'), { hold: 1000 });
   if (listener.context.state === 'suspended') listener.context.resume();
-  if (playingId === id) { stopAll('click'); setStatus('■ stopped'); return; }   // click the playing marker again to stop
+  if (playingId === id) { stopAll('click'); setStatus(T('status.stopped')); return; }   // click the playing marker again to stop
   stopAll('other');
   m.sound.onEnded = () => { m.sound.isPlaying = false; ghost.hide(); viewpoint.hide(); if (playingId === id) { log('play:stop', { id, reason: 'ended' }); playingId = null; m.mesh.userData.playing = false; m.mesh.material.emissiveIntensity = 0.35; renderList(); } };
   m.sound.play();
@@ -991,7 +1030,7 @@ function play(id) {
   m.mesh.userData.playing = true;
   m.mesh.material.emissiveIntensity = 1.0;
   renderList();
-  setStatus(`▶ ${describeRecord(m.record)}${m.record.anchor.objectId ? ' · ' + m.record.anchor.objectId : ''}`);
+  setStatus(T(m.record.anchor.objectId ? 'status.playingOn' : 'status.playing', { desc: describeRecord(m.record), object: m.record.anchor.objectId }));
 }
 
 // Erase asks twice everywhere: the first press (Delete at the crosshair, or ✕
@@ -1000,7 +1039,7 @@ function play(id) {
 let armedDelete = null;   // { id, timer }
 function armDelete(id, message) {
   if (!markers.has(id)) return;
-  if (VISITOR) return setStatus('erasing is done at the desk; ask and your recording will be removed');
+  if (VISITOR) return setStatus(T('status.eraseAtDesk'));
   if (armedDelete?.id === id) { clearTimeout(armedDelete.timer); armedDelete = null; return deleteAnnotation(id); }
   if (armedDelete) clearTimeout(armedDelete.timer);
   armedDelete = { id, timer: setTimeout(() => { if (armedDelete?.id === id) { armedDelete = null; renderList(); } }, DELETE_ARM_MS) };
@@ -1054,12 +1093,12 @@ function setNear(id) {
 // clip, else nothing while a clip plays, else the near clip, else blank.
 function refreshIdleStatus() {
   if (recorder.isRecording || starting) return;
-  const press = !renderer.xr.isPresenting ? 'click' : handsPresent() ? 'pinch' : 'trigger';          // the same line reads on the headset panel
+  const how = !renderer.xr.isPresenting ? 'click' : handsPresent() ? 'pinch' : 'trigger';          // the same line reads on the headset panel
   const cur = markers.get(hoverId);
-  if (cur) return setStatus(`${describeRecord(cur.record)} — ${press} to ${cur.record.id === playingId ? 'stop' : 'play'}`, { idle: true });
+  if (cur) return setStatus(T(cur.record.id === playingId ? 'status.hoverStop' : 'status.hoverPlay', { desc: describeRecord(cur.record), press: T('status.press.' + how) }), { idle: true });
   if (playingId) return;
   const n = markers.get(nearId);
-  if (n) return setStatus(`near: ${describeRecord(n.record)} — ${!renderer.xr.isPresenting ? 'click it' : handsPresent() ? 'point and pinch' : 'point and pull the trigger'} to play`, { idle: true });
+  if (n) return setStatus(T('status.near', { desc: describeRecord(n.record), act: T('status.nearAct.' + how) }), { idle: true });
   setStatus('', { idle: true });
 }
 
@@ -1107,22 +1146,23 @@ function renderList() {
     const tr = record.transcription || {};
     const unclear = tr.unclear || unclearReason(record.transcript);         // stored as unclear, or an older transcript the guard now catches
     const text = record.transcript && !unclear ? `<div class="text">${esc(record.transcript)}</div>`
-      : tr.status === 'pending' ? `<div class="text pending">transcribing…</div>`
-      : tr.status === 'failed' ? `<div class="text failed" title="${esc(tr.error || '')}">transcription failed <button class="retry">retry</button></div>`
-      : unclear ? `<div class="text pending" title="${esc(tr.raw || record.transcript || '')}">(${UNCLEAR_TEXT[unclear] || 'unclear'})</div>`
-      : tr.status === 'done' ? `<div class="text pending">(no speech detected)</div>` : '';
+      : tr.status === 'pending' ? `<div class="text pending">${esc(T('list.transcribing'))}</div>`
+      : tr.status === 'failed' ? `<div class="text failed" title="${esc(tr.error || '')}">${esc(T('list.failed'))} <button class="retry">retry</button></div>`
+      : unclear ? `<div class="text pending" title="${esc(tr.raw || record.transcript || '')}">(${esc(T(['repetition', 'silence'].includes(unclear) ? 'list.unclear.' + unclear : 'list.unclear'))})</div>`
+      : tr.status === 'done' ? `<div class="text pending">${esc(T('list.noSpeech'))}</div>` : '';
     const periodLabel = record.period ? (record.period.label || [record.period.from, record.period.to].filter(Boolean).join('–')) : '';
-    const cloud = cloudBadge(tr);
-    const badges = (cloud ? `<span class="badge cloud" title="${esc(cloud.title)}">${esc(cloud.text)}</span>` : '') + (record.hands ? `<span class="badge" title="${esc(describeHands(record.hands))}">✋</span>` : '') + (record.replies ? `<span class="badge" title="replies">↩ ${record.replies}</span>` : '') + (periodLabel ? `<span class="period" title="period">${esc(periodLabel)}</span>` : '');
-    const prompt = record.prompt ? `<div class="prompt">Q: ${esc(record.prompt)}</div>` : '';
+    const cloud = cloudBadge(tr, LANG);
+    const badges = (cloud ? `<span class="badge cloud" title="${esc(cloud.title)}">${esc(cloud.text)}</span>` : '') + (record.hands ? `<span class="badge" title="${esc(describeHands(record.hands, LANG))}">✋</span>` : '') + (record.replies ? `<span class="badge" title="${esc(T('list.replies'))}">↩ ${record.replies}</span>` : '') + (periodLabel ? `<span class="period" title="${esc(T('list.period'))}">${esc(periodLabel)}</span>` : '');
+    const prompt = record.prompt ? `<div class="prompt">${esc(T('list.prompt', { prompt: record.prompt }))}</div>` : '';
     // the project or clip forced one language and the model heard another: say so, offer the other decoder
     const mismatch = tr.status === 'done' && tr.heard && tr.language && tr.heard !== tr.language;
-    const note = mismatch ? `<div class="note" title="the language was set to ${esc(langName(tr.language))}; the model's own detection says ${esc(langName(tr.heard))}">sounds like ${esc(langName(tr.heard))}, transcribed as ${esc(langName(tr.language))}${VISITOR ? '' : ` <button class="asHeard">transcribe as ${esc(langName(tr.heard))}</button>`}</div>` : '';
+    const heard = langName(tr.heard, LANG), set = langName(tr.language, LANG);
+    const note = mismatch ? `<div class="note" title="${esc(T('list.soundsLikeTitle', { lang: set, heard }))}">${esc(T('list.soundsLike', { heard, lang: set }))}${VISITOR ? '' : ` <button class="asHeard">transcribe as ${esc(langName(tr.heard))}</button>`}</div>` : '';
     const armed = armedDelete?.id === record.id;
     const when = whenOf(record);
     const sw = markers.get(record.id)?.mesh.material.color.getStyle() || '#888';
     const photos = linksOf(record);
-    li.innerHTML = `<button class="play" title="play">${record.id === playingId ? '■' : '▶'}</button><span class="sw" style="background:${sw}" title="${esc(when)}"></span><span class="who" title="turn to this clip">${esc(record.author)}</span><span class="meta" title="${esc([when, record.anchor.objectId ? 'on ' + record.anchor.objectId : ''].filter(Boolean).join(' · '))}">${record.layer !== 'default' ? esc(record.layer) + ' · ' : ''}${record.period ? '' : esc(when) + ' · '}${fmtDur(record.durationMs)}${photos ? ' · ' + photos : ''}</span>${badges}<button class="del${armed ? ' armed' : ''}" title="${armed ? 'click again to erase' : 'erase (asks twice)'}">${armed ? 'erase?' : '✕'}</button>${prompt}${text}${note}`;
+    li.innerHTML = `<button class="play" title="${esc(T('list.play'))}">${record.id === playingId ? '■' : '▶'}</button><span class="sw" style="background:${sw}" title="${esc(when)}"></span><span class="who" title="${esc(T('list.turnTo'))}">${esc(record.author)}</span><span class="meta" title="${esc([when, record.anchor.objectId ? T('list.onObject', { object: record.anchor.objectId }) : ''].filter(Boolean).join(' · '))}">${record.layer !== 'default' ? esc(record.layer) + ' · ' : ''}${record.period ? '' : esc(when) + ' · '}${fmtDur(record.durationMs)}${photos ? ' · ' + photos : ''}</span>${badges}<button class="del${armed ? ' armed' : ''}" title="${armed ? 'click again to erase' : 'erase (asks twice)'}">${armed ? 'erase?' : '✕'}</button>${prompt}${text}${note}`;
     li.querySelector('.play').addEventListener('click', () => play(record.id));
     li.querySelector('.who').addEventListener('click', () => focusMarker(record.id));
     li.querySelector('.del').addEventListener('click', () => armDelete(record.id, 'click ✕ again to erase this clip'));
@@ -1153,7 +1193,7 @@ function attachLevel(stream) {
 recorder.onstart = (stream) => { attachLevel(stream); if (micState !== 'ready') { log('mic:ready', { via: micState === 'ended' ? 'reacquired' : 'first clip' }); micState = 'ready'; } };
 // The browser ended the microphone track (headset asleep, device unplugged). A clip in flight is
 // closed by the loop's track-ended check; the next clip, or the hands reconnecting, asks again.
-recorder.onended = () => { micState = 'ended'; log('mic:ended', { recording: !!anchorSource }); if (!anchorSource) setStatus('microphone stopped; it is asked for again on the next clip', { hold: 3000 }); };
+recorder.onended = () => { micState = 'ended'; log('mic:ended', { recording: !!anchorSource }); if (!anchorSource) setStatus(T('status.micEnded'), { hold: 3000 }); };
 const cursor = new THREE.Mesh(new THREE.SphereGeometry(MARKER_RADIUS * 1.2, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff3333, wireframe: true }));
 cursor.visible = false;
 scene.add(cursor);
@@ -1187,16 +1227,16 @@ function poseStop() { clearInterval(pose.timer); pose.timer = null; poseSample()
 async function beginRecording(source, opts = {}) {
   if (recorder.isRecording || starting || messaging) return;
   const via = opts.voice ? 'voice' : opts.parent ? 'reply' : source === camera ? (opts.via || 'key') : handsPresent() ? 'pinch' : 'trigger';
-  if (!project) { log('record:blocked', { reason: 'no project', via }); return setStatus('no project'); }
-  if (!hud.author.value.trim()) { log('record:blocked', { reason: 'no name', via }); return setStatus('enter your name first'); }
-  if (!hud.consent.checked) { log('record:blocked', { reason: 'no consent', via }); return setStatus('tick consent first'); }
+  if (!project) { log('record:blocked', { reason: 'no project', via }); return setStatus(T('status.noProject')); }
+  if (!hud.author.value.trim()) { log('record:blocked', { reason: 'no name', via }); return setStatus(T('status.noName')); }
+  if (!hud.consent.checked) { log('record:blocked', { reason: 'no consent', via }); return setStatus(T('status.noConsent')); }
   if ('speechSynthesis' in window) speechSynthesis.cancel();   // never record over our own voice
   starting = source; releasedEarly = false; recOpts = { ...opts, projectId: project.id, via };
-  setStatus('starting microphone…');
+  setStatus(T('status.micStarting'));
   try { await recorder.start(); }
   catch (e) {
     try { recorder.release(); await recorder.start(); }   // a stream the browser ended under us (headset asleep, device gone): ask once more before giving up
-    catch (e2) { starting = null; micState = 'blocked'; log('record:blocked', { reason: 'mic', via, error: e2.message }); return setStatus('mic blocked: ' + e2.message); }
+    catch (e2) { starting = null; micState = 'blocked'; log('record:blocked', { reason: 'mic', via, error: e2.message }); return setStatus(T('status.micBlockedShort', { error: e2.message })); }
   }
   starting = null;
   log('record:start', { source: via, question: currentQuestion() ? qIndex : undefined, layer: hud.layer.value, presenting: renderer.xr.isPresenting, hands: handsPresent() });
@@ -1207,9 +1247,9 @@ async function beginRecording(source, opts = {}) {
   hud.rec.classList.add('on'); crosshair.classList.add('rec');
   const q = currentQuestion();
   recPeak = 0;
-  recStatusBase = opts.parent ? 'recording a reply…' : opts.via === 'mic' ? (opts.anchor?.objectId ? `talking about ${opts.anchor.objectId}…` : 'talking…') : q ? `recording answer ${qIndex + 1}…` : VISITOR ? 'recording…' : 'recording… (' + hud.layer.value + ')';
+  recStatusBase = opts.parent ? T('status.recordingReply') : opts.via === 'mic' ? (opts.anchor?.objectId ? T('status.talkingAbout', { object: opts.anchor.objectId }) : T('status.talking')) : q ? T('status.recordingAnswer', { n: qIndex + 1 }) : VISITOR ? T('status.recording') : T('status.recordingLayer', { layer: hud.layer.value });
   recSecs = -1;
-  setStatus(recStatusBase + ' 0s');
+  setStatus(T('status.recTimer', { base: recStatusBase, secs: 0 }));
   if (releasedEarly) endRecording();  // the first press on a cold mic: honour the release that already happened
 }
 
@@ -1249,7 +1289,7 @@ async function endRecording(reason = 'release') {
     anchorSource = null;
     await recorder.stop(); resetRecordingUi();
     log('record:end', { reason: 'project-changed', source: opts.via, durationMs: heldMs }); log('record:discarded', { reason: 'project changed', source: opts.via });
-    return setStatus('project changed while recording; clip discarded');
+    return setStatus(T('status.projectChanged'));
   }
   const parentRec = opts.parent ? markers.get(opts.parent)?.record : null;
   const { point: anchor, objectId } = parentRec
@@ -1263,7 +1303,7 @@ async function endRecording(reason = 'release') {
   resetRecordingUi();
   log('record:end', { reason, source: opts.via, durationMs: heldMs, hands: handsSummary(hands) });
   if (!clip) { clearProvisional(provisional); saving = false; log('record:discarded', { reason: 'too short', source: opts.via, durationMs: heldMs }); return setStatus(''); }   // quietly: a slipped pinch is not worth a message (Ainsley, 21 Oct)
-  setStatus('saving…');
+  setStatus(T('status.saving'));
   const q = currentQuestion();
   try {
     const rec = await annotationsApi.create({
@@ -1274,7 +1314,9 @@ async function endRecording(reason = 'release') {
     });
     clearProvisional(provisional);
     const quiet = levelNode && recPeak < QUIET_PEAK;              // the level meter never moved: likely the wrong input or a muted microphone
-    setStatus((parentRec ? `saved reply to ${parentRec.author}` : `saved ${fmtDur(clip.durationMs)}${objectId ? ' on ' + objectId : ''}${hands ? ' with ' + describeHands(hands) : ''}`) + (quiet ? ' — the microphone heard almost nothing; check the input' : ''), { hold: quiet ? 5000 : 2000 });
+    const saved = parentRec ? T('status.savedReply', { author: parentRec.author })
+      : T(objectId ? (hands ? 'status.savedOnWith' : 'status.savedOn') : hands ? 'status.savedWith' : 'status.saved', { dur: fmtDur(clip.durationMs), object: objectId, hands: hands && describeHands(hands, LANG) });
+    setStatus(quiet ? T('status.savedQuiet', { saved }) : saved, { hold: quiet ? 5000 : 2000 });
     log('record:saved', { id: rec.id, source: opts.via, durationMs: clip.durationMs, placementMs: lastPlacementMs, quiet: !!quiet, objectId, hands: handsSummary(rec.hands), reply: !!parentRec, question: q ? qIndex : undefined });
     addMarker(rec);                  // local echo; server broadcast is deduped by id (the parent's reply count arrives as annotation:updated)
     bloom(rec.id);
@@ -1282,7 +1324,7 @@ async function endRecording(reason = 'release') {
   } catch (e) {
     clearProvisional(provisional);
     log('record:discarded', { reason: 'save failed', source: opts.via, error: e.message });
-    setStatus('save failed: ' + e.message);
+    setStatus(T('status.saveFailed', { error: e.message }));
   }
   saving = false;
 }
@@ -1419,31 +1461,31 @@ function onChat(m) {
   const i = chatPanel.messages.findIndex((x) => x.id === m.id);
   if (i >= 0) chatPanel.messages[i] = { ...chatPanel.messages[i], ...m }; else chatPanel.messages.push(m);
   if (chatPanel.messages.length > 40) chatPanel.messages.splice(0, chatPanel.messages.length - 40);
-  if (m.role === 'operator') { log('chat:received', { id: m.id }); setStatus('message from the laptop', { hold: 2500 }); }
+  if (m.role === 'operator') { log('chat:received', { id: m.id }); setStatus(T('status.chatReceived'), { hold: 2500 }); }
 }
 async function beginMessage() {
   if (messaging || recorder.isRecording || starting) return;
   messaging = { startedAt: performance.now() }; msgQuiet = 0;
-  try { await recorder.start(); } catch (e) { messaging = null; setStatus('mic blocked: ' + e.message, { hold: 3000 }); return; }
+  try { await recorder.start(); } catch (e) { messaging = null; setStatus(T('status.micBlockedShort', { error: e.message }), { hold: 3000 }); return; }
   if (!messaging) { recorder.stop(); return; }                 // ended before the mic was ready
   messaging.startedAt = performance.now();
-  recStatusBase = 'listening to you…'; recSecs = -1;
-  setStatus('listening to you…');
+  recStatusBase = T('status.listening'); recSecs = -1;
+  setStatus(recStatusBase);
   log('chat:listen');
 }
 async function endMessage() {
   if (!messaging) return;
   const started = messaging.startedAt; messaging = null;
   const clip = await recorder.stop();
-  if (!clip) { setStatus('nothing heard', { hold: 2000 }); return; }
+  if (!clip) { setStatus(T('status.nothingHeard'), { hold: 2000 }); return; }
   const local = { id: 'local-' + Date.now(), role: 'visitor', text: '', status: 'pending', mine: true };
   chatPanel.messages.push(local);
-  setStatus('sent', { hold: 1500 });
+  setStatus(T('status.sent'), { hold: 1500 });
   try {
     const row = await chatApi.sendAudio(project.id, clip.blob, { session: log.session });
     Object.assign(local, row, { mine: true });
     log('chat:sent', { id: row.id, ms: clip.durationMs });
-  } catch (e) { local.status = 'failed'; setStatus('message not sent: ' + e.message, { hold: 3000 }); }
+  } catch (e) { local.status = 'failed'; setStatus(T('status.messageFailed', { error: e.message }), { hold: 3000 }); }
 }
 const toggleMessage = () => (messaging ? endMessage() : beginMessage());
 function updateMessage(now) {
@@ -1511,8 +1553,8 @@ function updateWristMic(now) {
   const d = _palmPos.distanceTo(_mouth);
   if (d > MIC_OFF_M) wristMic.armed = true;
   if (!recorder.isRecording && !starting) {
-    if (d < MIC_NEAR_M && d >= MIC_ON_M && wristMic.armed && !messaging) setStatus('closer…', { idle: true });   // feedback on the way up
-    if (d < MIC_ON_M && wristMic.armed) { if (!wristMic.near) wristMic.near = now; else if (now - wristMic.near > MIC_DWELL_MS) { wristMic.near = 0; const aim = aimPoint(camera); beginRecording(camera, { via: 'mic', anchor: aim }); setStatus(aim.objectId ? `talking about ${aim.objectId}…` : 'talking…'); } }
+    if (d < MIC_NEAR_M && d >= MIC_ON_M && wristMic.armed && !messaging) setStatus(T('status.closer'), { idle: true });   // feedback on the way up
+    if (d < MIC_ON_M && wristMic.armed) { if (!wristMic.near) wristMic.near = now; else if (now - wristMic.near > MIC_DWELL_MS) { wristMic.near = 0; const aim = aimPoint(camera); beginRecording(camera, { via: 'mic', anchor: aim }); setStatus(aim.objectId ? T('status.talkingAbout', { object: aim.objectId }) : T('status.talking')); } }
     else wristMic.near = 0;
   } else if (recOpts.via === 'mic') {
     if (d > MIC_OFF_M) { if (!wristMic.far) wristMic.far = now; else if (now - wristMic.far > MIC_RELEASE_MS) { wristMic.far = 0; releaseAt = now; endRecording('release'); } }
@@ -1589,7 +1631,7 @@ function stepRig(sign) {
     const hit = walkRay.intersectObjects(targets, true).find((h) => h.object.type !== 'GridHelper');
     if (hit) dist = Math.max(0, hit.distance - BODY_RADIUS);
   }
-  if (dist < 0.05) { setStatus('something in the way', { hold: 1000 }); log('move', { kind: 'step', by: 0, blocked: true }); return; }
+  if (dist < 0.05) { setStatus(T('status.inTheWay'), { hold: 1000 }); log('move', { kind: 'step', by: 0, blocked: true }); return; }
   const to = rig.position.clone().addScaledVector(dir, dist);
   const floor = floorBelow(_probe.set(_head.x + dir.x * dist, rig.position.y + EYE_HEIGHT, _head.z + dir.z * dist));
   if (floor !== null) to.y = floor;
@@ -1657,7 +1699,7 @@ function updateCruise(dt) {
   if (targets.length) {
     walkRay.set(_probe.set(_head.x, rig.position.y + 1.0, _head.z), _vel.clone().normalize()); walkRay.far = Math.abs(v * dt) + BODY_RADIUS;
     const hit = walkRay.intersectObjects(targets, true).find((h) => h.object.type !== 'GridHelper');
-    if (hit) { push = 0; setStatus('something in the way', { hold: 1000 }); return; }
+    if (hit) { push = 0; setStatus(T('status.inTheWay'), { hold: 1000 }); return; }
   }
   rig.position.add(_vel);
   const floor = floorBelow(_probe.set(_head.x + _vel.x, rig.position.y + EYE_HEIGHT, _head.z + _vel.z));
@@ -1675,7 +1717,7 @@ let lastIntent = null;                                  // { hand, intent, at }
 function onThumbIntent(hand, intent, source) {
   if (intent === 'none') return;                                             // an across swipe: logged, not a command
   const which = hud.locoHand.value;
-  if (which === 'off' || (which !== 'both' && which !== hand)) { setStatus(`${hand} thumb: ${intent}`, { hold: 1200 }); return; }
+  if (which === 'off' || (which !== 'both' && which !== hand)) { setStatus(T('status.thumb', { hand: T('status.hand.' + hand), intent }), { hold: 1200 }); return; }
   // Ainsley slides out slowly and snaps back fast; the headset reports the snap as the opposite swipe
   // (21 Oct, Quest 3S: push 11:36:09, brake 11:36:10, and so on). The way back is not a command.
   const now = performance.now();
@@ -1869,7 +1911,7 @@ document.addEventListener('pointerlockchange', () => { softCapture = false; setC
 document.addEventListener('pointerlockerror', () => {
   if (lock.isLocked) return;
   softCapture = true; setCaptured(true);
-  setStatus('pointer lock unavailable here; mouse look without hiding the cursor, Esc to release');
+  setStatus(T('status.softCapture'));
 });
 window.addEventListener('keydown', (e) => { if (e.code === 'Escape' && softCapture) { softCapture = false; setCaptured(false); } });
 const keys = new Set();
@@ -1878,7 +1920,7 @@ window.addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (e.code === 'KeyK') beginRecording(camera, { via: 'key' });
   if (e.code === 'KeyL') releaseRecording(camera);
-  if (e.code === 'KeyR' && !e.repeat) { const hit = aimMarker(camera); if (hit) beginRecording(camera, { parent: hit }); else setStatus('aim at a marker to reply to it'); }
+  if (e.code === 'KeyR' && !e.repeat) { const hit = aimMarker(camera); if (hit) beginRecording(camera, { parent: hit }); else setStatus(T('status.aimToReply')); }
   if (e.code === 'Space') { const hit = aimMarker(camera); if (hit) play(hit); }
   if (e.code === 'Delete' || e.code === 'Backspace') {
     const hit = aimMarker(camera);
@@ -1892,7 +1934,7 @@ window.addEventListener('keyup', (e) => { keys.delete(e.code); if (e.code === 'K
 const net = connect({
   onAll: (all) => {
     clearMarkers(); all.forEach(addMarker);
-    setStatus(markers.size ? '' : VISITOR ? 'nothing has been recorded here yet: you could be first' : 'nothing recorded here yet — hold the mouse button on the scene and speak', { hold: markers.size ? 0 : 6000 });
+    setStatus(markers.size ? '' : T(VISITOR ? 'status.emptyVisitor' : 'status.empty'), { hold: markers.size ? 0 : 6000 });
     if (focusId && markers.has(focusId)) { focusMarker(focusId); if (assetsReady) focusId = null; }   // opened from the review page: stand in front of that clip (again once the assets have framed the view)
   },
   onNew: (a) => a.project === project?.id && addMarker(a),
@@ -1936,14 +1978,14 @@ const net = connect({
     if (p.id !== project?.id) return;
     const key = (x) => JSON.stringify((x.assets || []).map((a) => [a.id, a.url, a.visible, a.options]));
     const changed = key(p) !== key(project);
-    const settingsChanged = p.language !== project.language || !!p.cloudFallback !== !!project.cloudFallback || JSON.stringify(p.script) !== JSON.stringify(project.script);
+    const settingsChanged = p.language !== project.language || p.uiLanguage !== project.uiLanguage || !!p.cloudFallback !== !!project.cloudFallback || JSON.stringify(p.script) !== JSON.stringify(project.script);
     project = p;
     if (settingsChanged) projectToHud();
     if (changed) await showAssets(p);
     else { for (const a of p.assets || []) { const e = loaded.get(a.id); if (e) e.asset = a; } renderAssets(); }
   },
   onProjectsChanged: refreshProjectList,
-  onStatus: (s) => { setStatus(s); if (s === 'connected' && project) net.join(project.id); },
+  onStatus: (s) => { setStatus(T('status.' + s)); if (s === 'connected' && project) net.join(project.id); },
 });
 
 // dev-only handle for poking at the scene from the console
@@ -1951,7 +1993,7 @@ if (import.meta.env.DEV) window.__glossy = {
   scene, renderer, camera, rig, room, assetsRoot, loaded, markers, recorder, hud, keys, lock,
   get project() { return project; }, get selected() { return selected(); }, get playingId() { return playingId; }, get nearId() { return nearId; },
   visitor: VISITOR, get lastAsked() { return lastAsked; }, xrPanel, get level() { return level; }, get fullDistance() { return fullDistance; },
-  get status() { return hud.status.textContent; },
+  get status() { return hud.status.textContent; }, get lang() { return LANG; },
   get consent() { return { checked: hud.consent.checked, stored: ls.get('glossy.consent', '0') }; },
   get captured() { return captured(); },
   get lastPlacementMs() { return lastPlacementMs; },
