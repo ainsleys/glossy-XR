@@ -203,6 +203,23 @@ test('a reply is a clip anchored to another clip', async ({ page, request, brows
   await other.close();
 });
 
+test('the server refuses a clip without consent and stores nothing', async ({ request }) => {
+  const project = await (await request.post(`${API}/api/projects`, { data: { name: 'no-consent' } })).json();
+  const clip = { audio: { name: 'c.webm', mimeType: 'audio/webm', buffer: Buffer.from('x') }, x: '0', y: '0', z: '0', author: 'x' };
+  const audioFiles = () => fs.readdirSync('.test-data/audio').length;   // shared by the whole run: count, not emptiness
+  const before = audioFiles();
+  for (const multipart of [clip, { ...clip, consent: 'false' }]) {
+    const res = await request.post(`${API}/api/projects/${project.id}/annotations`, { multipart });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).error).toMatch(/consent/);
+  }
+  expect(await listAnnotations(request, project.id)).toHaveLength(0);
+  expect(audioFiles()).toBe(before);                                   // the uploaded file is deleted before the 400
+  // the same request with consent is accepted
+  expect((await request.post(`${API}/api/projects/${project.id}/annotations`, { multipart: { ...clip, consent: 'true' } })).status()).toBe(201);
+  expect(await listAnnotations(request, project.id)).toHaveLength(1);
+});
+
 test('interview mode records each clip as the answer to the current question', async ({ page, request }) => {
   const project = await openProject(page, request, 'interview');
   const script = { questions: [{ id: 'eat', text: 'Where did the family eat in summer?' }, { text: 'What was kept in the cool room?' }] };
@@ -301,6 +318,28 @@ test('a click released before the microphone is ready does not leave the recorde
   const clipEvents = async () => (await (await request.get(`${API}/api/projects/${project.id}/events`)).json()).filter((e) => e.kind === 'record:discarded' || e.kind === 'record:saved');
   await expect.poll(clipEvents, { timeout: 10_000 }).toEqual([expect.objectContaining({ kind: 'record:discarded', data: expect.objectContaining({ reason: 'too short', source: 'mouse' }) })]);
   await recordWithMouse(page, 600);                                      // and a normal hold still works afterwards
+  expect(await markerCount(page)).toBe(1);
+});
+
+test('without consent a hold does not record and says why; ticking consent lets it record', async ({ page, request }) => {
+  const project = await openProject(page, request, 'no-consent-page');
+  await page.fill('#author', 'Tester');
+  await page.locator('#author').dispatchEvent('change');
+  expect(await page.isChecked('#consent')).toBe(false);                // a fresh context: nothing remembered from an earlier visit
+  await lockPointer(page);
+  await page.mouse.move(640, 400);
+  await page.mouse.down();
+  await expect.poll(() => status(page), { timeout: 10_000 }).toBe('tick consent first');
+  await page.evaluate(() => window.__glossy.log.flush());
+  const blocked = async () => (await (await request.get(`${API}/api/projects/${project.id}/events`)).json()).filter((e) => e.kind === 'record:blocked');
+  await expect.poll(blocked, { timeout: 10_000 }).toEqual([expect.objectContaining({ data: expect.objectContaining({ reason: 'no consent', via: 'mouse' }) })]);
+  // beginRecording ran and returned: nothing is recording, nothing is waiting on the microphone
+  // (the hint reads "release to save" while starting is set), and no microphone was opened
+  const state = await page.evaluate(() => { const g = window.__glossy; return { isRecording: g.recorder.isRecording, live: g.recorder.live, hint: g.hud.hint.textContent, markers: g.markers.size }; });
+  expect(state).toEqual({ isRecording: false, live: false, hint: expect.not.stringMatching(/release to save/), markers: 0 });
+  await page.mouse.up();
+  await page.check('#consent');
+  await recordWithMouse(page, 600);                                    // with consent the same hold records
   expect(await markerCount(page)).toBe(1);
 });
 
