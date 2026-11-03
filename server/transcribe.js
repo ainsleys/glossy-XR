@@ -14,7 +14,15 @@
 // language is forced the same step still runs and its answer is returned as
 // `heard`, so clients can flag a clip spoken in some other language.
 //
+// Cloud fallback: with GLOSSY_TRANSCRIBE_FALLBACK set, a second backend is
+// kept for clips whose primary result came back clean but was rejected by the
+// transcript guard (silence or repetition). It runs only when the job's
+// `allowCloud` agrees at that moment: the server passes a function that
+// re-reads the project's setting and the clip's consent. A primary error or a
+// language fallback never reaches it. Only `openai` is accepted.
+//
 //   GLOSSY_TRANSCRIBE      local (default) | openai | none
+//   GLOSSY_TRANSCRIBE_FALLBACK  unset (default) | openai: the secondary backend; any other value is ignored
 //   GLOSSY_WHISPER_MODEL   HF id, default onnx-community/whisper-base_timestamped
 //                          (whisper-small_timestamped, whisper-large-v3-turbo_timestamped for better accuracy)
 //   GLOSSY_WHISPER_DTYPE   q8 (default) | fp32 | fp16 | q4
@@ -22,15 +30,17 @@
 //   GLOSSY_MODEL_CACHE     where models are stored
 //   FFMPEG                 path to ffmpeg if not on PATH
 //   OPENAI_API_KEY         for the openai backend
+//   OPENAI_BASE_URL        default https://api.openai.com/v1
 
 import { execFile } from 'node:child_process';
-import { looksRepetitive } from '../shared/text.js';
+import { looksRepetitive, unclearReason } from '../shared/text.js';
 export { looksRepetitive };
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 const BACKEND = (process.env.GLOSSY_TRANSCRIBE || 'local').toLowerCase();
+const SECONDARY = (process.env.GLOSSY_TRANSCRIBE_FALLBACK || '').toLowerCase();
 const MODEL = process.env.GLOSSY_WHISPER_MODEL || 'onnx-community/whisper-base_timestamped';
 const DTYPE = process.env.GLOSSY_WHISPER_DTYPE || 'q8';
 const LANGUAGE = process.env.GLOSSY_LANGUAGE || null;
@@ -130,6 +140,7 @@ function localBackend(log) {
 
 function openaiBackend() {
   const key = process.env.OPENAI_API_KEY;
+  const base = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
   return {
     name: 'openai', model: 'whisper-1',
     warm: async () => { if (!key) throw new Error('OPENAI_API_KEY is not set'); },
@@ -141,7 +152,7 @@ function openaiBackend() {
       fd.append('response_format', 'verbose_json');
       fd.append('timestamp_granularities[]', 'word');
       if (language) fd.append('language', language);
-      const res = await fetch('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { authorization: `Bearer ${key}` }, body: fd });
+      const res = await fetch(`${base}/audio/transcriptions`, { method: 'POST', headers: { authorization: `Bearer ${key}` }, body: fd });
       if (!res.ok) throw new Error(`openai ${res.status}: ${(await res.text()).slice(0, 200)}`);
       const j = await res.json();
       return { text: (j.text || '').trim(), words: (j.words || []).map((w) => ({ w: w.word, s: round(w.start), e: round(w.end) })), language: toCode(j.language) || language || null, detected: !language && !!j.language, fallback: false };
@@ -162,18 +173,35 @@ const toCode = (l) => { if (!l) return null; const k = String(l).toLowerCase(); 
  * Serial transcription queue. `enqueue(id, file, opts, done)` calls
  * done(err, result) off the request path; results are never written here,
  * the caller decides what to do with them (the record may be gone by then).
+ * `opts.allowCloud` (a boolean, or a function asked after the primary result,
+ * just before the secondary would run) lets an unclear primary result go to
+ * the secondary backend. The result then carries `cloud: {from, reason}`, plus
+ * `raw` (the rejected primary text) when the secondary's text is unclear too.
+ * When the secondary call fails the primary result is kept and `cloud` says
+ * so with `error`: the audio may have left the server all the same.
+ *
+ * `backends: {primary, secondary}` is for tests: injected backends skip the
+ * ffmpeg check; their warm() runs if they have one.
  */
-export function createTranscriber({ log = console } = {}) {
-  const backend = BACKEND === 'none' ? null : BACKEND === 'openai' ? openaiBackend() : localBackend(log);
+export function createTranscriber({ log = console, backends } = {}) {
+  const backend = backends ? backends.primary || null : BACKEND === 'none' ? null : BACKEND === 'openai' ? openaiBackend() : localBackend(log);
+  if (!backends && SECONDARY && SECONDARY !== 'openai') log.warn(`transcribe: GLOSSY_TRANSCRIBE_FALLBACK=${SECONDARY} ignored; only openai is supported`);
+  const secondary = backends ? backends.secondary || null : SECONDARY === 'openai' ? openaiBackend() : null;
   const queue = [];
-  let busy = false, ready = null, unavailable = null;
+  let busy = false, ready = null, unavailable = null, secondaryUnavailable = null;
 
   async function check() {
     if (!backend) return false;
-    if (backend.name === 'local' && !(await ffmpegAvailable())) { unavailable = `ffmpeg not found (set FFMPEG or install it); transcription disabled`; log.warn('transcribe: ' + unavailable); return false; }
-    try { await backend.warm(); return true; } catch (e) { unavailable = e.message; log.warn('transcribe: ' + e.message); return false; }
+    if (!backends && backend.name === 'local' && !(await ffmpegAvailable())) { unavailable = `ffmpeg not found (set FFMPEG or install it); transcription disabled`; log.warn('transcribe: ' + unavailable); return false; }
+    try { await backend.warm?.(); return true; } catch (e) { unavailable = e.message; log.warn('transcribe: ' + e.message); return false; }
+  }
+  // a secondary that cannot start is reported and skipped; the primary is unaffected
+  async function checkSecondary() {
+    if (!secondary) return false;
+    try { await secondary.warm?.(); return true; } catch (e) { secondaryUnavailable = e.message; log.warn(`transcribe: fallback ${secondary.name}: ${e.message}`); return false; }
   }
   ready = backend ? check() : Promise.resolve(false);
+  const secondaryReady = checkSecondary();
 
   // The caller's callback writes the result to the store. If that write throws
   // (a locked database, a closed connection) the failure must stay in the log:
@@ -191,7 +219,24 @@ export function createTranscriber({ log = console } = {}) {
       try {
         if (!(await ready)) throw new Error(unavailable || 'transcription disabled');
         const result = await backend.transcribe(job.file, job.opts);
-        finish(job, null, { ...result, backend: backend.name, model: backend.model, ms: Date.now() - t0 });
+        // only a clean primary result the guard rejects goes to the cloud: never an error, an empty clip or a language fallback
+        // permission is asked last, so a setting switched off or consent withdrawn while the clip waited is respected
+        const reason = !result.fallback ? unclearReason(result.text) : null;
+        const allowed = () => (typeof job.opts?.allowCloud === 'function' ? job.opts.allowCloud() : !!job.opts?.allowCloud);
+        let cloud = null;
+        if (reason && (await secondaryReady) && allowed()) {
+          try {
+            const second = await secondary.transcribe(job.file, job.opts);
+            log.log(`transcribe: ${job.id} rejected as ${reason} by ${backend.name}, sent to ${secondary.name}`);
+            finish(job, null, { ...second, backend: secondary.name, model: secondary.model, ms: Date.now() - t0,
+              cloud: { from: backend.name, reason, ...(unclearReason(second.text) ? { raw: result.text } : {}) } });
+            continue;
+          } catch (e) {
+            log.warn(`transcribe: ${job.id} fallback ${secondary.name} failed: ${e.message}; keeping the ${backend.name} result`);
+            cloud = { from: backend.name, reason, error: e.message };
+          }
+        }
+        finish(job, null, { ...result, backend: backend.name, model: backend.model, ms: Date.now() - t0, ...(cloud ? { cloud } : {}) });
       } catch (e) {
         log.warn(`transcribe: ${job.id} failed: ${e.message}`);
         finish(job, e, null);
@@ -202,7 +247,8 @@ export function createTranscriber({ log = console } = {}) {
 
   return {
     get enabled() { return !!backend; },
-    info: () => ({ backend: backend?.name || 'none', model: backend?.model || null, language: LANGUAGE || 'per project, else detected', queued: queue.length + (busy ? 1 : 0), unavailable }),
+    info: () => ({ backend: backend?.name || 'none', model: backend?.model || null, language: LANGUAGE || 'per project, else detected', queued: queue.length + (busy ? 1 : 0), unavailable,
+      cloud: secondary ? { backend: secondary.name, model: secondary.model, unavailable: secondaryUnavailable } : null }),
     enqueue(id, file, opts, done) { queue.push({ id, file, opts, done }); pump(); },
     ready: () => ready,
   };

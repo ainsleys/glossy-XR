@@ -72,7 +72,7 @@ before(async () => {
   const db = openDb(dir);
   const project = db.projects.create({ name: 'schema' });
   projectId = project.id;
-  db.projects.update(projectId, { language: 'en', script: { questions: [{ id: 'q1', text: 'What was here?' }] } });
+  db.projects.update(projectId, { language: 'en', script: { questions: [{ id: 'q1', text: 'What was here?' }] }, cloudFallback: true });
   const asset = db.assets.create(projectId, { url: `/models/${projectId}/photo.png`, type: 'image', name: 'photo.png', options: { mode: 'plane' } });
   db.assets.update(projectId, asset.id, { transform: { scale: 1, rotX: -90, rotY: 0, rotZ: 0, x: 0, y: 0, z: 0, pointSize: 0.01 } });
 
@@ -95,6 +95,17 @@ before(async () => {
     meta: { words: [], language: 'en', detected: false, heard: 'tr', backend: 'local', model: 'whisper', ms: 400, unclear: 'repetition', raw: 'la la la la' } });
   const failed = db.annotations.create(projectId, { author: 'Elif', x: 0, y: 1, z: 0, audioUrl: '/audio/c.webm', durationMs: 500, consent: true, transcriptStatus: 'pending' });
   db.annotations.setTranscript(projectId, failed.id, { transcript: null, status: 'failed', meta: { error: 'decoder failed' } });
+  // a clip the cloud fallback transcribed after the local text was rejected
+  const cloud = db.annotations.create(projectId, { author: 'Deniz', x: 0, y: 1, z: 0, audioUrl: '/audio/d.webm', durationMs: 900, consent: true, cloudConsent: true, transcriptStatus: 'pending' });
+  db.annotations.setTranscript(projectId, cloud.id, { transcript: 'The well was here.', status: 'done',
+    meta: { words: [{ w: 'The', s: 0, e: 0.2 }], language: 'en', detected: true, heard: null, backend: 'openai', model: 'whisper-1', ms: 1500, cloud: { from: 'local', reason: 'silence' } } });
+  // one whose cloud text was rejected too, and one whose cloud call failed
+  const cloudUnclear = db.annotations.create(projectId, { author: 'Deniz', x: 0, y: 1, z: 0, audioUrl: '/audio/e.webm', durationMs: 900, consent: true, cloudConsent: true, transcriptStatus: 'pending' });
+  db.annotations.setTranscript(projectId, cloudUnclear.id, { transcript: '', status: 'done',
+    meta: { words: [], language: 'en', detected: true, heard: null, backend: 'openai', model: 'whisper-1', ms: 1400, cloud: { from: 'local', reason: 'silence', raw: 'Thank you.' }, unclear: 'silence', raw: 'Thank you.' } });
+  const cloudFailed = db.annotations.create(projectId, { author: 'Deniz', x: 0, y: 1, z: 0, audioUrl: '/audio/f.webm', durationMs: 900, consent: true, cloudConsent: true, transcriptStatus: 'pending' });
+  db.annotations.setTranscript(projectId, cloudFailed.id, { transcript: '', status: 'done',
+    meta: { words: [], language: 'en', detected: true, heard: null, backend: 'local', model: 'whisper', ms: 900, cloud: { from: 'local', reason: 'silence', error: 'openai 500' }, unclear: 'silence', raw: 'Thank you.' } });
   db.close();
 
   // the server opens the database and listens on import, so it runs as its own process.
@@ -137,7 +148,7 @@ test('docs/SCHEMA.md has one json block with record, contribution, context, proj
 });
 
 test('the record fields match GET /api/projects/:id/annotations', () => {
-  assert.equal(annotations.length, 3);
+  assert.equal(annotations.length, 6);
   compare('record', union(annotations), LISTED.record);
 });
 
