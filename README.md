@@ -43,6 +43,8 @@ Tested on 12 Oct 2026 with public-domain or permissively licensed files: Khronos
 
 ## Annotation record
 
+Every field, with its type, when it can be null or absent, and who sets it, is in [docs/SCHEMA.md](docs/SCHEMA.md); the example and notes below are the short version.
+
 ```json
 {
   "id": "011e1a87-…",
@@ -77,7 +79,7 @@ Tested on 12 Oct 2026 with public-domain or permissively licensed files: Khronos
 - `language` is a per-clip transcription language, rarely set; the project's language or detection usually decides. The detected or applied language is in `transcription.language`, with `detected` saying which; when a language was forced, `heard` holds what the detector would have chosen, and the clients flag a clip whose `heard` disagrees.
 - `links` are what a reviewer attached to the clip afterwards: `kind` is `image`, `document` or `url`; `asset` names a project asset (a photograph linked on the review page is uploaded as an image asset placed at the clip), `url` and `title` are free. Set with `PATCH …/annotations/:aid {links: [...]}`.
 
-`GET /api/projects/:id/export` returns the project and its contributions; `GET /api/export` returns every project the same way. Each contribution carries `attribution`, `timestamp`, `anchor`, `period`, `parent`, `mode`, `prompt`, `layer`, `consent`, `audio`, `durationMs`, `language`, `transcript`, `words`, `pose`, `poseSource` and `links`, so a set can be reviewed, filtered by period or mapped to another schema without the viewer. Erasing a clip removes the row, the audio file and the derived data, and the export no longer contains it.
+`GET /api/projects/:id/export` returns the project and its contributions; `GET /api/export` returns every project the same way. Each contribution is the annotation record with its attribution, timestamp, place, period, transcript and word timings, pose, gesture and links, so a set can be reviewed, filtered by period or mapped to another schema without the viewer; [docs/SCHEMA.md](docs/SCHEMA.md#native-export) lists every field and how a contribution differs from the record. Erasing a clip removes the row, the audio file and the derived data, and the export no longer contains it.
 
 ### Standard export (Europeana Data Model)
 
@@ -94,7 +96,7 @@ Tested on 12 Oct 2026 with public-domain or permissively licensed files: Khronos
 | `ore:Aggregation` (contribution) | | `edm:aggregatedCHO`, `edm:dataProvider`, `edm:provider`, `edm:rights`, `edm:ugc` `true`, `edm:isShownBy` (audio), `edm:isShownAt` (the clip in the room, `/?project=…&focus=…`), `edm:hasView` (photographs) |
 | `edm:TimeSpan` | one per distinct period | `skos:prefLabel`, `edm:begin`, `edm:end` |
 
-Clips whose author withdrew consent are left out, and the project node counts them. What EDM has no place for (the anchor coordinates, the layer, the mode, the question, the pose trace and word timings) stays under the `glossy:` namespace or in the native record the `glossy:nativeRecord` link points at, so nothing is lost, only set aside. Identifiers are URLs on this server (`GLOSSY_BASE_URL` sets the host for a deployment behind a proxy); `GLOSSY_PROVIDER` names the data provider and `GLOSSY_RIGHTS` is the licence URI for the set, one licence for all contributions, because that is what the consent text promises. The suite checks the record for a desktop clip (creator, timestamp, anchor, transcript, audio resource, aggregation, rights) and, on the review page, that a period becomes a TimeSpan, a linked photograph a view, and a withdrawn clip disappears from the set.
+Clips whose author withdrew consent are left out, and the project node counts them. What EDM has no place for (the anchor coordinates, the layer, the mode, the question, the pose trace and word timings) stays under the `glossy:` namespace or in the native record the `glossy:nativeRecord` link points at, so nothing is lost, only set aside. Identifiers are URLs on this server (`GLOSSY_BASE_URL` sets the host for a deployment behind a proxy); `GLOSSY_PROVIDER` names the data provider and `GLOSSY_RIGHTS` is the licence URI for the set, one licence for all contributions, because that is what the consent text promises. The suite checks the record for a desktop clip (creator, timestamp, anchor, transcript, audio resource, aggregation, rights) and, on the review page, that a period becomes a TimeSpan, a linked photograph a view, and a withdrawn clip disappears from the set. The node-by-node mapping, the `@context` and the `glossy:` properties are set out in [docs/SCHEMA.md](docs/SCHEMA.md#edm-serialisation).
 
 ## Interview mode and replies
 
