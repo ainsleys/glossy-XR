@@ -57,3 +57,21 @@ T4. Full `npm test` at the final commit in both the turkish-named worktree and a
 3. The fixture-with-pause option is a peer of the longer hold, not a fallback, because longer clips risk the repetition retry and the 60 s test timeout.
 4. Both projects' patterns are anchored (the chromium project's `testIgnore` too).
 5. T2 does not exercise R4; T3 with `--list` does.
+
+6. **Sweep (3 Nov).** Windows are Opus at 128 kb/s, Chromium's recorder default (004's sweep used 32 kb/s, which is why its failing starts differ from these). Replay of 49 stored clips from 004: the stored clips reproduce their recorded misses; the sweep agrees with them at the best-aligned start for 39/49 (detected) and 38/49 (forced), and at one of the two copies of the sentence for 47/49 and 46/49. The two copies align almost equally well (r within 0.02) and the sweep often differs between them, so the alignment, not only the model, limits this figure. Candidates stopped after 10 detected-mode misses are marked "stopped"; screens use 200 ms steps and stop after 3.
+
+   | Candidate | Window | Starts decoded | Misses detected / forced | Retried | Typical miss |
+   |---|---|---|---|---|---|
+   | old: current sentence | 3180 | 284/284 | 94 / 91 | 22 | subtitle credit "Bu dizinin betimlemesi TRT …" |
+   | (a) hold 4700 | 4680 | 15/284, stopped | 10 / 10 | 1 | "Altyazı." |
+   | (a) hold 5700 | 5680 | 20/284, stopped | 10 / 10 | 0 | "Altyazı." |
+   | (b) pause of 1 s after each repetition | 3180 | 82/370, stopped | 10 / 9 | 2 | "Bu ne? Bu ne?", "Altyazı." |
+   | (b) "Bugün hava çok güzel, deniz kenarında yürüyüş yapalım." ×2 | 3180 | 185/293, stopped | 8 / 8 | 3 | transcriber error "token_ids must be a non-empty array of integers" (5), "Bu gün halkın bir kere." |
+   | (b) screen: "Annem mutfakta çay demliyor, …" ×2 | 3180 | 22/48 | 3 / 1 | 0 | |
+   | (b) screen: "İstanbul'da yağmur yağıyor …" ×2 | 3180 | 15/32 | 3 / 2 | 2 | |
+   | (b) screen: "Elma, armut, kiraz, …" ×2 | 3180 | 22/48 | 3 / 3 | 0 | |
+   | (b) screen: "Kediler bahçede oynuyor, …" ×2 | 3180 | 22/42 | 3 / 2 | 0 | |
+   | (b) screen: "Sabah kahvaltıda peynir, …" ×2 | 3180 | 13/41 | 3 / 1 | 0 | |
+   | (b) screen: "Kitabı masanın üstüne bırak, …" ×2 | 3180 | 6/37 | 3 / 3 | 1 | |
+
+   **Reading.** No candidate meets R2's acceptance, so R3 is not applied and the test keeps its constants. A longer hold makes things worse: whisper-base (q8) decodes most 4.7 s and 5.7 s windows of the current fixture to "Altyazı.", a hallucination the silence guard does not list, so the miss is a failed word check rather than an empty transcript. A pause in the fixture adds windows that are mostly silence, which the model fills with credits or loops. Every other sentence tried misses somewhere in the loop. The defect is the model's behaviour on short Turkish windows, not the constants; the holds 3700, 4200 and 5200, the pause between repetitions only, and the 300 ms margin runs were not swept, since nothing passed at the recorded length. R4 is independent and is applied.
