@@ -203,6 +203,23 @@ test('a reply is a clip anchored to another clip', async ({ page, request, brows
   await other.close();
 });
 
+test('the server refuses a clip without consent and stores nothing', async ({ request }) => {
+  const project = await (await request.post(`${API}/api/projects`, { data: { name: 'no-consent' } })).json();
+  const clip = { audio: { name: 'c.webm', mimeType: 'audio/webm', buffer: Buffer.from('x') }, x: '0', y: '0', z: '0', author: 'x' };
+  const audioFiles = () => fs.readdirSync('.test-data/audio').length;   // shared by the whole run: count, not emptiness
+  const before = audioFiles();
+  for (const multipart of [clip, { ...clip, consent: 'false' }]) {
+    const res = await request.post(`${API}/api/projects/${project.id}/annotations`, { multipart });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).error).toMatch(/consent/);
+  }
+  expect(await listAnnotations(request, project.id)).toHaveLength(0);
+  expect(audioFiles()).toBe(before);                                   // the uploaded file is deleted before the 400
+  // the same request with consent is accepted
+  expect((await request.post(`${API}/api/projects/${project.id}/annotations`, { multipart: { ...clip, consent: 'true' } })).status()).toBe(201);
+  expect(await listAnnotations(request, project.id)).toHaveLength(1);
+});
+
 test('interview mode records each clip as the answer to the current question', async ({ page, request }) => {
   const project = await openProject(page, request, 'interview');
   const script = { questions: [{ id: 'eat', text: 'Where did the family eat in summer?' }, { text: 'What was kept in the cool room?' }] };
