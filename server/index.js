@@ -221,6 +221,7 @@ const audioUpload = multer({
   storage: multer.diskStorage({
     destination: AUDIO_DIR,
     filename: (_req, file, cb) => {
+      // audioFormat in server/edm.js maps these extensions back to media types for the EDM export
       const ext = file.mimetype.includes('ogg') ? 'ogg' : file.mimetype.includes('mp4') ? 'm4a' : 'webm';
       cb(null, `${randomUUID()}.${ext}`);
     },
