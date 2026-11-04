@@ -18,8 +18,9 @@
 // kept for clips whose primary result came back clean but was rejected by the
 // transcript guard (silence or repetition). It runs only when the job's
 // `allowCloud` agrees at that moment: the server passes a function that
-// re-reads the project's setting and the clip's consent. A primary error or a
-// language fallback never reaches it. Only `openai` is accepted.
+// re-reads the project's setting and the clip's consent, and a check that
+// throws counts as a refusal. A primary error or a language fallback never
+// reaches it. Only `openai` is accepted.
 //
 //   GLOSSY_TRANSCRIBE      local (default) | openai | none
 //   GLOSSY_TRANSCRIBE_FALLBACK  unset (default) | openai: the secondary backend; any other value is ignored
@@ -175,8 +176,9 @@ const toCode = (l) => { if (!l) return null; const k = String(l).toLowerCase(); 
  * the caller decides what to do with them (the record may be gone by then).
  * `opts.allowCloud` (a boolean, or a function asked after the primary result,
  * just before the secondary would run) lets an unclear primary result go to
- * the secondary backend. The result then carries `cloud: {from, reason}`, plus
- * `raw` (the rejected primary text) when the secondary's text is unclear too.
+ * the secondary backend; a function that throws counts as false. The result
+ * then carries `cloud: {from, reason}`, plus `raw` (the rejected primary
+ * text) when the secondary's text is unclear too.
  * When the secondary call fails the primary result is kept and `cloud` says
  * so with `error`: the audio may have left the server all the same.
  *
@@ -222,7 +224,12 @@ export function createTranscriber({ log = console, backends } = {}) {
         // only a clean primary result the guard rejects goes to the cloud: never an error, an empty clip or a language fallback
         // permission is asked last, so a setting switched off or consent withdrawn while the clip waited is respected
         const reason = !result.fallback ? unclearReason(result.text) : null;
-        const allowed = () => (typeof job.opts?.allowCloud === 'function' ? job.opts.allowCloud() : !!job.opts?.allowCloud);
+        // a permission check that throws (a database read that failed) counts as a refusal: the local result is kept
+        const allowed = () => {
+          const f = job.opts?.allowCloud;
+          try { return typeof f === 'function' ? !!f() : !!f; }
+          catch (e) { log.warn(`transcribe: ${job.id} permission check failed: ${e.message}; keeping the ${backend.name} result`); return false; }
+        };
         let cloud = null;
         if (reason && (await secondaryReady) && allowed()) {
           try {
