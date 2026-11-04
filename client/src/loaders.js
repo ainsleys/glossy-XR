@@ -79,8 +79,15 @@ async function isGaussianPly(url) {
   return /property\s+float\s+f_dc_0/.test(head) && /property\s+float\s+scale_0/.test(head);
 }
 
+const NO_PLY_VERTICES = 'not a PLY file, or it has no vertices';
+
 async function loadPly(url, pointSize, onProgress) {
   const geometry = await new PLYLoader().loadAsync(url, onProgress);
+  // PLYLoader returns an empty geometry for bytes with no PLY header instead of throwing
+  if (!geometry.attributes.position || geometry.attributes.position.count === 0) {
+    geometry.dispose();
+    throw new Error(NO_PLY_VERTICES);
+  }
   const hasFaces = !!geometry.index && geometry.index.count > 0;
   const hasColor = !!geometry.attributes.color;
   if (hasFaces) {
@@ -90,6 +97,10 @@ async function loadPly(url, pointSize, onProgress) {
     return finish(mesh, 'mesh', geometry.attributes.position.count);
   }
   const cloud = stripNonFinite(geometry);
+  if (cloud.attributes.position.count === 0) {               // every point was NaN or infinite
+    cloud.dispose();
+    throw new Error(NO_PLY_VERTICES);
+  }
   const points = new THREE.Points(cloud, pointsMaterial(hasColor, pointSize));
   points.name = 'pointcloud';
   return finish(points, 'points', cloud.attributes.position.count);
