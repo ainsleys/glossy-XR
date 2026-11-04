@@ -1,7 +1,7 @@
 // Where the author stood and looked while speaking. Every clip stores the
 // author's viewpoint as `pose`, samples of {t, p, q} at 10 Hz in scene
 // coordinates (the camera's world position and orientation, rig included). On
-// playback in the room it is drawn where it was made, in time with the voice,
+// playback in the scene it is drawn where it was made, in time with the voice,
 // beside the ghost hands: a small translucent head and a line along its gaze,
 // so "the water came in over there" shows where "there" was.
 //

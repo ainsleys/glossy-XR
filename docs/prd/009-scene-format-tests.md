@@ -42,7 +42,7 @@ Fixture writers are pure Node functions returning Buffers; the spec writes them 
 
 ## Tests
 
-T1. `npx playwright test test/formats.spec.js`: all formats pass on this machine (real-asset pass included). Mutations, each restored: (a) `isGaussianPly` returns false → the 3DGS-PLY test fails on `kind`; (b) `case 'splat': throw` in `loadModel` → the splat test fails; (c) `autoFit` returns without changing the transform → the world-box and scale assertions fail (the fixtures start off the floor and one is 50 units across); (d) `hitTest` returns null → the splat anchor assertion fails; (e) the MTL check returns false → the `Kd` assertion fails; (f) the `isScene` rule inverted → the room-visibility assertions fail.
+T1. `npx playwright test test/formats.spec.js`: all formats pass on this machine (real-asset pass included). Mutations, each restored: (a) `isGaussianPly` returns false → the 3DGS-PLY test fails on `kind`; (b) `case 'splat': throw` in `loadModel` → the splat test fails; (c) `autoFit` returns without changing the transform → the world-box and scale assertions fail (the fixtures start off the floor and one is 50 units across); (d) `hitTest` returns null → the splat anchor assertion fails; (e) the MTL check returns false → the `Kd` assertion fails; (f) the `isScene` rule inverted → the default-room visibility assertions fail.
 
 T2. Stability: `--repeat-each=3` on the spec.
 
@@ -61,4 +61,4 @@ T3. Full `npm test` at the final commit: all passed (the interior scene test run
 4. `hornedlizard.spz` is excluded (known to decode to noise) and the 8K panoramas are skipped under SwiftShader.
 5. The corrupt-file case uses non-PLY bytes, never a truncated 3DGS file (180 s Spark timeout).
 6. Spark under SwiftShader is unverified: spike first, skip with a reason if it cannot load, report rather than change `loaders.js`.
-7. Two observations to report, not fix: a 2:1 image uploaded without `{mode:'sphere'}` leaves the room visible; Spark's 180 s timeout exceeds any test timeout.
+7. Two observations to report, not fix: a 2:1 image uploaded without `{mode:'sphere'}` leaves the default room visible; Spark's 180 s timeout exceeds any test timeout.

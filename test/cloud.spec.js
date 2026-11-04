@@ -251,7 +251,7 @@ test('consent remembered for the plain label does not open the microphone on a p
   expect(await events()).not.toContain('mic:ready');
 });
 
-test('the room list and the review page say when a clip was transcribed in the cloud, or the attempt failed', async ({ page, request }) => {
+test('the clip list on the main page and the review page say when a clip was transcribed in the cloud, or the attempt failed', async ({ page, request }) => {
   const p = await openProject(page, request, 'cloud-badges');
   await request.patch(`${API}/api/projects/${p.id}`, { data: { cloudFallback: true } });
   const clip = await postThankYou(request, p.id, { cloudConsent: 'true' });

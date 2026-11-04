@@ -11,7 +11,7 @@
 //   xr:start / xr:end  {}
 //   input:connected    { kind: 'controller' | 'hand', handedness, profiles }
 //   input:disconnected { kind, handedness }
-//   input:thumb        { hand, intent: 'push' | 'brake', along, ms, off, source: 'ours' }   a thumb slide the room read from the tracked joints
+//   input:thumb        { hand, intent: 'push' | 'brake', along, ms, off, source: 'ours' }   a thumb slide the client read from the tracked joints
 //   input:microgesture { hand, gesture: 'swipe-left' | 'swipe-right' | 'swipe-forward' | 'swipe-backward' | 'tap-thumb', intent, thumb }   the headset's label, with what the thumb did
 //   move               { kind: 'step' | 'turn' | 'push' | 'stick', by?, ms? }   a thumb step/turn/push, or a thumbstick glide (its length)
 //   chat:listen / chat:sent { id, ms } / chat:received { id }   the spoken conversation with the laptop (text lives in the chat table, not here)
@@ -56,7 +56,7 @@ export function createSessionLog({ fetchImpl = fetch } = {}) {
       try {
         const res = await fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true });
         if (!res.ok) dropped += events.length;
-      } catch { dropped += events.length; }                  // the log never gets in the way of the room; a lost batch is lost
+      } catch { dropped += events.length; }                  // the log never gets in the way of the page; a lost batch is lost
     })();
     await sending;
     sending = null;

@@ -371,7 +371,7 @@ async function showAssets(p) {
   }
   loaded.clear();
   const list = p.assets || [];
-  const isScene = (a) => !['image', 'video'].includes(a.type) || a.options?.mode === 'sphere';   // a photo linked to a clip hangs in the room; it is not the room
+  const isScene = (a) => !['image', 'video'].includes(a.type) || a.options?.mode === 'sphere';   // a photo linked to a clip hangs in the default room; it does not replace it
   room.visible = !list.some(isScene);
   floorGrid.visible = !room.visible;
   selectedId = list.some((a) => a.id === selectedId) ? selectedId : (list[0]?.id ?? null);
@@ -1716,7 +1716,7 @@ function updateCruise(dt) {
 function onMicrogesture(hand, gesture, injected = false) {
   const intent = THUMB[hand]?.[gesture] || gesture;
   log('input:microgesture', { hand, gesture, intent, thumb: thumbSummary(hand, performance.now()) });
-  if (hud.thumbSource.value !== 'meta' && !injected) return;   // the headset's labels are logged for comparison; the room's own reading drives
+  if (hud.thumbSource.value !== 'meta' && !injected) return;   // the headset's labels are logged for comparison; the client's own reading drives
   onThumbIntent(hand, intent, injected ? 'injected' : 'meta');
 }
 const OPPOSITE = { push: 'brake', brake: 'push', 'turn-left': 'turn-right', 'turn-right': 'turn-left' };
@@ -2089,7 +2089,7 @@ renderer.setAnimationLoop(() => {
   if (viewpoint.visible) viewpoint.update(performance.now() - playStartedAt, near);   // `near` is the listener's head, filled above
 
   // once a second while presenting or recording: frame rate, hand tracking coverage, microphone level
-  stats.frame(); stats.level(recorder.isRecording ? level : levelNode ? measureLevel() : 0);   // the room's level is only kept while recording; the log wants it whenever the microphone is open
+  stats.frame(); stats.level(recorder.isRecording ? level : levelNode ? measureLevel() : 0);   // the page's level is only kept while recording; the log wants it whenever the microphone is open
   for (const [side, key] of [['l', 'left'], ['r', 'right']]) { const h = xrHands[key]; stats.hand(side, !!h, !!h?.joints?.wrist?.visible); }
   pollMicrogestures();
   updateGlide();

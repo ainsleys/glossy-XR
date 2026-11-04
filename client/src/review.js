@@ -1,6 +1,6 @@
 // The review page: the same project read at a desk instead of walked. One
 // list of clips with transcripts you can search and seek by word, a plan of
-// the room that points at the same clips, and the edits a reviewer makes
+// the scene that points at the same clips, and the edits a reviewer makes
 // after the fact: a period, a photograph or document linked to the clip,
 // consent, a second transcription in another language, erasure. Audio,
 // transcript and viewpoint stay linked: the word under the playhead lights,
@@ -15,7 +15,7 @@ const fmtDur = (ms) => (ms ? (ms / 1000).toFixed(1) + ' s' : '');
 const yearOf = (v, d) => { const n = parseInt(String(v ?? ''), 10); return Number.isFinite(n) ? n : d; };
 const periodLabel = (p) => (p ? p.label || [p.from, p.to].filter(Boolean).join('–') : '');
 const periodKey = (p) => (p ? JSON.stringify([p.from ?? '', p.to ?? '', p.label ?? '']) : '');
-// "gesture 4.2 s, both hands, 5 frames reconstructed" (the room shows the same line; shared/hands-fill.js owns the flags)
+// "gesture 4.2 s, both hands, 5 frames reconstructed" (the main page shows the same line; shared/hands-fill.js owns the flags)
 const describeHands = (h) => { if (!h?.frames?.length) return ''; const l = h.frames.some((f) => f.l), r = h.frames.some((f) => f.r); const filled = (h.filled?.l || 0) + (h.filled?.r || 0); return `gesture ${((h.frames.at(-1).t - h.frames[0].t) / 1000).toFixed(1)} s, ${l && r ? 'both hands' : l ? 'left hand' : 'right hand'}${filled ? `, ${filled} frames reconstructed` : ''}`; };
 const ago = (iso) => {
   const days = Math.floor((Date.now() - Date.parse(iso)) / 86400e3);
@@ -34,7 +34,7 @@ let periodFilter = null;            // periodKey, '' for timeless, null for all
 let armed = null;                   // { id, timer } for a two-click erase
 let yearBounds = { min: NaN, max: NaN };
 
-// ---- colour: the same mapping as the room, period midpoint on an amber→blue scale ----
+// ---- colour: the same mapping as the main page, period midpoint on an amber→blue scale ----
 function updateYearBounds() {
   let min = Infinity, max = -Infinity;
   for (const r of records.values()) if (r.period) { const a = yearOf(r.period.from, NaN), b = yearOf(r.period.to, NaN); for (const y of [a, b]) if (Number.isFinite(y)) { min = Math.min(min, y); max = Math.max(max, y); } }
@@ -113,12 +113,12 @@ function cardHtml(r) {
     <div class="head"><span class="sw" style="background:${colourOf(r)}"></span><span class="who">${esc(r.author)}</span>
       ${r.period ? `<span class="period">${esc(periodLabel(r.period))}</span>` : ''}<span title="${esc(r.createdAt)}">${esc(ago(r.createdAt))}</span><span>${fmtDur(r.durationMs)}</span>${lang}${heard}${cloud ? `<span class="cloud" title="${esc(cloud.title)}">${esc(cloud.text)}</span>` : ''}
       ${r.anchor?.objectId ? `<span>on ${esc(r.anchor.objectId)}</span>` : ''}${r.hands ? `<span title="a hand gesture was recorded with this clip; its wrist paths are drawn on the plan">✋ ${esc(describeHands(r.hands))}</span>` : ''}${r.replies ? `<span>↩ ${r.replies}</span>` : ''}${r.consent === false ? '<span style="color:var(--rec)">consent withdrawn</span>' : ''}
-      <span class="right"><button class="playBtn" title="play this clip">${r.id === selectedId && !ui.audio.paused ? '■ stop' : '▶ play'}</button><a href="/?project=${esc(r.project)}&focus=${esc(r.id)}" title="stand in front of this clip in the room">in the room</a></span></div>
+      <span class="right"><button class="playBtn" title="play this clip">${r.id === selectedId && !ui.audio.paused ? '■ stop' : '▶ play'}</button><a href="/?project=${esc(r.project)}&focus=${esc(r.id)}" title="stand in front of this clip in the scene">in the scene</a></span></div>
     ${r.prompt ? `<div class="prompt">Q: ${esc(r.prompt)}</div>` : ''}
     ${text}${links}
     <div class="tools">
       <span class="group">period <input type="text" class="from" placeholder="from" value="${esc(r.period?.from || '')}" /><input type="text" class="to" placeholder="to" value="${esc(r.period?.to || '')}" /><input type="text" class="label" placeholder="label" value="${esc(r.period?.label || '')}" /><button class="savePeriod">set</button>${r.period ? '<button class="clearPeriod">clear</button>' : ''}${presets}</span>
-      <span class="group"><label class="file" title="attach a photograph or scan to this clip; it also appears in the room at the clip">attach a photo<input type="file" class="photo" accept="image/*" /></label></span>
+      <span class="group"><label class="file" title="attach a photograph or scan to this clip; it also appears in the scene at the clip">attach a photo<input type="file" class="photo" accept="image/*" /></label></span>
       <span class="group"><select class="lang" title="language for the next transcription">${LANGS.map(([v, l]) => `<option value="${v}" ${(mismatch ? tr.heard : r.language || '') === v ? 'selected' : ''}>${l}</option>`).join('')}</select><button class="retranscribe" title="run speech-to-text again with this language">transcribe again</button></span>
       <span class="group"><label><input type="checkbox" class="consent" ${r.consent ? 'checked' : ''} /> consent</label></span>
       <span class="group"><button class="erase danger ${isArmed ? 'armed' : ''}" title="${isArmed ? 'click again to erase' : 'erase the clip, its audio and transcript (asks twice)'}">${isArmed ? 'erase?' : 'erase'}</button></span>
@@ -128,7 +128,7 @@ function cardHtml(r) {
 
 function renderClips() {
   const all = [...records.values()];
-  if (!all.length) { ui.clips.innerHTML = '<div id="empty">Nothing has been recorded in this project yet. Open the room, hold the mouse button and speak.</div>'; return; }
+  if (!all.length) { ui.clips.innerHTML = '<div id="empty">Nothing has been recorded in this project yet. Open the scene, hold the mouse button and speak.</div>'; return; }
   const byParent = new Map();
   for (const r of all) if (r.parent && records.has(r.parent)) byParent.set(r.parent, [...(byParent.get(r.parent) || []), r]);
   const roots = all.filter((r) => !r.parent || !records.has(r.parent)).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -156,7 +156,7 @@ function wire(card, r) {
   card.addEventListener('mouseleave', () => highlightDot(r.id, false));
 }
 
-// ---- plan: the room from above, one dot per clip --------------------------------
+// ---- plan: the scene from above, one dot per clip --------------------------------
 let planBox = null;      // { minX, maxX, minZ, maxZ, scale }
 function renderPlan() {
   const all = [...records.values()];
@@ -282,18 +282,18 @@ async function patch(id, body, said) {
 }
 // A photograph attached to a clip becomes a project asset placed at the clip's
 // anchor, half a metre wide, hung 30 cm above the mark (so the mark stays
-// visible) and turned towards the middle of the room, and the clip's record
-// points at it. The room shows it where the clip is.
+// visible) and turned towards the middle of the scene, and the clip's record
+// points at it. The main page shows it where the clip is.
 async function attachPhoto(r, file) {
   toast('uploading ' + file.name + '…');
   try {
     const asset = await assetsApi.upload(project.id, file, [], null, { mode: 'plane' });
     const a = r.anchor;
     const len = Math.hypot(a.x, a.z) || 1;
-    const dx = -a.x / len, dz = -a.z / len;                              // towards the room's centre
+    const dx = -a.x / len, dz = -a.z / len;                              // towards the scene's centre
     const rotY = (Math.atan2(dx, dz) * 180) / Math.PI;                   // plane normal +Z turned to face the centre
     await assetsApi.update(project.id, asset.id, { name: `${file.name} (${r.author})`, transform: { scale: 0.5, rotX: 0, rotY: Math.round(rotY), rotZ: 0, x: +(a.x + dx * 0.1).toFixed(3), y: +(a.y + 0.3).toFixed(3), z: +(a.z + dz * 0.1).toFixed(3) } });
-    await patch(r.id, { links: [...(r.links || []), { kind: 'image', asset: asset.id, url: asset.url, title: file.name }] }, 'photo linked; it now hangs at the clip in the room');
+    await patch(r.id, { links: [...(r.links || []), { kind: 'image', asset: asset.id, url: asset.url, title: file.name }] }, 'photo linked; it now hangs at the clip in the scene');
   } catch (e) { toast('could not attach: ' + e.message); }
 }
 function erase(r) {

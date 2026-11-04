@@ -2,7 +2,7 @@
 
 ## Problem
 
-The room refuses to record unless the consent box is ticked: `beginRecording` in `client/src/main.js` logs `record:blocked {reason: 'no consent'}` and shows "tick consent first", and the server rejects any annotation whose `consent` is not `true` (`server/index.js`, the create validation: "consent must be true", HTTP 400). Nothing in the suite exercises either path. `test/desktop.spec.js` only asserts that a consented run produced zero `record:blocked` events. A regression in either gate (the client starting the microphone anyway, or the server accepting a clip without consent) would pass the suite.
+The page refuses to record unless the consent box is ticked: `beginRecording` in `client/src/main.js` logs `record:blocked {reason: 'no consent'}` and shows "tick consent first", and the server rejects any annotation whose `consent` is not `true` (`server/index.js`, the create validation: "consent must be true", HTTP 400). Nothing in the suite exercises either path. `test/desktop.spec.js` only asserts that a consented run produced zero `record:blocked` events. A regression in either gate (the client starting the microphone anyway, or the server accepting a clip without consent) would pass the suite.
 
 ## Goal
 

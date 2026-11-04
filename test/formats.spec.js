@@ -24,7 +24,7 @@ async function load(page, request, files, extra = {}) {
   return { project, asset };
 }
 
-/** What the page made of an asset: kind, count, its box before and after the asset's transform, and the room. */
+/** What the page made of an asset: kind, count, its box before and after the asset's transform, and the default room. */
 const inspect = (page, id) => page.evaluate((id) => {
   const g = window.__glossy, e = g.loaded.get(id), m = e.model;
   e.group.updateMatrixWorld(true);
@@ -45,7 +45,7 @@ const toWorld = (page, id, p) => page.evaluate(([id, p]) => {
   return window.__glossy.camera.position.clone().set(...p).applyMatrix4(e.model.object.matrixWorld).toArray();
 }, [id, p]);
 
-/** Checks every placed 3D asset shares: positive extent, standing on the floor, scene replaces the room. */
+/** Checks every placed 3D asset shares: positive extent, standing on the floor, scene replaces the default room. */
 function expectPlaced(info, { type, kind }) {
   expect(info.type).toBe(type);
   expect(info.kind).toBe(kind);
@@ -159,10 +159,10 @@ test('OBJ with its MTL: the material colour comes from the MTL', async ({ page, 
 });
 
 // Images and video are a plane (or a sphere) with the picture as a texture:
-// kind mesh, four corners. A 360 panorama is the room; a flat photo or a
+// kind mesh, four corners. A 360 panorama is the scene; a flat photo or a
 // video hangs in it, so the default room stays (the isScene rule).
 
-test('360 panorama: a sphere around the viewer, centred at scale 1, replacing the room', async ({ page, request }) => {
+test('360 panorama: a sphere around the viewer, centred at scale 1, replacing the default room', async ({ page, request }) => {
   const { asset } = await load(page, request, { 'pano.png': await scenes.png(64, 32) }, { mode: 'sphere' });
   const info = await inspect(page, asset.id);
   expect(info).toMatchObject({ type: 'image', kind: 'mesh', count: 4, imageMode: 'sphere', scale: 1, room: false });
@@ -171,7 +171,7 @@ test('360 panorama: a sphere around the viewer, centred at scale 1, replacing th
   expect(Math.hypot(...info.camera)).toBeLessThan(radius);
 });
 
-test('flat photo: a plane standing on the floor, the room stays', async ({ page, request }) => {
+test('flat photo: a plane standing on the floor, the default room stays', async ({ page, request }) => {
   const { asset } = await load(page, request, { 'photo.png': await scenes.png(48, 32) });
   const info = await inspect(page, asset.id);
   expect(info).toMatchObject({ type: 'image', kind: 'mesh', count: 4, imageMode: 'plane', room: true });
@@ -181,7 +181,7 @@ test('flat photo: a plane standing on the floor, the room stays', async ({ page,
   expect(info.size[1] / info.size[0]).toBeCloseTo(32 / 48, 3);
 });
 
-test('video: a WebM recorded in the page plays on a plane, the room stays', async ({ page, request }) => {
+test('video: a WebM recorded in the page plays on a plane, the default room stays', async ({ page, request }) => {
   await openProject(page, request, 'recorder');
   // one second of a moving square from a canvas, through MediaRecorder
   const b64 = await page.evaluate(async () => {

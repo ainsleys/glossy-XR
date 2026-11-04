@@ -22,7 +22,7 @@
 //                    rights (one licence for the whole set, see GLOSSY_RIGHTS),
 //                    marks the record as user-generated (edm:ugc), and points
 //                    at the audio (edm:isShownBy), the photographs
-//                    (edm:hasView) and the clip in the room (edm:isShownAt).
+//                    (edm:hasView) and the clip in the scene (edm:isShownAt).
 //
 // The project is a ProvidedCHO of its own (edm:type 3D) with dcterms:hasPart
 // to every contribution and the scene assets as its web resources.

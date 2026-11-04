@@ -27,7 +27,7 @@ test('spawns on the floor of an uploaded interior, walks into a wall, annotates 
   expect(Object.keys(saved.assets[0].transform).length).toBeGreaterThan(0);
   await page.screenshot({ path: 'test-results/fireplace-spawn.png' });
 
-  // walk until blocked: position must settle inside the room's bounds and stop changing
+  // walk until blocked: position must settle inside the scene's bounds and stop changing
   await lockPointer(page);
   await page.evaluate(() => { const c = window.__glossy.camera; c.lookAt(c.position.x + 10, c.position.y, c.position.z); c.updateMatrixWorld(true); });
   await holdKey(page, 'KeyW', 2500);

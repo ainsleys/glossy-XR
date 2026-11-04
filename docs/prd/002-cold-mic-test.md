@@ -1,8 +1,8 @@
-# 002 · The cold-microphone test asserts what the room does
+# 002 · The cold-microphone test asserts what the page does
 
 ## Problem
 
-`test/desktop.spec.js`, "a click released before the microphone is ready does not leave the recorder stuck" (currently at line 278 on `main`), fails on every run. It presses and releases the mouse before the microphone has been opened, then polls the status line for `/too short|^saved/`. Since the change that made a slipped press silent (`endRecording` in `client/src/main.js`: a clip shorter than the minimum is discarded with `setStatus('')`, logged as `record:discarded {reason: 'too short'}`), the status line never says "too short". The room behaves as intended; the test asserts the old behaviour. With it failing, the suite is never green and a real regression would hide behind it.
+`test/desktop.spec.js`, "a click released before the microphone is ready does not leave the recorder stuck" (currently at line 278 on `main`), fails on every run. It presses and releases the mouse before the microphone has been opened, then polls the status line for `/too short|^saved/`. Since the change that made a slipped press silent (`endRecording` in `client/src/main.js`: a clip shorter than the minimum is discarded with `setStatus('')`, logged as `record:discarded {reason: 'too short'}`), the status line never says "too short". The page behaves as intended; the test asserts the old behaviour. With it failing, the suite is never green and a real regression would hide behind it.
 
 ## Goal
 
@@ -20,7 +20,7 @@ R3. The test keeps its final step: a normal hold (`recordWithMouse`) afterwards 
 
 R4. The test's title stays as it is, so history and references to it still resolve.
 
-R5. No change to `client/` code. If, while making the test pass, the implementer finds that the early-release path does not actually produce the `record:discarded` event (that is, the room is stuck or silent for another reason), stop and report rather than change the room; that would be a different change with its own specification.
+R5. No change to `client/` code. If, while making the test pass, the implementer finds that the early-release path does not actually produce the `record:discarded` event (that is, the page is stuck or silent for another reason), stop and report rather than change the client; that would be a different change with its own specification.
 
 ## Non-goals
 

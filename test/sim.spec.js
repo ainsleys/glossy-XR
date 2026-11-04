@@ -104,7 +104,7 @@ async function runTask(page, { mode, noise, task, posture }) {
   }, { mode, noise, task, posture, blocked: STRINGS.en['status.inTheWay'] });
 }
 
-test('a simulated visitor moves through the room with the thumb, in both modes, clean and with Quest 2 misfires', async ({ page, request }) => {
+test('a simulated visitor moves through the scene with the thumb, in both modes, clean and with Quest 2 misfires', async ({ page, request }) => {
   test.setTimeout(15 * 60 * 1000);
   const project = await openProject(page, request, 'sim');
   await prepareRecording(page, 'Sim');

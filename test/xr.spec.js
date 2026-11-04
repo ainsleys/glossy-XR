@@ -197,7 +197,7 @@ test('a thumb swiped along the index finger steps and turns the person, on the c
   const pose = () => page.evaluate(() => { const g = window.__glossy, r = g.rig; return { x: +r.position.x.toFixed(3), y: +r.position.y.toFixed(3), z: +r.position.z.toFixed(3), rot: +((r.rotation.y * 180) / Math.PI).toFixed(1) }; });
   const head = () => page.evaluate(() => { const c = window.__glossy.renderer.xr.getCamera(); const p = new (c.position.constructor)(); c.getWorldPosition(p); const d = new (c.position.constructor)(); c.getWorldDirection(d); return { x: p.x, z: p.z, dx: d.x, dz: d.z }; });
   const p0 = await pose(), h0 = await head();
-  // the emulated hands report no microgestures; the room exposes the handler the poller calls
+  // the emulated hands report no microgestures; the page exposes the handler the poller calls
   await page.evaluate((g) => window.__glossy.microgesture('left', g), L.push);
   await page.waitForTimeout(400);
   const p1 = await pose();

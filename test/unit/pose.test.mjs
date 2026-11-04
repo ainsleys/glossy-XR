@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { sampleAt } from '../../shared/pose.js';
 
-// a 10 Hz trace the way the room records it: one sample every 100 ms from t = 0
+// a 10 Hz trace the way the client records it: one sample every 100 ms from t = 0
 const trace = Array.from({ length: 31 }, (_, i) => ({ t: i * 100, p: [i / 30, 1.6, 0], q: [0, 0, 0, 1] }));
 
 test('the latest sample at or before the playhead, a step and not a blend', () => {

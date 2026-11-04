@@ -5,7 +5,7 @@
 // The stream is not forever: a headset that goes to sleep, a device that is
 // unplugged or a browser that reclaims the microphone ends the track under
 // us. `init()` therefore asks again whenever the track it holds is no longer
-// live, `onended` tells the room when that happens, and a start that throws
+// live, `onended` tells the client when that happens, and a start that throws
 // never leaves a recorder behind that claims to be recording (Quest Browser
 // did exactly that on an ended track, and every later clip was refused).
 

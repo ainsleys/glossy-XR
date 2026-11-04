@@ -1,5 +1,5 @@
 // A crowded room: 200 clips seeded straight into the store, across three
-// periods plus timeless ones, with replies. Checks the viewer keeps the room
+// periods plus timeless ones, with replies. Checks the viewer keeps the scene
 // readable (only the nearest markers draw in full, nothing is removed), that
 // frame time stays sane, and that the year slider filters by period.
 import { test, expect } from '@playwright/test';
