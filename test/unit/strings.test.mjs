@@ -1,7 +1,7 @@
 // node --test: the client's string table (shared/strings.js). Every language has
 // the same keys and the same {variables}, nothing is empty, t() formats and
 // falls back to English, and every Turkish string, as it stands, has been read
-// by a Turkish speaker (TR_REVIEWED, filled by scripts/sign-off-tr.mjs).
+// by a reviewer who reads the language (TR_REVIEWED, filled by scripts/sign-off-tr.mjs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { STRINGS, TR_REVIEWED, LANGS, t, num, plural, hash } from '../../shared/strings.js';
@@ -57,9 +57,9 @@ test('hash() is stable and notices an edit', () => {
   assert.notEqual(hash('önce onay kutusunu işaretleyin'), hash('önce onay kutusunu işaretleyiniz'));
 });
 
-test('every Turkish string has been read by a Turkish speaker, as it now stands', () => {
+test('every Turkish string has been read by a reviewer who reads the language, as it now stands', () => {
   const unread = Object.keys(STRINGS.tr).filter((k) => !(k in TR_REVIEWED));
   const changed = Object.keys(STRINGS.tr).filter((k) => k in TR_REVIEWED && TR_REVIEWED[k] !== hash(STRINGS.tr[k]));
   assert.equal(unread.length + changed.length, 0,
-    `not yet read (${unread.length}): ${unread.join(', ') || 'none'}\nchanged since read (${changed.length}): ${changed.join(', ') || 'none'}\nhave a Turkish speaker read them, then run: node scripts/sign-off-tr.mjs --by "<name>"`);
+    `not yet read (${unread.length}): ${unread.join(', ') || 'none'}\nchanged since read (${changed.length}): ${changed.join(', ') || 'none'}\nhave a reviewer who reads the language read them, then run: node scripts/sign-off-tr.mjs --by "<reviewer>"`);
 });

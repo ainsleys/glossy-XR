@@ -14,8 +14,9 @@
 // one; Turkish uses the same form for both, with no plural after a number.
 //
 // To add a language: add a block under STRINGS with every key of `en`, run
-// `npm run test:unit`, and have a speaker of the language read it. Turkish is
-// signed off with `node scripts/sign-off-tr.mjs --by "<name>"` (TR_REVIEWED below).
+// `npm run test:unit`, and have a reviewer who reads the language read it.
+// Turkish is signed off with `node scripts/sign-off-tr.mjs --by "<reviewer>"`
+// (TR_REVIEWED below).
 
 export const LANGS = ['en', 'tr'];
 
@@ -204,10 +205,10 @@ export const STRINGS = {
     'status.savedOn': '{object} üzerinde {dur} kaydedildi',
     'status.savedWith': '{dur} kaydedildi · el takibi: {hands}',
     'status.savedOnWith': '{object} üzerinde {dur} kaydedildi · el takibi: {hands}',
-    'status.savedReply': 'yanıt kaydedildi: {author}',
+    'status.savedReply': 'yanıt kaydedildi (yanıtlanan: {author})',
     'status.savedQuiet': '{saved} — mikrofon neredeyse hiçbir şey duymadı; ses girişini kontrol edin',
     'status.saveFailed': 'kaydedilemedi: {error}',
-    'status.projectChanged': 'kayıt sırasında proje değişti; kayıt iptal edildi',
+    'status.projectChanged': 'kayıt sırasında proje değişti; bu kayıt kaydedilmedi',
     'status.askMuted': 'önce kaydı bitirin; kayıt sırasında soru sesli okunmaz',
     'status.askUnavailable': 'burada sesli okuma kullanılamıyor; soruyu panelden okuyun',
     'status.yearView': '{year} yılı: {total} kayıttan {n} tanesi görünüyor',
@@ -223,7 +224,7 @@ export const STRINGS = {
     'status.near': 'yakınınızda: {desc} — dinlemek için {act}',
     'status.nearAct.click': 'üzerine tıklayın',
     'status.nearAct.pinch': 'elinizi doğrultup çimdikleyin',
-    'status.nearAct.trigger': 'doğrultup tetiğe basın',
+    'status.nearAct.trigger': 'kumandayı doğrultup tetiğe basın',
     'status.eraseAtDesk': 'kayıtlar danışmada silinir: kaydınızın silinmesi için danışmaya başvurun',
     'status.chatReceived': 'danışmadan mesaj geldi',
     'status.listening': 'sizi dinliyorum…',
@@ -320,21 +321,21 @@ export const STRINGS = {
     'html.allPeriodsTitle': 'Yıla göre süzmek için kutunun seçimini kaldırın: yalnızca dönemi seçilen yılı kapsayan kayıtlar ve dönemsiz kayıtlar gösterilir',
     'html.betweenPeriods': 'dönemler arası',
     'html.legend': 'renk: dönem · gri: dönemsiz · soluk: altı aydan eski',
-    'html.legendTitle': 'İşaretin rengi dönemi gösterir: kehribar en eski, mavi en yeni, gri dönemsiz; soluk olanlar altı aydan önce kaydedilmiştir.',
+    'html.legendTitle': 'İşaretin rengi dönemi gösterir: kehribar rengi en eski, mavi en yeni, gri dönemsiz; soluk olanlar altı aydan daha önce kaydedilmiştir.',
     'html.interview': 'Görüşme',
     'html.ask': 'Sor',
     'html.askTitle': 'soruyu sesli okut',
     'html.prevTitle': 'önceki soru',
     'html.nextTitle': 'sonraki soru',
     'html.annotations': 'Kayıtlar',
-    'html.visitorHelp': 'Tetiği (ya da fare tuşunu) basılı tutup konuşun; kaydetmek için bırakın. Bir kaydı dinlemek için işaretine doğrultup tetiğe basın. Soruyu yeniden dinlemek için kavrama tuşuna basın. Burada hiçbir şey yanlışlıkla silinemez: bir kaydın silinmesi için danışmaya başvurun.',
+    'html.visitorHelp': 'Tetiği (ya da fare tuşunu) basılı tutup konuşun; kaydetmek için bırakın. Bir kaydı dinlemek için kumandayı işaretine doğrultup tetiğe basın. Soruyu yeniden dinlemek için kavrama tuşuna basın. Burada hiçbir şey yanlışlıkla silinemez: bir kaydın silinmesi için danışmaya başvurun.',
   },
 };
 
-// Turkish strings a Turkish speaker has read: key -> hash() of the string as it
+// Turkish strings a reviewer who reads the language has read: key -> hash() of the string as it
 // was read. The unit test fails for any Turkish key missing here or whose string
 // has changed since, naming it. To sign off, have the strings read, then run
-//   node scripts/sign-off-tr.mjs --by "<name>"
+//   node scripts/sign-off-tr.mjs --by "<reviewer>"
 // which records every current Turkish string here, and commit the result with
 // the reader's name in the message.
 export const TR_REVIEWED = {

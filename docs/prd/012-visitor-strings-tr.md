@@ -12,7 +12,7 @@ When a project's UI language is Turkish, the page and the headset panel show a c
 
 ## Requirements
 
-R1. **String table.** `shared/strings.js`, dependency-free, runs in Node and the browser: `STRINGS = { en: {...}, tr: {...} }` keyed by readable ids with prefixes, `t(key, vars)` formatting `{name}` placeholders and falling back to `en` for a missing key, and `TR_REVIEWED = { key: hash }` recording, for each Turkish key a Turkish speaker has read, a short hash of the string as read (`hash()`, FNV-1a, eight hex digits, no dependency). The unit test fails, naming the key, for any Turkish key missing from `TR_REVIEWED` or whose string no longer matches its hash, so the suite cannot be green at the final commit without sign-off, and an edit after sign-off needs reading again. `node scripts/sign-off-tr.mjs --by "<name>"` fills `TR_REVIEWED` with the current hashes and prints the keys it recorded; the commit it produces names who read the strings (first name or role, in the commit message).
+R1. **String table.** `shared/strings.js`, dependency-free, runs in Node and the browser: `STRINGS = { en: {...}, tr: {...} }` keyed by readable ids with prefixes, `t(key, vars)` formatting `{name}` placeholders and falling back to `en` for a missing key, and `TR_REVIEWED = { key: hash }` recording, for each Turkish key a reviewer who reads the language has read, a short hash of the string as read (`hash()`, FNV-1a, eight hex digits, no dependency). The unit test fails, naming the key, for any Turkish key missing from `TR_REVIEWED` or whose string no longer matches its hash, so the suite cannot be green at the final commit without sign-off, and an edit after sign-off needs reading again. `node scripts/sign-off-tr.mjs --by "<reviewer>"` fills `TR_REVIEWED` with the current hashes and prints the keys it recorded; the commit it produces names who read the strings (first name or role, in the commit message).
 
 R2. **Which language.** A new project field `uiLanguage` (`'en'` default, `'tr'`), separate from the transcription `language`, because a site may want auto-detected transcription with a Turkish interface. Server: column with migration in the `db.js` pattern, accepted by `PATCH /api/projects/:id` (`en`|`tr` only), returned by the project endpoints, a row and json-block entry in `docs/SCHEMA.md` (the drift test will say if it is missing), a Settings dropdown in the HUD (operator-only, like `language`). `?lang=tr|en` in the URL overrides the project for that page (kiosk, tests): read once at boot, kept through the two `replaceState` calls on project open, and carried in the visitor link. Re-evaluated when the project loads or `project:updated` changes `uiLanguage`.
 
@@ -54,7 +54,7 @@ T3. Headset, in `test/xr.spec.js` or `strings.spec.js` with IWER: with `uiLangua
 
 T4. Drift test passes with `uiLanguage`; mutation: drop it from the json block → fails.
 
-T5. Full `npm test` at the final commit: all passed (which requires every Turkish string to be in `TR_REVIEWED` with a matching hash: the pull request stays a draft until a Turkish speaker has read the strings and the sign-off commit is made).
+T5. Full `npm test` at the final commit: all passed (which requires every Turkish string to be in `TR_REVIEWED` with a matching hash: the pull request stays a draft until a reviewer who reads the language has read the strings and the sign-off commit is made).
 
 ## Definition of done
 
@@ -65,7 +65,7 @@ T5. Full `npm test` at the final commit: all passed (which requires every Turkis
 
 1. Split: the page and the headset panel now; the review page later if wanted (012b).
 2. `uiLanguage` is its own project field: tying the interface to the transcription language would prevent auto-detected transcription with a Turkish interface. This is the one server change in a client PRD, and it is small.
-3. Sign-off is enforced in code, not in prose: the suite cannot pass at the final commit without a human having read the Turkish. Revised after code review (3 Nov): a list of unread keys became `TR_REVIEWED`, a hash per string as read, so a string edited after sign-off is caught, and `scripts/sign-off-tr.mjs` makes the sign-off one command.
+3. Sign-off is enforced in code, not in prose: the suite cannot pass at the final commit without a reviewer who reads the language having read the Turkish. Revised after code review (3 Nov): a list of unread keys became `TR_REVIEWED`, a hash per string as read, so a string edited after sign-off is caught, and `scripts/sign-off-tr.mjs` makes the sign-off one command. 4 Nov: the sign-off reader may be a person or a primed review of the full table with context; either is recorded by name in TR_REVIEWED.
 4. Existing tests stay on English projects; Turkish tests assert table values, so wording changes don't break them.
 5. `?lang=` must survive `replaceState` and be carried in links, or a kiosk loses it on reload.
 6. Concatenated strings become templates; the grammar rules for Turkish variables are stated so the drafter and the reader apply the same ones.

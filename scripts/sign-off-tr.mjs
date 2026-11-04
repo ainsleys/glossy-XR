@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Record that a Turkish speaker has read the client's Turkish strings:
-//   node scripts/sign-off-tr.mjs --by "<name>"
+// Record that a reviewer who reads the language has read the client's Turkish strings:
+//   node scripts/sign-off-tr.mjs --by "<reviewer>"
 // writes every current Turkish key and the hash of its string into TR_REVIEWED
 // in shared/strings.js, with the reader's name and the date, and prints the keys
 // it recorded. Commit the change with the reader's name in the message. A string
@@ -12,7 +12,7 @@ import { STRINGS, TR_REVIEWED, hash } from '../shared/strings.js';
 
 const i = process.argv.indexOf('--by');
 const by = i > 0 ? String(process.argv[i + 1] || '').trim() : '';
-if (!by) { console.error('usage: node scripts/sign-off-tr.mjs --by "<name>"'); process.exit(2); }
+if (!by) { console.error('usage: node scripts/sign-off-tr.mjs --by "<reviewer>"'); process.exit(2); }
 
 const file = path.join(path.dirname(fileURLToPath(import.meta.url)), '../shared/strings.js');
 const src = fs.readFileSync(file, 'utf8');
