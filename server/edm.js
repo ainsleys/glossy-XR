@@ -32,6 +32,8 @@
 // record with pose trace and word timings). Clips whose author withdrew
 // consent are left out; the project node says how many.
 
+import path from 'node:path';
+
 const CONTEXT = {
   dc: 'http://purl.org/dc/elements/1.1/',
   dcterms: 'http://purl.org/dc/terms/',
@@ -55,6 +57,11 @@ const CONTEXT = {
 
 const IMAGE = /^(png|jpe?g|webp|gif)$/i, VIDEO = /^(mp4|webm|mov)$/i;
 const assetKind = (type) => (type === 'image' || IMAGE.test(type || '') ? 'IMAGE' : type === 'video' || VIDEO.test(type || '') ? 'VIDEO' : '3D');   // asset types are glb, ply, splat, image, video …
+// A clip's media type from the stored file's extension, the inverse of the
+// naming in audioUpload's filename in server/index.js; anything else (rows
+// imported from the old JSON store, say) is application/octet-stream.
+const AUDIO_TYPES = { '.webm': 'audio/webm', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4' };
+const audioFormat = (audioUrl) => AUDIO_TYPES[path.extname(audioUrl || '').toLowerCase()] || 'application/octet-stream';
 const isoDuration = (ms) => `PT${(Math.round(ms) / 1000).toFixed(ms % 1000 ? 1 : 0)}S`;
 const firstWords = (text, n = 8) => { const w = text.trim().split(/\s+/); return w.slice(0, n).join(' ') + (w.length > n ? ' …' : ''); };
 
@@ -145,7 +152,7 @@ export function toEdm(project, annotations, { base, provider, rights }) {
     ].filter(Boolean).join(' ');
     graph.push({
       '@id': audio, '@type': 'edm:WebResource',
-      'dc:format': 'audio/webm',
+      'dc:format': audioFormat(a.audioUrl),
       'ebucore:duration': isoDuration(a.durationMs || 0),
       'dcterms:extent': `${((a.durationMs || 0) / 1000).toFixed(1)} s`,
       'dcterms:created': a.createdAt,
