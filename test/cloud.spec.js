@@ -11,6 +11,7 @@ import http from 'node:http';
 import { test, expect } from '@playwright/test';
 import { API, listAnnotations, openProject, prepareRecording, lockPointer, aimCamera, recordWithMouse } from './helpers.js';
 import { STUB_PORT, THANK_YOU_CLIP } from '../playwright.config.js';
+import { STRINGS, t } from '../shared/strings.js';
 
 const CLOUD_TEXT = 'The well stood by the gate.';
 let stub, hits = 0;
@@ -257,7 +258,7 @@ test('the room list and the review page say when a clip was transcribed in the c
   expect((await transcribed(request, p.id, clip.id)).transcription.backend).toBe('openai');
   const row = page.locator(`#annList li[data-id="${clip.id}"]`);
   await expect(row.locator('.badge.cloud')).toHaveText('transcribed in the cloud');
-  await expect(row.locator('.badge.cloud')).toHaveAttribute('title', /openai · whisper-1 · local result rejected as silence/);
+  await expect(row.locator('.badge.cloud')).toHaveAttribute('title', new RegExp(`openai · whisper-1 · ${t('list.cloudRejected', { reason: STRINGS.en['list.reason.silence'] })}`));
 
   failWith = 500;
   const failed = await postThankYou(request, p.id, { cloudConsent: 'true' });

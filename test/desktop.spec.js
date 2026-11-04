@@ -3,6 +3,7 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import { API, openProject, prepareRecording, lockPointer, camera, markerCount, status, holdKey, aimCamera, recordWithMouse, exportProject, listAnnotations, aimAtMarker } from './helpers.js';
+import { STRINGS } from '../shared/strings.js';
 
 test('renders the default room with a working WebGL context', async ({ page, request }) => {
   await openProject(page, request, 'render');
@@ -460,7 +461,7 @@ test('recording shows a timer and a microphone level, and the selector count kee
   await expect.poll(() => markerCount(page), { timeout: 10_000 }).toBe(1);
   await expect(page.locator('#level')).toBeHidden();
   await expect(page.locator('#project option:checked')).toHaveText(/^level \(1\)/);   // not the stale server count
-  await expect(page.locator('#hint')).toHaveText(/click: play · hold R: reply · Delete ×2: erase/);   // the new marker is under the crosshair
+  await expect(page.locator('#hint')).toHaveText(STRINGS.en['hint.hover']);   // the new marker is under the crosshair
   // full markers carry a ring; the distance limit follows the room
   expect(await page.evaluate(() => { const m = [...window.__glossy.markers.values()][0]; return m.mesh.userData.ring.visible; })).toBe(true);
   expect(await page.evaluate(() => window.__glossy.fullDistance)).toBeCloseTo(4.5, 1);
