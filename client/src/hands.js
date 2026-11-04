@@ -14,6 +14,7 @@ import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { t, num } from '../../shared/strings.js';
 
 // WebXR joint order (XRHand); 25 per hand
 export const JOINTS = [
@@ -294,11 +295,12 @@ export class GhostHands {
   }
 }
 
-/** Short description for lists: "gesture · 4.2 s · both hands" */
-export function describeHands(h) {
+/** Short description for lists, in the interface language: "gesture 4.2 s, both hands" */
+export function describeHands(h, lang = 'en') {
   if (!h?.frames?.length) return '';
   const l = h.frames.some((f) => f.l), r = h.frames.some((f) => f.r);
-  const secs = (h.frames.at(-1).t - h.frames[0].t) / 1000;
+  const secs = num((h.frames.at(-1).t - h.frames[0].t) / 1000, 1, lang);
   const filled = (h.filled?.l || 0) + (h.filled?.r || 0);
-  return `gesture ${secs.toFixed(1)} s, ${l && r ? 'both hands' : l ? 'left hand' : 'right hand'}${filled ? `, ${filled} frames reconstructed` : ''}`;
+  const which = t(l && r ? 'list.hands.both' : l ? 'list.hands.left' : 'list.hands.right', {}, lang);
+  return t(filled ? 'list.handsFilled' : 'list.hands', { secs, which, n: filled }, lang);
 }

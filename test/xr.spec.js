@@ -4,6 +4,7 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import { API, openProject, prepareRecording, status, markerCount } from './helpers.js';
+import { STRINGS, t } from '../shared/strings.js';
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript({ path: 'node_modules/iwer/build/iwer.js' });
@@ -108,7 +109,9 @@ test('with hands tracked, speaking starts a clip, the gesture is stored and repl
   // the pause that would end it; the looping fake voice never pauses, so the clip is ended here and the status is read
   // in the same breath: with speech continuing, voice start may open the next clip a moment after the save
   const savedStatus = await page.evaluate(async () => { await window.__glossy.endRecording(); return window.__glossy.status; });
-  expect(savedStatus).toMatch(/^saved .* with gesture/);
+  const asPattern = (tpl, vars) => new RegExp('^' + tpl.split(/(\{\w+\})/).map((p) => (/^\{\w+\}$/.test(p) ? vars[p.slice(1, -1)] ?? '.*' : p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))).join('') + '$');
+  const handsVar = { hands: `${STRINGS.en['list.gesture']} .*` };              // the hands were tracked and described
+  expect(['status.savedOnWith', 'status.savedWith'].some((k) => asPattern(STRINGS.en[k], handsVar).test(savedStatus)), savedStatus).toBe(true);
   await expect.poll(() => markerCount(page), { timeout: 10_000 }).toBe(1);
   const [a] = await (await request.get(`${API}/api/projects/${project.id}/annotations`)).json();
   fs.writeFileSync('test-results/xr-hands-trace.json', JSON.stringify(a.hands));   // the emulated trace, for looking at when the geometry below disagrees
@@ -222,7 +225,7 @@ test('a thumb swiped along the index finger steps and turns the person, on the c
   await page.evaluate(() => window.__glossy.microgesture('right', 'swipe-left'));
   await page.waitForTimeout(400);
   expect(await pose()).toEqual(p3);
-  await expect.poll(() => status(page)).toMatch(/right thumb: turn-right/);
+  await expect.poll(() => status(page)).toBe(t('status.thumb', { hand: STRINGS.en['status.hand.right'], intent: STRINGS.en['status.intent.turn-right'] }));
   await page.evaluate(() => { const s = document.querySelector('#locoHand'); s.value = 'both'; s.dispatchEvent(new Event('change')); });
   // scooter mode: a forward swipe is a push along the gaze that fades out; a back swipe brakes
   await page.evaluate(() => { const s = document.querySelector('#locoMode'); s.value = 'scooter'; s.dispatchEvent(new Event('change')); });

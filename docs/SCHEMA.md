@@ -134,6 +134,7 @@ The local transcriber also returns `retried` (it ran a second pass) and `fallbac
 | `createdAt` | string | never | ISO 8601. |
 | `updatedAt` | string | never | ISO 8601. Moves when the project is created or edited (`PATCH /api/projects/:id`), an asset is added or edited, or a clip is added or edited by a reviewer. A finished transcription, an erased clip and a deleted asset do not move it. |
 | `language` | string | null to detect | Default transcription language for the project's clips, ISO 639 code. |
+| `uiLanguage` | string | never | The language in which the page and the headset panel show contributors and visitors the consent label, status line, hints, clip list and panel text: `en` or `tr`, `en` by default. Set with `PATCH /api/projects/:id {uiLanguage}`; any other value is refused. Independent of `language`, so transcription can detect while the interface is Turkish. `?lang=` in the page's URL overrides it for that page. Operator panels and the review page stay English. |
 | `script` | object | null when none | The interview script. Keys other than `questions` are kept as given. |
 | `cloudFallback` | boolean | never | Whether clips whose local transcript is rejected as unclear may be sent to the cloud backend, for clips whose contributor agreed (`cloudConsent`). `false` by default; set with `PATCH /api/projects/:id {cloudFallback}`, a boolean. Switching it on does not apply to clips saved before. |
 | `script.questions` | array | never | At most 200 questions, each `{id, text, …}`: `id` (`q1`, `q2`, … when not given), `text` up to 500 characters, and any other keys, such as translations, kept as given. |
@@ -337,7 +338,7 @@ The names this document describes, checked against the code by `test/unit/schema
     "glossy:replyTo", "glossy:nativeRecord"
   ],
   "project": [
-    "id", "name", "createdAt", "updatedAt", "language", "script", "script.questions", "cloudFallback", "assets", "annotationCount"
+    "id", "name", "createdAt", "updatedAt", "language", "uiLanguage", "script", "script.questions", "cloudFallback", "assets", "annotationCount"
   ],
   "asset": [
     "id", "project", "url", "type", "name", "sort", "createdAt",

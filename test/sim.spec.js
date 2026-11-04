@@ -9,6 +9,7 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import { API, openProject, prepareRecording } from './helpers.js';
+import { STRINGS } from '../shared/strings.js';
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript({ path: 'node_modules/iwer/build/iwer.js' });
@@ -33,7 +34,7 @@ const TASKS = [
 ];
 
 async function runTask(page, { mode, noise, task, posture }) {
-  return page.evaluate(async ({ mode, noise, task, posture }) => {
+  return page.evaluate(async ({ mode, noise, task, posture, blocked }) => {
     const g = window.__glossy, dev = window.__xr;
     // head pose = yaw about Y then pitch about X, composed by hand (the emulator's math classes are not exported)
     const setHead = (yawRad, pitchRad) => { const sy = Math.sin(yawRad / 2), cy = Math.cos(yawRad / 2), sp = Math.sin(pitchRad / 2), cp = Math.cos(pitchRad / 2); dev.quaternion.set(cy * sp, sy * cp, -sy * sp, cy * cp); };
@@ -90,7 +91,7 @@ async function runTask(page, { mode, noise, task, posture }) {
             send(want);
           }
         }
-        if (g.status === 'something in the way' && !seenStatus.has(now >> 10)) { seenStatus.add(now >> 10); m.collisions++; }
+        if (g.status === blocked && !seenStatus.has(now >> 10)) { seenStatus.add(now >> 10); m.collisions++; }
         await new Promise((r) => setTimeout(r, 50));
       }
       m.finalDist = Math.hypot(goal[0] - headWorld()[0], goal[1] - headWorld()[1]);
@@ -100,7 +101,7 @@ async function runTask(page, { mode, noise, task, posture }) {
     m.gestures = Object.values(m.intended).reduce((a, b) => a + b, 0);
     g.log('sim', m);
     return m;
-  }, { mode, noise, task, posture });
+  }, { mode, noise, task, posture, blocked: STRINGS.en['status.inTheWay'] });
 }
 
 test('a simulated visitor moves through the room with the thumb, in both modes, clean and with Quest 2 misfires', async ({ page, request }) => {
