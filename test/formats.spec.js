@@ -282,12 +282,10 @@ test('a .ply that is not a PLY is stored and the viewer keeps running', async ({
   expect(errors).toEqual([]);
 });
 
-// Known gap, reported rather than fixed here: PLYLoader returns an empty
-// geometry for bytes with no PLY header instead of throwing, and loadPly
-// accepts it as a point cloud of 0 points, so no error reaches the asset list.
-// Marked as expected to fail; when the loader rejects it this will say so.
 test('a .ply that is not a PLY is reported as a load error', async ({ page, request }) => {
-  test.fail(true, 'loaders.js accepts an empty PLY parse as a 0-point cloud');
   const asset = await loadBroken(page, request);
-  expect(await page.evaluate((id) => window.__glossy.loaded.get(id).error, asset.id)).toBeTruthy();
+  const state = await page.evaluate((id) => { const e = window.__glossy.loaded.get(id); return { hasModel: !!e.model, error: e.error }; }, asset.id);
+  expect(state.error).toBeTruthy();
+  expect(state.hasModel).toBe(false);
+  expect(state.error).toContain('not a PLY');
 });
