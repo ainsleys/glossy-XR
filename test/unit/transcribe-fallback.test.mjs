@@ -19,8 +19,8 @@ function fake(name, { text = '', error = null, warm = null } = {}) {
 }
 
 /** Run one job and resolve with {err, result}. */
-function run(primary, secondary, opts) {
-  const t = createTranscriber({ log: quiet, backends: { primary, secondary } });
+function run(primary, secondary, opts, log = quiet) {
+  const t = createTranscriber({ log, backends: { primary, secondary } });
   return new Promise((resolve) => t.enqueue('clip', '/dev/null', opts, (err, result) => resolve({ err, result, info: t.info() })));
 }
 
@@ -58,6 +58,20 @@ test('allowCloud as a function is asked after the primary result, and false keep
   const { result: sent } = await run(fake('local', { text: 'Thank you.' }), secondary, { allowCloud: () => true });
   assert.equal(secondary.calls, 1);
   assert.equal(sent.backend, 'openai');
+});
+
+test('an allowCloud that throws keeps the primary result and logs the permission check', async () => {
+  const warnings = [];
+  const log = { ...quiet, warn: (m) => warnings.push(m) };
+  const primary = fake('local', { text: 'Thank you.' }), secondary = fake('openai', { text: 'The pot stood here.' });
+  const { err, result } = await run(primary, secondary, { allowCloud: () => { throw new Error('database is locked'); } }, log);
+  assert.equal(err, null);
+  assert.equal(result.text, 'Thank you.');
+  assert.equal(result.backend, 'local');
+  assert.equal('cloud' in result, false);
+  assert.equal(secondary.calls, 0);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /clip permission check failed: database is locked/);
 });
 
 test('allowCloud is not asked for a clean result', async () => {
