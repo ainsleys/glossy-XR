@@ -18,7 +18,7 @@ test('renders the default room with a working WebGL context', async ({ page, req
   expect(shot.length).toBeGreaterThan(10_000);          // not a blank frame
 });
 
-test('walks forward and is stopped by the room wall', async ({ page, request }) => {
+test('walks forward and is stopped by a wall of the default room', async ({ page, request }) => {
   await openProject(page, request, 'walk');
   await lockPointer(page);
   await expect(page.locator('#crosshair')).toBeVisible();
@@ -462,7 +462,7 @@ test('recording shows a timer and a microphone level, and the selector count kee
   await expect(page.locator('#level')).toBeHidden();
   await expect(page.locator('#project option:checked')).toHaveText(/^level \(1\)/);   // not the stale server count
   await expect(page.locator('#hint')).toHaveText(STRINGS.en['hint.hover']);   // the new marker is under the crosshair
-  // full markers carry a ring; the distance limit follows the room
+  // full markers carry a ring; the distance limit follows the default room
   expect(await page.evaluate(() => { const m = [...window.__glossy.markers.values()][0]; return m.mesh.userData.ring.visible; })).toBe(true);
   expect(await page.evaluate(() => window.__glossy.fullDistance)).toBeCloseTo(4.5, 1);
   expect(await listAnnotations(request, project.id)).toHaveLength(1);

@@ -63,7 +63,7 @@ export function langName(code, locale) {
   try { return new Intl.DisplayNames([locale || (typeof navigator !== 'undefined' && navigator.language) || 'en'], { type: 'language' }).of(code) || code; } catch { return code; }
 }
 
-// The provenance badge for a clip's transcription, shared by the room's list
+// The provenance badge for a clip's transcription, shared by the main page's list
 // and the review page: { text, title } when the cloud fallback ran (or was
 // tried and failed), null otherwise. Pending and older clips carry no backend.
 // `lang` is the interface language (the review page stays English).

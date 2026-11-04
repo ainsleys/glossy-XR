@@ -29,6 +29,6 @@ export default defineConfig({
   build: {
     outDir: '../dist',
     emptyOutDir: true,
-    rollupOptions: { input: { room: path.resolve('client/index.html'), review: path.resolve('client/review.html') } },   // the room and the review page
+    rollupOptions: { input: { room: path.resolve('client/index.html'), review: path.resolve('client/review.html') } },   // the main page and the review page
   },
 });

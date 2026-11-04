@@ -1,7 +1,7 @@
 // The review page: the same project read at a desk. Search over transcripts,
 // seek by word, a plan that points at the same clips, and the reviewer's
 // edits: period, a linked photograph (which becomes an asset at the clip's
-// anchor), consent, a second transcription, erasure. Then the room opens on
+// anchor), consent, a second transcription, erasure. Then the main page opens on
 // a clip the reviewer picked.
 import { test, expect } from '@playwright/test';
 import path from 'node:path';
@@ -106,7 +106,7 @@ test('review page: search, seek by word, period, photo link, consent, erase', as
   await expect.poll(async () => (await listAnnotations(request, project.id)).length).toBe(29);
 });
 
-test('the room opens standing in front of a clip picked on the review page', async ({ page, request }) => {
+test('the main page opens standing in front of a clip picked on the review page', async ({ page, request }) => {
   const { project } = seedDense({ dataDir: DATA, name: 'focus-' + Date.now(), count: 20, seed: 5 });
   const all = await listAnnotations(request, project.id);
   const target = all.find((a) => !a.parent);
