@@ -61,7 +61,7 @@ const assetKind = (type) => (type === 'image' || IMAGE.test(type || '') ? 'IMAGE
 // naming in audioUpload's filename in server/index.js; anything else (rows
 // imported from the old JSON store, say) is application/octet-stream.
 const AUDIO_TYPES = { '.webm': 'audio/webm', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4' };
-export const audioFormat = (audioUrl) => AUDIO_TYPES[path.extname(audioUrl || '').toLowerCase()] || 'application/octet-stream';
+const audioFormat = (audioUrl) => AUDIO_TYPES[path.extname(audioUrl || '').toLowerCase()] || 'application/octet-stream';
 const isoDuration = (ms) => `PT${(Math.round(ms) / 1000).toFixed(ms % 1000 ? 1 : 0)}S`;
 const firstWords = (text, n = 8) => { const w = text.trim().split(/\s+/); return w.slice(0, n).join(' ') + (w.length > n ? ' …' : ''); };
 
