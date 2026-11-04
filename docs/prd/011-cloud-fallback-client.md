@@ -4,7 +4,7 @@ Second half of 010. The server now sends a clip to the cloud only when the proje
 
 ## Problem
 
-`cloudFallback` can only be set through the API; the consent label in `client/index.html` ("I consent to my recording being stored and shared") never mentions the cloud; the page always posts without `cloudConsent`; and nothing in the room's clip list or the review page shows which backend produced a transcript, although the record now says.
+`cloudFallback` can only be set through the API; the consent label in `client/index.html` ("I consent to my recording being stored and shared") never mentions the cloud; the page always posts without `cloudConsent`; and nothing in the main page's clip list or the review page shows which backend produced a transcript, although the record now says.
 
 ## Goal
 
@@ -18,7 +18,7 @@ R2. **Consent label.** With the project's `cloudFallback` off, the label reads a
 
 R3. **The flag the page sends.** The page remembers consent in `localStorage` (`glossy.consent`). Store what was agreed: `'1'` for the plain label, `'cloud'` for the label with the clause; the load check (`main.js` near the top, currently `=== '1'`) treats both as ticked. The clip upload sends `cloudConsent: 'true'` only when the stored value is `'cloud'` **and** the current project's `cloudFallback` is on (the stored-value check is defence in depth; the untick below is what keeps the two in step). `client/src/api.js` lists the fields it uploads, so `cloudConsent` is added there. When a project with the fallback on is loaded (or the setting switches on) and the stored value is `'1'`, the box is unticked and the status line says consent needs to be given again for this project. Two follow-ons: the page-load `pointerdown` listener that opens the microphone checks `hud.consent.checked` when it fires, not only when it is registered; and the headset hint "tick consent on the page" shows whenever the box is unticked, not only while the microphone is not ready (recording is already refused by `beginRecording`, so this is a message, not a gate). The chat panel's audio is unaffected.
 
-R4. **Badges.** In the room's clip list (the `badges` string in `renderList`, not `describeRecord`, which writes the status line) and on the review page's cards (`cardHtml` in `review.js`): "transcribed in the cloud" when `transcription.backend` is set and is not `local` (pending and older clips have no backend and get no badge), and "cloud transcription failed, local text kept" when `transcription.cloud?.error` is set (the backend stays `local` in that case); the title attribute carries `backend`, `model` and `cloud.reason`.
+R4. **Badges.** In the main page's clip list (the `badges` string in `renderList`, not `describeRecord`, which writes the status line) and on the review page's cards (`cardHtml` in `review.js`): "transcribed in the cloud" when `transcription.backend` is set and is not `local` (pending and older clips have no backend and get no badge), and "cloud transcription failed, local text kept" when `transcription.cloud?.error` is set (the backend stays `local` in that case); the title attribute carries `backend`, `model` and `cloud.reason`.
 
 R5. **Visitor mode.** The checkbox is hidden; the label logic (R2, R3) applies to visitors too, since they are the ones consenting.
 

@@ -1,14 +1,14 @@
-# 001 · Viewpoint replay in the room
+# 001 · Viewpoint replay in the scene
 
 ## Problem
 
 Every clip stores the author's viewpoint: `pose`, a list of `{t, p, q}` samples at 10 Hz for the length of the clip (position in scene metres and orientation as a quaternion), and `poseSource`, `xr` for a headset or `desktop` for the mouse-steered camera. The review page already uses it: while a clip plays, an arrow on the plan shows where the author stood and faced at the playhead.
 
-In the room itself nothing shows it. A listener standing at a marker hears "the water came in over there" and sees the ghost hands, but not where the speaker was or which way they were looking when they said it. The data is recorded, exported and drawn on the plan; it is not drawn where it was made.
+In the scene itself nothing shows it. A listener standing at a marker hears "the water came in over there" and sees the ghost hands, but not where the speaker was or which way they were looking when they said it. The data is recorded, exported and drawn on the plan; it is not drawn where it was made.
 
 ## Goal
 
-During playback in the room, show where the author stood and looked, moving in time with the audio, in the same way the ghost hands show what the author's hands did.
+During playback in the scene, show where the author stood and looked, moving in time with the audio, in the same way the ghost hands show what the author's hands did.
 
 ## Requirements
 
@@ -28,7 +28,7 @@ R7. **Test exposure.** In DEV, `window.__glossy.viewpoint` exposes `{ visible, h
 
 R8. **Session log.** `play:start` data gains `viewpoint: <boolean>` (true when the clip qualifies under R1), next to the existing `hands`.
 
-R9. **README.** The "Annotation record" paragraph on `pose` says the room draws it on playback; the test-coverage paragraph mentions it; in the Roadmap line that begins "Review page: drag a photograph…", remove only the clause "the pose trace drawn in the room as well as on the plan" and keep the rest of the line.
+R9. **README.** The "Annotation record" paragraph on `pose` says the page draws it on playback; the test-coverage paragraph mentions it; in the Roadmap line that begins "Review page: drag a photograph…", remove only the clause about the pose trace being drawn in the scene as well as on the plan and keep the rest of the line.
 
 ## Non-goals
 
@@ -54,7 +54,7 @@ T1. `test/xr.spec.js`, in "with hands tracked, speaking starts a clip, the gestu
 
 T2. `test/desktop.spec.js`, in "records, saves, plays back, and deletes an annotation": after the `playingId` poll confirms playback, assert `__glossy.viewpoint.visible` is false (desktop pose, R4). Then flush the log and assert the `play:start` event carries `viewpoint: false`; this is the real assertion, since `visible` is false before play too.
 
-T3. **New desktop test for R2, R5, R6 and the delete path.** Create a clip through the API with `poseSource: 'xr'` and a synthetic moving pose (for example `x` from 0 to 1 m over 3 s at 10 Hz) and a short audio file, open the room on the desktop, play it, and assert: `visible` true and `position` advancing past `pose[0].p` after ~1 s; `headShown` true while the camera is far from the head and false after aiming/moving the camera within 0.4 m; hidden after deleting the clip mid-play (R3's `removeMarker` fix). Use the existing helpers (`openProject`, `aimCamera`, `listAnnotations`); the hands test writes a clip through the API already, so the multipart shape is known.
+T3. **New desktop test for R2, R5, R6 and the delete path.** Create a clip through the API with `poseSource: 'xr'` and a synthetic moving pose (for example `x` from 0 to 1 m over 3 s at 10 Hz) and a short audio file, open the page on the desktop, play it, and assert: `visible` true and `position` advancing past `pose[0].p` after ~1 s; `headShown` true while the camera is far from the head and false after aiming/moving the camera within 0.4 m; hidden after deleting the clip mid-play (R3's `removeMarker` fix). Use the existing helpers (`openProject`, `aimCamera`, `listAnnotations`); the hands test writes a clip through the API already, so the multipart shape is known.
 
 T4. Optional unit test for the sample-lookup function in `test/unit/`.
 

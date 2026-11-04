@@ -1,6 +1,6 @@
 # 010 · Cloud transcription as a consented fallback (server side)
 
-This is the first of two changes. It adds the policy, the storage and the secondary backend, with API-level tests. The second (011) adds the consent label, the Settings checkbox and the badges in the room and the review page. Until 011 ships, no client sends `cloudConsent`, so no clip can be sent to the cloud: this change is safe on its own.
+This is the first of two changes. It adds the policy, the storage and the secondary backend, with API-level tests. The second (011) adds the consent label, the Settings checkbox and the badges in the main page and the review page. Until 011 ships, no client sends `cloudConsent`, so no clip can be sent to the cloud: this change is safe on its own.
 
 ## Problem
 
